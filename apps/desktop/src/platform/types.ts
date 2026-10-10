@@ -3,7 +3,8 @@ import type { BrowserWindow, Rectangle } from 'electron';
 
 /** A global key that reports both press and release (hold-to-talk). */
 export interface HoldKeyHook {
-  start(handlers: { onDown: () => void; onUp: () => void }): void;
+  /** `onCancel` fires on Esc, so an answer can be stopped from anywhere. */
+  start(handlers: { onDown: () => void; onUp: () => void; onCancel?: () => void }): void;
   stop(): void;
 }
 

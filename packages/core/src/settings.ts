@@ -30,6 +30,20 @@ export const HOLD_KEY_LABELS: Record<HoldKey, string> = {
   F10: 'F10',
 };
 
+export const CURSOR_COLORS = ['blue', 'purple', 'green', 'orange', 'pink'] as const;
+export type CursorColor = (typeof CURSOR_COLORS)[number];
+
+export const CURSOR_COLOR_HEX: Record<CursorColor, string> = {
+  blue: '#2f8cff',
+  purple: '#8b5cf6',
+  green: '#22c55e',
+  orange: '#f97316',
+  pink: '#ec4899',
+};
+
+export const CURSOR_SIZES = ['small', 'medium', 'large'] as const;
+export type CursorSize = (typeof CURSOR_SIZES)[number];
+
 export interface Settings {
   chatProvider: ChatProviderId;
   /** Model id for the chat provider; empty means the provider's fast default. */
@@ -43,6 +57,26 @@ export interface Settings {
   captureMaxEdge: number;
   captureAllDisplays: boolean;
   launchAtLogin: boolean;
+  /** Keep a local, text-only history of questions and answers. */
+  rememberHistory: boolean;
+  /** Send the last few answered turns as context so follow-up questions work. */
+  useRecentContext: boolean;
+  /** Microphone device id; empty means the Windows default. */
+  micDeviceId: string;
+  /**
+   * Keep the microphone open (but not recording) between presses. Opening a Windows audio device
+   * takes ~0.5–1 s, which would cut off the start of every question. Nothing is sent anywhere
+   * until the key is held.
+   */
+  micAlwaysReady: boolean;
+  cursorColor: CursorColor;
+  cursorSize: CursorSize;
+  /** Show the label bubble when Clicky points at something. */
+  showPointLabels: boolean;
+  /** Hold-to-talk is ignored while paused (tray toggle). */
+  paused: boolean;
+  /** The first-run setup wizard has been completed or skipped. */
+  onboardingDone: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
@@ -55,6 +89,15 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   captureMaxEdge: 1280,
   captureAllDisplays: false,
   launchAtLogin: false,
+  rememberHistory: true,
+  useRecentContext: true,
+  micDeviceId: '',
+  micAlwaysReady: true,
+  cursorColor: 'blue',
+  cursorSize: 'medium',
+  showPointLabels: true,
+  paused: false,
+  onboardingDone: false,
 });
 
 export const CAPTURE_EDGE_RANGE = { min: 640, max: 2560 } as const;
@@ -68,6 +111,10 @@ export function requiredCredentials(s: Settings): CredentialId[] {
 
 function oneOf<T extends string>(list: readonly T[], value: unknown, fallback: T): T {
   return typeof value === 'string' && (list as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+function bool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function shortString(value: unknown, fallback: string, max = 200): string {
@@ -90,7 +137,16 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     captureMaxEdge: Math.round(Math.min(Math.max(edge, CAPTURE_EDGE_RANGE.min), CAPTURE_EDGE_RANGE.max)),
     captureAllDisplays:
       typeof o['captureAllDisplays'] === 'boolean' ? o['captureAllDisplays'] : base.captureAllDisplays,
-    launchAtLogin: typeof o['launchAtLogin'] === 'boolean' ? o['launchAtLogin'] : base.launchAtLogin,
+    launchAtLogin: bool(o['launchAtLogin'], base.launchAtLogin),
+    rememberHistory: bool(o['rememberHistory'], base.rememberHistory),
+    useRecentContext: bool(o['useRecentContext'], base.useRecentContext),
+    micDeviceId: shortString(o['micDeviceId'], base.micDeviceId, 300),
+    micAlwaysReady: bool(o['micAlwaysReady'], base.micAlwaysReady),
+    cursorColor: oneOf(CURSOR_COLORS, o['cursorColor'], base.cursorColor),
+    cursorSize: oneOf(CURSOR_SIZES, o['cursorSize'], base.cursorSize),
+    showPointLabels: bool(o['showPointLabels'], base.showPointLabels),
+    paused: bool(o['paused'], base.paused),
+    onboardingDone: bool(o['onboardingDone'], base.onboardingDone),
   };
 }
 

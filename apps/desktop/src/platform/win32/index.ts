@@ -18,8 +18,12 @@ function createHoldKeyHook(key: HoldKey): HoldKeyHook {
   let onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null;
   let onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null;
   return {
-    start({ onDown, onUp }) {
+    start({ onDown, onUp, onCancel }) {
       onKeyDown = (e) => {
+        if (e.keycode === UiohookKey.Escape) {
+          onCancel?.();
+          return;
+        }
         if (e.keycode !== keycode || down) return; // ignore auto-repeat
         down = true;
         onDown();

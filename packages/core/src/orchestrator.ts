@@ -200,31 +200,9 @@ export class Orchestrator {
     this.run = run;
     const { signal } = interaction;
 
-    // Everything here runs in parallel while the user is still talking.
-    try {
-      this.deps.capture.begin(signal);
-    } catch (e) {
-      this.deps.log?.(`capture begin failed: ${String(e)}`);
-    }
-    let stt: SttProvider;
-    try {
-      stt = this.deps.stt();
-    } catch (e) {
-      this.fail(run, e);
-      return;
-    }
-    run.sttSession = stt.start({ sampleRate: 16000, signal });
+    // Everything here runs in parallel while the user is still talking. The mic goes first: every
+    // millisecond before it starts is speech lost.
     let ready: SttSession | null = null;
-    run.sttSession.then(
-      (session) => {
-        // Flush audio recorded before the connection was ready, then stream directly.
-        for (const f of run.micFrames.splice(0)) session.pushAudio(f);
-        ready = session;
-      },
-      (e: unknown) => {
-        if (!signal.aborted) this.fail(run, e);
-      },
-    );
     this.deps.mic
       .start((frame) => {
         if (signal.aborted) return;
@@ -237,6 +215,29 @@ export class Orchestrator {
           if (!signal.aborted) this.fail(run, e);
         },
       );
+    let stt: SttProvider;
+    try {
+      stt = this.deps.stt();
+    } catch (e) {
+      this.fail(run, e);
+      return;
+    }
+    run.sttSession = stt.start({ sampleRate: 16000, signal });
+    run.sttSession.then(
+      (session) => {
+        // Flush audio recorded before the connection was ready, then stream directly.
+        for (const f of run.micFrames.splice(0)) session.pushAudio(f);
+        ready = session;
+      },
+      (e: unknown) => {
+        if (!signal.aborted) this.fail(run, e);
+      },
+    );
+    try {
+      this.deps.capture.begin(signal);
+    } catch (e) {
+      this.deps.log?.(`capture begin failed: ${String(e)}`);
+    }
     try {
       const chat = this.deps.chat();
       void chat.prewarm?.(signal).catch(() => undefined);

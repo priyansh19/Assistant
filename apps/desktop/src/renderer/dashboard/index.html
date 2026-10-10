@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Clicky</title>
+    <link rel="stylesheet" href="./dashboard.css" />
+  </head>
+  <body>
+    <nav class="sidebar" aria-label="Sections">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 3 L20 10.5 L12.2 12.2 L10.5 20 Z" /></svg
+        >Clicky
+      </div>
+      <button class="nav-item active" data-page="home">Home</button>
+      <button class="nav-item" data-page="history">History</button>
+      <button class="nav-item" data-page="actions">Actions</button>
+      <div class="nav-sep"></div>
+      <button class="nav-item" data-page="general">General</button>
+      <button class="nav-item" data-page="cursor">Cursor</button>
+      <button class="nav-item" data-page="ai">AI and voice</button>
+      <button class="nav-item" data-page="keys">API keys <span id="keys-badge" class="badge" hidden></span></button>
+      <button class="nav-item" data-page="about">About</button>
+    </nav>
+
+    <main>
+      <div id="missing-banner" class="banner warn" hidden>
+        <span><strong>Clicky can't answer yet.</strong> <span id="missing-text"></span></span>
+        <button class="primary small" data-goto="keys">Add keys</button>
+      </div>
+
+      <!-- Home -->
+      <section class="page active" id="page-home">
+        <h1>Home</h1>
+        <div class="card hero" id="status-card">
+          <div class="hero-mark" aria-hidden="true">
+            <svg class="tri" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 3 L20 10.5 L12.2 12.2 L10.5 20 Z" />
+            </svg>
+          </div>
+          <div class="hero-text">
+            <div class="hero-title" id="status-title">Ready</div>
+            <div class="desc" id="status-desc"></div>
+          </div>
+          <button class="primary" id="status-action" hidden></button>
+        </div>
+
+        <div class="card ask">
+          <form id="ask-form" class="row">
+            <input type="text" id="ask-input" placeholder="Type a question about your screen…" autocomplete="off" />
+            <button class="primary" type="submit" id="ask-btn">Ask</button>
+          </form>
+          <div class="desc ask-hint">Clicky minimises this window, looks at your screen and answers out loud.</div>
+        </div>
+
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-num" id="stat-count">0</div>
+            <div class="desc">Answers</div>
+          </div>
+          <div class="tile">
+            <div class="tile-num" id="stat-last">–</div>
+            <div class="desc">Last response</div>
+          </div>
+          <div class="tile">
+            <div class="tile-num" id="stat-p50">–</div>
+            <div class="desc">Typical response</div>
+          </div>
+        </div>
+        <p class="desc tile-note">Response time is from letting go of the key to hearing the first word.</p>
+
+        <div class="section-head">
+          <h2>Recent</h2>
+          <button class="link" data-goto="history">See all</button>
+        </div>
+        <div class="card list" id="recent-list"></div>
+      </section>
+
+      <!-- History -->
+      <section class="page" id="page-history">
+        <h1>History</h1>
+        <p class="intro">
+          Questions and answers are kept as text on this PC only. Screenshots and audio are never saved.
+        </p>
+        <div class="toolbar">
+          <input type="search" id="history-search" placeholder="Search history" autocomplete="off" />
+          <button class="secondary" id="history-clear">Clear all</button>
+        </div>
+        <div class="card list" id="history-list"></div>
+      </section>
+
+      <!-- Actions -->
+      <section class="page" id="page-actions">
+        <h1>Actions</h1>
+        <p class="intro">
+          An action is a saved question Clicky can re-ask about whatever is on your screen. Run it from here or from the
+          tray menu. Save any past question from History in one click.
+        </p>
+        <div class="card">
+          <form id="action-form" class="action-form">
+            <input type="hidden" id="action-id" />
+            <input type="text" id="action-name" placeholder="Name (optional)" maxlength="80" autocomplete="off" />
+            <input
+              type="text"
+              id="action-question"
+              placeholder="Question, e.g. “What's the next step in this form?”"
+              maxlength="1000"
+              autocomplete="off"
+            />
+            <div class="action-form-buttons">
+              <button class="primary" type="submit" id="action-save">Save action</button>
+              <button class="secondary" type="button" id="action-cancel" hidden>Cancel</button>
+            </div>
+          </form>
+          <div class="key-error" id="action-error" hidden></div>
+        </div>
+        <div class="card list" id="actions-list"></div>
+      </section>
+
+      <!-- General -->
+      <section class="page" id="page-general">
+        <h1>General</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Hold-to-talk key</div>
+              <div class="desc">Hold it, ask your question, let go. Esc stops an answer.</div>
+            </div>
+            <select id="holdKey"></select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Pause Clicky</div>
+              <div class="desc">Ignore the hold-to-talk key until you resume.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="paused" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Start with Windows</div>
+              <div class="desc">Clicky waits in the tray after you sign in.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="launchAtLogin" /><span></span></label>
+          </div>
+        </div>
+        <h2>Microphone</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Device</div>
+              <div class="desc">The microphone Clicky listens with.</div>
+            </div>
+            <select id="micDeviceId">
+              <option value="">Windows default</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Test</div>
+              <div class="desc" id="mic-test-desc">Speak and watch the meter move.</div>
+            </div>
+            <div class="meter-wrap">
+              <div class="meter"><div class="meter-fill" id="mic-meter"></div></div>
+              <button class="secondary" id="mic-test">Test</button>
+            </div>
+          </div>
+        </div>
+        <h2>Screenshots</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Include all displays</div>
+              <div class="desc">Off: only the screen your cursor is on. Faster and sends less.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="captureAllDisplays" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Detail</div>
+              <div class="desc">Higher detail helps with small text but answers a bit slower.</div>
+            </div>
+            <select id="captureMaxEdge">
+              <option value="960">Fast (960 px)</option>
+              <option value="1280">Balanced (1280 px)</option>
+              <option value="1600">Detailed (1600 px)</option>
+              <option value="1920">Maximum (1920 px)</option>
+            </select>
+          </div>
+        </div>
+        <h2>Memory</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Remember history</div>
+              <div class="desc">Keep questions and answers (text only) so you can search and reuse them.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="rememberHistory" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Follow-up questions</div>
+              <div class="desc">
+                Send the last few answers from the past 10 minutes so “and where's the other one?” works.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="useRecentContext" /><span></span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cursor -->
+      <section class="page" id="page-cursor">
+        <h1>Cursor</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Colour</div>
+              <div class="desc">The companion triangle next to your mouse pointer.</div>
+            </div>
+            <div class="swatches" id="swatches"></div>
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">Size</div></div>
+            <select id="cursorSize">
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Show labels</div>
+              <div class="desc">A small bubble names what Clicky is pointing at.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="showPointLabels" /><span></span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI and voice -->
+      <section class="page" id="page-ai">
+        <h1>AI and voice</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Answer model</div>
+              <div class="desc">Looks at your screen and writes the answer.</div>
+            </div>
+            <select id="chatProvider">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Model</div>
+              <div class="desc" id="model-desc">Leave empty to use the default.</div>
+            </div>
+            <input type="text" id="chatModel" spellcheck="false" autocomplete="off" />
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Speech to text</div>
+              <div class="desc">Turns what you say into text while you hold the key.</div>
+            </div>
+            <select id="sttProvider">
+              <option value="assemblyai">AssemblyAI (live, fastest)</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Voice</div>
+              <div class="desc">Reads the answer aloud.</div>
+            </div>
+            <select id="ttsProvider">
+              <option value="elevenlabs">ElevenLabs (natural)</option>
+              <option value="openai">OpenAI</option>
+              <option value="system">Windows voice (free, offline)</option>
+            </select>
+          </div>
+          <div class="row" id="ttsVoiceRow">
+            <div class="label">
+              <div class="title">ElevenLabs voice ID</div>
+              <div class="desc">Leave empty for the default voice.</div>
+            </div>
+            <input type="text" id="ttsVoice" placeholder="Default voice" spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Preview</div>
+              <div class="desc" id="voice-test-desc">Hear how Clicky sounds.</div>
+            </div>
+            <button class="secondary" id="voice-test">Play sample</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- API keys -->
+      <section class="page" id="page-keys">
+        <h1>API keys</h1>
+        <p class="intro">
+          Keys are encrypted by Windows for your user account and stay on this PC. Clicky never shows a saved key again;
+          to change one, paste a new key over it.
+        </p>
+        <div id="encryption-banner" class="banner error" hidden>
+          Windows encryption isn't available, so keys can't be saved safely right now.
+        </div>
+        <div class="card" id="keys-list"></div>
+      </section>
+
+      <!-- About -->
+      <section class="page" id="page-about">
+        <h1>About</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Clicky</div>
+              <div class="desc" id="version"></div>
+            </div>
+            <button class="secondary" id="rerun-setup">Run setup again</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Privacy</div>
+              <div class="desc">
+                Clicky only listens and takes a screenshot while you hold the key. Audio goes to your speech-to-text
+                provider, the screenshot and question go to your answer model, and the answer text goes to your voice
+                provider. Screenshots and audio are never saved; history is text only and stays on this PC.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- First-run setup wizard -->
+    <div id="wizard" class="wizard" hidden>
+      <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+        <div class="wizard-steps" id="wizard-steps"></div>
+        <div class="wizard-body" id="wizard-body"></div>
+        <div class="wizard-foot">
+          <button class="link" id="wizard-skip">Skip setup</button>
+          <div class="spacer"></div>
+          <button class="secondary" id="wizard-back">Back</button>
+          <button class="primary" id="wizard-next">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
