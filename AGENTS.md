@@ -38,6 +38,7 @@ pnpm dev            # run the Electron app in dev mode (Windows laptop)
 pnpm test           # Vitest, all packages
 pnpm lint           # ESLint
 pnpm typecheck      # tsc --noEmit across workspaces
+pnpm bench          # latency benchmark against real providers (needs keys)
 pnpm package        # unsigned Windows build
 ```
 
@@ -50,7 +51,7 @@ Run `pnpm lint && pnpm typecheck && pnpm test` before every push.
 3. Providers implement interfaces from `core`. Never hard-code a single vendor into the orchestrator (blueprint §9).
 4. The interaction is an explicit state machine: `Idle → Listening → Transcribing → Thinking → Speaking → Idle`, plus `Cancelled` and `Error`. Every interaction carries an id and an `AbortController`. No failed or partial request may look successful.
 5. Keep the `[POINT:x,y:label:screenN]` / `[POINT:none]` protocol. Parse it from the stream, never speak tag text, and validate coordinates after mapping (screen index, bounds, DPI, negative origins).
-6. Stream everything that can stream: STT partials, LLM tokens, TTS audio. Record the five latency timings from the plan for each interaction.
+6. **Speed is a release gate:** Clicky must start answering faster than the official macOS Clicky. Stream everything end to end (STT partials → LLM tokens → sentence chunks → streaming TTS → playback), capture and pre-warm connections at key-down, never wait for a full LLM response before speaking, and log the per-stage latencies from `docs/development-plan.md` §3.3. Run `pnpm bench` for changes on the interaction path; a regression of more than 10% on key-up → first audio needs a stated reason.
 7. Renderer windows: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. Expose the smallest possible preload API.
 
 ## Privacy and security (non-negotiable)

@@ -86,14 +86,41 @@ Rules:
 
 ### 3.2 POINT protocol (blueprint §5)
 
-- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`, at the end of the response.
+- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`.
+- **Deviation (speed):** the prompt asks the model to put the tag at the *start* of the response, not the end, so the dot can start moving before the first word is spoken. The parser accepts the tag at either position.
 - A **streaming** parser releases speakable text sentence by sentence and holds back anything that could be the start of a tag, so TTS never speaks tag text.
 - Coordinates are in the coordinate space of the screenshot image sent to the model (after any downscale). Mapping: image px → display physical px → Electron DIP (via `screen` scale factor and display bounds, including negative origins) → overlay window local coords.
 - Validate: known screen index, inside bounds after mapping; otherwise speak the answer and skip pointing (logged, not silent).
 
-### 3.3 Latency instrumentation (blueprint §9)
+### 3.3 Speed: beat the official Clicky (owner requirement, 2026-10-10)
 
-Record per interaction: key-down → recording start; end of speech → final transcript; transcript → first LLM token; first token → first audio; total. Log as one structured line. Targets (revise after Phase 0): key → recording < 50 ms, end of speech → first token < 1.5 s, first token → first audio < 700 ms.
+Responses must start faster than the official macOS Clicky. Speed is a release gate, not a nice-to-have.
+
+**What the original does** (farzaa/clicky, `CompanionManager.swift`, checked 2026-10-10): it streams the Claude response but discards the chunks and waits for the **full** response before sending the whole text to ElevenLabs. It captures every screen only **after** the transcript is final. Every call goes through a Cloudflare Worker hop. So time-to-first-audio is roughly: transcript finalise + capture + entire LLM response + TTS first byte. My estimate (not measured) is 3–5 s for a typical answer.
+
+**How we beat it:**
+1. **Capture at key-down**, in parallel with speaking. The screenshot is ready before the transcript is.
+2. **Pre-warm at key-down:** open the STT WebSocket and the TLS connections to the LLM and TTS hosts while the user is still talking.
+3. **Force STT finalisation on key-up** (AssemblyAI ForceEndpoint) instead of waiting for silence detection.
+4. **True end-to-end streaming:** LLM tokens → sentence chunker → streaming TTS input (ElevenLabs WebSocket input streaming, Flash model) → playback starts on the first audio chunk. The first sentence is spoken while the model is still writing the rest.
+5. **POINT tag first** (see 3.2), so pointing starts with the first token.
+6. **No proxy hop** for personal use: the app calls providers directly with keys from `safeStorage`.
+7. **Lean requests:** only the cursor's display by default, downscaled (start at 1280 px long edge, tune for accuracy vs speed), a short-answer system prompt, a small `max_tokens`, and prompt caching for the system prompt where the provider supports it.
+8. **Fast model by default:** pick the vision model by measured time-to-first-token, not by benchmark score. Keep a "smart" model as a setting.
+9. **Local fallbacks** (OS TTS) take over if a cloud stage is slow, so the user is never left in silence.
+
+**Instrumentation:** each interaction logs one structured line with key-down → recording start, key-up → final transcript, final transcript → first LLM token, first token → first audio, key-up → first audio (**headline metric**), and total.
+
+**Targets** (revise after Phase 0):
+
+| Metric | Target p50 | Target p95 |
+|---|---|---|
+| key-down → recording start | < 50 ms | < 100 ms |
+| key-up → final transcript | < 300 ms | < 600 ms |
+| key-up → first audio (headline) | < 1.2 s | < 2.0 s |
+| key-up → dot starts moving (when pointing) | < 1.2 s | < 2.0 s |
+
+**Benchmark:** `pnpm bench` replays a fixed set of recorded questions and screenshots through the real providers and reports p50/p95 per stage. In Phase 0 we also measure the original's pipeline shape (full response, then TTS) with the same providers, so "faster than official" is a number. A PR that makes the headline p50 more than 10% worse needs a stated reason.
 
 ## 4. Phases
 
@@ -117,13 +144,14 @@ Exit: the three risks are proven or we switch to the Tauri or WPF fallback befor
 - Mic → AssemblyAI streaming STT.
 - Capture the cursor's display (option: all displays), downscale, JPEG in memory only.
 - OpenAI-compatible streaming vision chat (OpenRouter), then Anthropic.
-- Sentence-chunked ElevenLabs streaming TTS; OS TTS fallback.
+- Speed path from 3.3 from day one: capture and pre-warm at key-down, force STT finalisation on key-up, POINT-first prompt, sentence-chunked streaming TTS (ElevenLabs WebSocket); OS TTS fallback.
+- Latency logging and a first `pnpm bench`.
 - Overlay: cursor-follow dot, listening/thinking indicator, fly-to-target with label.
 
-Exit (blueprint acceptance): hold a key, ask about the screen, hear a grounded answer quickly, see the dot point at the right place, on the laptop display and an external display if available.
+Exit (blueprint acceptance + speed): hold a key, ask about the screen, hear a grounded answer with key-up → first audio under the 3.3 targets, see the dot point at the right place, on the laptop display and an external display if available.
 
 ### Phase 3: Reliability and latency
-Per-stage timeouts, retries only for idempotent calls, visible error states, mic/network loss, invalid output or coordinates, display changes mid-interaction (re-read topology before pointing). Pre-warm STT socket on key-down, keep-alive connections, overlap capture with recording. Optional snapping of POINT targets to the nearest UI Automation element on Windows. Integration tests with fake providers.
+Per-stage timeouts, retries only for idempotent calls, visible error states, mic/network loss, invalid output or coordinates, display changes mid-interaction (re-read topology before pointing). Tune against the speed targets in 3.3 using `pnpm bench`. Optional snapping of POINT targets to the nearest UI Automation element on Windows. Integration tests with fake providers.
 
 ### Phase 4: Privacy and security
 Visible capture indicator, nothing persisted by default, app exclusion list, `docs/privacy.md` listing what each provider receives, secret-redacting logger, optional local STT (whisper.cpp) with the caveat that screenshots still go to the cloud model.
@@ -158,5 +186,4 @@ Anything copied keeps its MIT notice. Don't imply endorsement by the original au
 
 - Clicky can't hook or overlay apps running as administrator unless it also runs elevated (Windows UIPI). We won't run elevated.
 - DRM-protected content captures as black.
-- POINT arrives at the end of the response, so the dot moves after speech starts.
 - Wayland unsupported.
