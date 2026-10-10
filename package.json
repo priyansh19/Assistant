@@ -1,0 +1,32 @@
+{
+  "name": "clicky",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Desktop AI companion: hold a key, ask about your screen, hear the answer, see it point.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.23.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @clicky/desktop dev",
+    "build": "pnpm --filter @clicky/desktop build",
+    "package": "pnpm --filter @clicky/desktop package",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.12.0",
+    "globals": "16.4.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
+}

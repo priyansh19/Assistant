@@ -1,0 +1,13 @@
+{
+  "name": "@clicky/core",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pure TypeScript core: interaction state machine, POINT parser, coordinate mapping, provider interfaces.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

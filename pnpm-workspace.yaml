@@ -1,0 +1,12 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Electron packaging is simplest with a flat node_modules.
+nodeLinker: hoisted
+
+# pnpm 10 skips install scripts unless the package is listed here.
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - uiohook-napi

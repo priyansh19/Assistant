@@ -10,7 +10,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, etc.) and humans work
 - How we're building it: [`docs/development-plan.md`](docs/development-plan.md). Read it before starting work. Any deviation from the blueprint must be called out there with its reason.
 - Platform strategy: cross-platform architecture, **Windows-first delivery**. Windows is the only platform built, tested and shipped until the MVP loop is solid. macOS and Linux (X11) come later. Wayland is out of scope.
 
-Status: pre-code. Phase 0/1 of the plan. The commands and layout below are the agreed target; update this file when they change.
+Status: Phase 1. Phase 0 passed on the laptop (`docs/reference-findings.md`). The workspace, tray app, click-through overlay and hold-to-talk hook exist; `core` logic, providers and `pnpm bench` are still to come. Update this file when commands or layout change.
 
 ## Stack
 
@@ -33,7 +33,8 @@ docs/                 plan, architecture, privacy, findings
 ## Commands (target)
 
 ```
-pnpm install
+corepack enable     # once per machine, or prefix commands with `corepack pnpm@10.23.0`
+pnpm install        # also downloads the Electron binary (apps/desktop postinstall)
 pnpm dev            # run the Electron app in dev mode (Windows laptop)
 pnpm test           # Vitest, all packages
 pnpm lint           # ESLint
