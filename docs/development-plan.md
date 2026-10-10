@@ -44,7 +44,7 @@ Clicky is mostly OS integration. The parts that decide the stack:
 - **Package manager:** pnpm workspaces.
 - **Hold-to-talk:** `uiohook-napi` in the main process; Electron `globalShortcut` only for non-hold shortcuts.
 - **Mic:** `getUserMedia` + `AudioWorklet` in a hidden renderer, 16 kHz mono PCM16 frames over IPC/MessagePort to the STT client.
-- **Capture:** `desktopCapturer` + `screen` API for display geometry and scale factors. Benchmark in Phase 0; replace with a small native addon (WGC) only if capture is a latency bottleneck.
+- **Capture:** a `getUserMedia` desktop stream (source id from `desktopCapturer`) opened at key-down and sampled at key-up, plus the `screen` API for display geometry and scale factors. Phase 0 showed no native addon is needed (see `docs/reference-findings.md`).
 - **Overlay:** one transparent, frameless, `alwaysOnTop('screen-saver')`, click-through `BrowserWindow` per display, recreated on `display-added/removed/metrics-changed`. Canvas/CSS animation.
 - **Tray/settings:** Electron `Tray` + a small settings window (plain TS + lightweight UI; no heavy framework needed).
 - **Credentials:** Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret on Linux). Never plaintext on disk.
@@ -99,7 +99,7 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 **What the original does** (farzaa/clicky, `CompanionManager.swift`, checked 2026-10-10): it streams the Claude response but discards the chunks and waits for the **full** response before sending the whole text to ElevenLabs. It captures every screen only **after** the transcript is final. Every call goes through a Cloudflare Worker hop. So time-to-first-audio is roughly: transcript finalise + capture + entire LLM response + TTS first byte. My estimate (not measured) is 3–5 s for a typical answer.
 
 **How we beat it:**
-1. **Capture at key-down**, in parallel with speaking. The screenshot is ready before the transcript is.
+1. **Start capture at key-down**, in parallel with speaking: open a desktop media stream for the cursor's display, then grab the latest frame at key-up (≈15 ms incl. 1280-px JPEG, measured in Phase 0; a cold `desktopCapturer.getSources` call costs ≈170 ms). The screenshot is ready before the transcript is.
 2. **Pre-warm at key-down:** open the STT WebSocket and the TLS connections to the LLM and TTS hosts while the user is still talking.
 3. **Force STT finalisation on key-up** (AssemblyAI ForceEndpoint) instead of waiting for silence detection.
 4. **True end-to-end streaming:** LLM tokens → sentence chunker → streaming TTS input (ElevenLabs WebSocket input streaming, Flash model) → playback starts on the first audio chunk. The first sentence is spoken while the model is still writing the rest.
@@ -178,7 +178,7 @@ Anything copied keeps its MIT notice. Don't imply endorsement by the original au
 ## 6. Open questions for the owner
 
 1. Which API keys do you have: Anthropic, OpenRouter, OpenAI, AssemblyAI, ElevenLabs?
-2. Laptop: Windows 10 or 11, x64 or ARM? External monitor?
+2. ~~Laptop: Windows 10 or 11, x64 or ARM? External monitor?~~ Answered by inspection: ASUS Zenbook Duo UX8406MA, Windows 11 Insider Preview (build 29683), x64, Core Ultra 7 155H. Two built-in panels; a Samsung external has been connected before.
 3. Personal tool or distributed? Distributed means a key proxy (Cloudflare Worker), signing, auto-update and a privacy policy.
 4. Pointing precision: prompt-only POINT tags first, then UI Automation snapping (default), or Anthropic computer-use for precision (Anthropic-only)?
 
