@@ -1,0 +1,276 @@
+import { DEFAULT_SETTINGS, type TtsAudioChunk } from '@clicky/core';
+import { describe, expect, it } from 'vitest';
+import { AnthropicChat } from './anthropic.js';
+import { AssemblyAIStt, type WebSocketLike } from './assemblyai.js';
+import { ElevenLabsTts } from './elevenlabs.js';
+import { ensureOk, ProviderError, sseData, type FetchLike } from './http.js';
+import { createChat, createTts } from './index.js';
+import { pcmToWav } from './openai-audio.js';
+import { OpenAICompatibleChat } from './openai-compatible.js';
+import { sentenceQueueSession } from './tts-queue.js';
+
+function streamOf(parts: string[] | Uint8Array[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    start(c) {
+      for (const p of parts) c.enqueue(typeof p === 'string' ? enc.encode(p) : p);
+      c.close();
+    },
+  });
+}
+
+async function collect<T>(it: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const x of it) out.push(x);
+  return out;
+}
+
+const signal = () => new AbortController().signal;
+const image = { data: new Uint8Array([255, 216]), mediaType: 'image/jpeg' as const, width: 2, height: 1 };
+
+describe('sseData', () => {
+  it('handles events split across chunks and CRLF', async () => {
+    const out = await collect(
+      sseData(streamOf(['data: {"a"', ':1}\r\n\r\n: comment\n', 'event: x\ndata: two\n\ndata: [DONE]'])),
+    );
+    expect(out).toEqual(['{"a":1}', 'two', '[DONE]']);
+  });
+});
+
+describe('ensureOk', () => {
+  it('extracts the API error message', async () => {
+    const res = new Response(JSON.stringify({ error: { message: 'invalid x-api-key' } }), { status: 401 });
+    await expect(ensureOk('Anthropic', res)).rejects.toThrow('Anthropic 401: invalid x-api-key');
+    await expect(ensureOk('X', new Response('plain text', { status: 500 }))).rejects.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe('OpenAICompatibleChat', () => {
+  it('streams deltas and sends the image as a data URL', async () => {
+    let sent: { url: string; body: Record<string, unknown>; headers: Record<string, string> } | null = null;
+    const fetchImpl: FetchLike = async (url, init) => {
+      sent = { url, body: JSON.parse(String(init?.body)), headers: init?.headers as Record<string, string> };
+      return new Response(
+        streamOf([
+          'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":"[POINT:1,1:a]"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":"Hi."}}]}\n\ndata: [DONE]\n\n',
+        ]),
+      );
+    };
+    const chat = new OpenAICompatibleChat({ id: 'openrouter', apiKey: 'k', fetch: fetchImpl });
+    const out = await collect(
+      chat.stream({
+        system: 's',
+        history: [{ role: 'user', text: 'p' }],
+        question: 'q',
+        images: [image],
+        maxTokens: 50,
+        signal: signal(),
+      }),
+    );
+    expect(out.join('')).toBe('[POINT:1,1:a]Hi.');
+    expect(sent!.url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(sent!.headers['authorization']).toBe('Bearer k');
+    const msgs = sent!.body['messages'] as Array<{ role: string; content: unknown }>;
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user', 'user']);
+    expect(JSON.stringify(msgs[2]?.content)).toContain('data:image/jpeg;base64,/9g=');
+  });
+
+  it('surfaces in-stream errors', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(streamOf(['data: {"error":{"message":"model not found"}}\n\n']));
+    const chat = new OpenAICompatibleChat({ id: 'openai', apiKey: 'k', fetch: fetchImpl });
+    await expect(
+      collect(chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 5, signal: signal() })),
+    ).rejects.toThrow('model not found');
+  });
+});
+
+describe('AnthropicChat', () => {
+  const sse = (events: Array<Record<string, unknown>>) =>
+    events.map((e) => `event: ${String(e['type'])}\ndata: ${JSON.stringify(e)}\n\n`);
+  const msgStart = {
+    type: 'message_start',
+    message: {
+      id: 'm1',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-opus-5-5',
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    },
+  };
+  const body = (stop: string, texts: string[]) =>
+    sse([
+      msgStart,
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      ...texts.map((t) => ({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } })),
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 3 } },
+      { type: 'message_stop' },
+    ]);
+
+  it('streams text and sends image + low effort + fallbacks', async () => {
+    let req: Record<string, unknown> = {};
+    let headers = new Headers();
+    const fetchImpl: FetchLike = async (_url, init) => {
+      req = JSON.parse(String(init?.body));
+      headers = new Headers(init?.headers);
+      return new Response(streamOf(body('end_turn', ['[POINT:none]', 'Hello.'])), {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    };
+    const chat = new AnthropicChat({ apiKey: 'sk-ant-test', fetch: fetchImpl });
+    const out = await collect(
+      chat.stream({ system: 'sys', history: [], question: 'q', images: [image], maxTokens: 100, signal: signal() }),
+    );
+    expect(out.join('')).toBe('[POINT:none]Hello.');
+    expect(req['model']).toBe('claude-opus-5-5');
+    expect(req['output_config']).toEqual({ effort: 'low' });
+    expect(req['fallbacks']).toBe('default');
+    expect(headers.get('anthropic-beta')).toContain('server-side-fallback-2026-07-01');
+    expect(JSON.stringify(req['messages'])).toContain('"media_type":"image/jpeg"');
+  });
+
+  it('turns a refusal into an error', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(streamOf(body('refusal', ['I'])), { headers: { 'content-type': 'text/event-stream' } });
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'claude-haiku-5-5', fetch: fetchImpl });
+    await expect(
+      collect(chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 10, signal: signal() })),
+    ).rejects.toThrow(/declined/);
+  });
+});
+
+class FakeWS implements WebSocketLike {
+  static last: FakeWS | null = null;
+  readyState = 0;
+  binaryType = 'blob';
+  sent: Array<string | ArrayBufferLike | ArrayBufferView> = [];
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  onclose: ((ev: { code?: number; reason?: string }) => void) | null = null;
+  constructor(readonly url: string) {
+    FakeWS.last = this;
+    setTimeout(() => {
+      this.readyState = 1;
+      this.onopen?.({});
+    }, 1);
+  }
+  send(d: string | ArrayBufferLike | ArrayBufferView) {
+    this.sent.push(d);
+    if (d === JSON.stringify({ type: 'ForceEndpoint' })) {
+      setTimeout(() => this.emit({ type: 'Turn', turn_order: 1, end_of_turn: true, transcript: 'export it' }), 5);
+    }
+  }
+  close() {
+    this.readyState = 3;
+  }
+  emit(m: unknown) {
+    this.onmessage?.({ data: JSON.stringify(m) });
+  }
+}
+
+describe('AssemblyAIStt', () => {
+  const tokenFetch: FetchLike = async () => new Response(JSON.stringify({ token: 'tok' }));
+
+  it('streams audio in ≥50 ms chunks and finalises on ForceEndpoint', async () => {
+    const stt = new AssemblyAIStt({ apiKey: 'k', fetch: tokenFetch, WebSocket: FakeWS });
+    const session = await stt.start({ sampleRate: 16000, signal: signal() });
+    const ws = FakeWS.last!;
+    expect(ws.url).toContain('token=tok');
+    expect(ws.url).toContain('sample_rate=16000');
+    session.pushAudio(new Int16Array(1000));
+    expect(ws.sent).toHaveLength(0); // waits for 100 ms of audio
+    session.pushAudio(new Int16Array(1000));
+    expect(ws.sent).toHaveLength(1);
+    ws.emit({ type: 'Turn', turn_order: 0, end_of_turn: true, transcript: 'where is' });
+    ws.emit({ type: 'Turn', turn_order: 1, end_of_turn: false, transcript: 'export' });
+    const text = await session.finish();
+    expect(text).toBe('where is export it');
+    expect(ws.sent.some((d) => d === JSON.stringify({ type: 'Terminate' }))).toBe(true);
+  });
+
+  it('returns quickly with an empty transcript when nothing was said', async () => {
+    class SilentWS extends FakeWS {
+      override send(d: string | ArrayBufferLike | ArrayBufferView) {
+        this.sent.push(d);
+      }
+    }
+    const stt = new AssemblyAIStt({ apiKey: 'k', fetch: tokenFetch, WebSocket: SilentWS, finalizeTimeoutMs: 3000 });
+    const session = await stt.start({ sampleRate: 16000, signal: signal() });
+    const t0 = Date.now();
+    expect(await session.finish()).toBe('');
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('reports a bad key from the token endpoint', async () => {
+    const bad: FetchLike = async () => new Response('{"error":"Invalid API key"}', { status: 401 });
+    const stt = new AssemblyAIStt({ apiKey: 'k', fetch: bad, WebSocket: FakeWS });
+    await expect(stt.start({ sampleRate: 16000, signal: signal() })).rejects.toThrow('401');
+  });
+});
+
+describe('sentenceQueueSession', () => {
+  it('synthesises in parallel but yields in order', async () => {
+    const started: string[] = [];
+    const session = sentenceQueueSession(signal(), async function* (text) {
+      started.push(text);
+      await new Promise((r) => setTimeout(r, text === 'one' ? 20 : 1));
+      yield { data: new TextEncoder().encode(text), format: 'pcm_24000' } satisfies TtsAudioChunk;
+    });
+    session.pushText('one');
+    session.pushText('two');
+    session.pushText('three');
+    session.end();
+    const out = (await collect(session.audio())).map((c) => new TextDecoder().decode(c.data));
+    expect(out).toEqual(['one', 'two', 'three']);
+    expect(started.slice(0, 2)).toEqual(['one', 'two']);
+  });
+
+  it('propagates synthesis errors', async () => {
+    const session = sentenceQueueSession(signal(), async function* () {
+      throw new Error('ElevenLabs 401: bad key');
+    });
+    session.pushText('x');
+    session.end();
+    await expect(collect(session.audio())).rejects.toThrow('401');
+  });
+});
+
+describe('ElevenLabsTts', () => {
+  it('requests low-latency PCM per sentence', async () => {
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      urls.push(url);
+      return new Response(streamOf([new Uint8Array([1, 2, 3, 4])]));
+    };
+    const tts = new ElevenLabsTts({ apiKey: 'k', fetch: fetchImpl });
+    const s = await tts.start({ signal: signal() });
+    s.pushText('Hello.');
+    s.end();
+    const chunks = await collect(s.audio());
+    expect(chunks[0]?.format).toBe('pcm_24000');
+    expect(urls[0]).toContain('output_format=pcm_24000');
+  });
+});
+
+describe('factories', () => {
+  it('throw a config error naming the missing key', () => {
+    expect(() => createChat(DEFAULT_SETTINGS, () => null)).toThrow(/Anthropic API key/);
+    expect(createTts({ ...DEFAULT_SETTINGS, ttsProvider: 'system' }, () => null)).toBeNull();
+  });
+});
+
+describe('pcmToWav', () => {
+  it('writes a valid header', () => {
+    const wav = pcmToWav(new Int16Array([1, -1]), 16000);
+    expect(new TextDecoder().decode(wav.slice(0, 4))).toBe('RIFF');
+    expect(new DataView(wav.buffer).getUint32(24, true)).toBe(16000);
+    expect(wav.length).toBe(48);
+  });
+});

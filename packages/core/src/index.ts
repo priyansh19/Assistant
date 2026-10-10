@@ -6,3 +6,6 @@ export * from './prompt.js';
 export * from './providers.js';
 export * from './sentence-chunker.js';
 export * from './settings.js';
+export * from './history.js';
+export * from './orchestrator.js';
+export * from './speech.js';
