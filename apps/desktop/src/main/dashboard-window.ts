@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron';
-import { CREDENTIAL_IDS, type CredentialId } from '@clicky/core';
+import { CREDENTIAL_IDS, isResting, type CredentialId } from '@clicky/core';
 import { checkKey, defaultChatModel } from '@clicky/providers';
 import {
   IPC,
@@ -316,9 +316,13 @@ export class DashboardWindow {
       return await fn();
     } finally {
       if (hid) {
+        // Remember which interaction this was: restore only if no newer question has started since,
+        // and whatever the outcome (a failure message in the window must be visible).
+        const mine = this.controller.orchestrator.machine.interaction?.id;
         setTimeout(() => {
-          // Only if nothing newer started meanwhile (a newer question owns the screen).
-          if (!win.isDestroyed() && win.isMinimized() && this.controller.orchestrator.state === 'idle') win.restore();
+          const o = this.controller.orchestrator;
+          if (win.isDestroyed() || !win.isMinimized()) return;
+          if (isResting(o.state) && o.machine.interaction?.id === mine) win.restore();
         }, 1200);
       }
     }
