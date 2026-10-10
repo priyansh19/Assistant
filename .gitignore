@@ -1,0 +1,51 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Build output
+bin/
+obj/
+build/
+out/
+dist/
+x64/
+x86/
+Debug/
+Release/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.o
+*.ilk
+*.lib
+*.exp
+
+# Visual Studio / VS Code / JetBrains
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+
+# Dependencies
+node_modules/
+packages/
+.venv/
+venv/
+__pycache__/
+
+# Logs and local env
+*.log
+.env
+.env.*
+!.env.example
