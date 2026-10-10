@@ -11,5 +11,5 @@ asarUnpack:
   - '**/*.node'
 win:
   target: nsis
-  icon: resources/tray.png
+  icon: resources/icon.png
   signAndEditExecutable: false
