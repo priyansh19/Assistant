@@ -45,6 +45,11 @@ export default tseslint.config(
     },
   },
   {
+    // Tests may assert on values they just checked and use throwing fake generators.
+    files: ['**/*.test.ts'],
+    rules: { '@typescript-eslint/no-non-null-assertion': 'off', 'require-yield': 'off' },
+  },
+  {
     files: ['apps/desktop/src/renderer/**/*.ts', 'apps/desktop/src/preload/**/*.ts'],
     languageOptions: { globals: { ...globals.browser } },
   },
