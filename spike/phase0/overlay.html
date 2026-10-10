@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
+  #frame{position:fixed;inset:0;border:3px solid rgba(0,170,255,.55);box-sizing:border-box}
+  #dot{position:fixed;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:#0af;box-shadow:0 0 12px #0af;display:none}
+  body.listening #dot{background:#f50;box-shadow:0 0 16px #f50}
+  #info{position:fixed;left:12px;top:12px;font:12px system-ui;color:#fff;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px}
+</style></head>
+<body><div id="frame"></div><div id="dot"></div><div id="info"></div>
+<script>
+  const id = new URLSearchParams(location.search).get('displayId');
+  const dot = document.getElementById('dot');
+  const info = document.getElementById('info');
+  const r = { displayId: id, innerWidth, innerHeight, dpr: devicePixelRatio, physW: Math.round(innerWidth * devicePixelRatio), physH: Math.round(innerHeight * devicePixelRatio) };
+  info.textContent = `Clicky spike | display ${id}: ${innerWidth}x${innerHeight} css @${devicePixelRatio} = ${r.physW}x${r.physH} px | hold Right Ctrl`;
+  window.spike.send('overlay-report', r);
+  window.spike.on('cursor', (p) => {
+    if (!p) { dot.style.display = 'none'; return; }
+    dot.style.display = 'block';
+    dot.style.left = (p.x + 18) + 'px';
+    dot.style.top = (p.y + 18) + 'px';
+  });
+  window.spike.on('listening', (on) => document.body.classList.toggle('listening', on));
+</script></body></html>

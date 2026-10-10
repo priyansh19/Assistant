@@ -1,0 +1,17 @@
+{
+  "name": "clicky-phase0-spike",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Throwaway Phase 0 spike: hold-to-talk hook, click-through overlay, capture speed. Not part of the app.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "auto": "electron . --auto"
+  },
+  "devDependencies": {
+    "electron": "44.7.0"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5"
+  }
+}
