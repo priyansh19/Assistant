@@ -1,10 +1,19 @@
+import type { HoldKey } from '@clicky/core';
 import { uIOhook, UiohookKey, type UiohookKeyboardEvent } from 'uiohook-napi';
 import type { HoldKeyHook, Platform } from '../types';
 
-// Right Ctrl has no meaning on its own in Windows, so holding it doesn't fight other shortcuts.
-const DEFAULT_HOLD_KEY = UiohookKey.CtrlRight;
+const KEYCODES: Record<HoldKey, number> = {
+  RightCtrl: UiohookKey.CtrlRight,
+  RightAlt: UiohookKey.AltRight,
+  RightShift: UiohookKey.ShiftRight,
+  CapsLock: UiohookKey.CapsLock,
+  F8: UiohookKey.F8,
+  F9: UiohookKey.F9,
+  F10: UiohookKey.F10,
+};
 
-function createHoldKeyHook(keycode: number = DEFAULT_HOLD_KEY): HoldKeyHook {
+function createHoldKeyHook(key: HoldKey): HoldKeyHook {
+  const keycode = KEYCODES[key];
   let down = false;
   let onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null;
   let onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null;
@@ -27,6 +36,7 @@ function createHoldKeyHook(keycode: number = DEFAULT_HOLD_KEY): HoldKeyHook {
     stop() {
       if (onKeyDown) uIOhook.off('keydown', onKeyDown);
       if (onKeyUp) uIOhook.off('keyup', onKeyUp);
+      onKeyDown = onKeyUp = null;
       uIOhook.stop();
     },
   };
@@ -34,7 +44,7 @@ function createHoldKeyHook(keycode: number = DEFAULT_HOLD_KEY): HoldKeyHook {
 
 export const win32Platform: Platform = {
   name: 'win32',
-  createHoldKeyHook: () => createHoldKeyHook(),
+  createHoldKeyHook,
   fitOverlayToDisplay(win, bounds) {
     // Windows clamps a new window to the work area (above the taskbar) on first show.
     // Setting the bounds again after showing makes it cover the whole display (Phase 0 finding).

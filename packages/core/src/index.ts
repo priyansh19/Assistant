@@ -5,3 +5,4 @@ export * from './point-parser.js';
 export * from './prompt.js';
 export * from './providers.js';
 export * from './sentence-chunker.js';
+export * from './settings.js';

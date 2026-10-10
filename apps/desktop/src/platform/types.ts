@@ -1,3 +1,4 @@
+import type { HoldKey } from '@clicky/core';
 import type { BrowserWindow, Rectangle } from 'electron';
 
 /** A global key that reports both press and release (hold-to-talk). */
@@ -8,8 +9,8 @@ export interface HoldKeyHook {
 
 export interface Platform {
   readonly name: 'win32' | 'darwin' | 'linux';
-  /** Hook for the hold-to-talk key. Key choice becomes a setting later; each OS has a sensible default. */
-  createHoldKeyHook(): HoldKeyHook;
+  /** Hook for the hold-to-talk key chosen in settings. */
+  createHoldKeyHook(key: HoldKey): HoldKeyHook;
   /** Make a freshly created overlay window cover `bounds` exactly, working around OS quirks. */
   fitOverlayToDisplay(win: BrowserWindow, bounds: Rectangle): void;
 }

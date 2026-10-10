@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Clicky Settings</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <nav class="sidebar" aria-label="Settings sections">
+      <div class="brand"><span class="brand-dot"></span>Clicky</div>
+      <button class="nav-item active" data-page="general">General</button>
+      <button class="nav-item" data-page="ai">AI and voice</button>
+      <button class="nav-item" data-page="keys">API keys <span id="keys-badge" class="badge" hidden></span></button>
+      <button class="nav-item" data-page="about">About</button>
+    </nav>
+
+    <main>
+      <div id="missing-banner" class="banner warn" hidden>
+        <strong>Clicky can't answer yet.</strong>
+        <span id="missing-text"></span>
+        <button class="link" data-goto="keys">Add keys</button>
+      </div>
+
+      <section class="page active" id="page-general">
+        <h1>General</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Hold-to-talk key</div>
+              <div class="desc">Hold it, ask your question, let go.</div>
+            </div>
+            <select id="holdKey"></select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Start with Windows</div>
+              <div class="desc">Clicky waits in the tray after you sign in.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="launchAtLogin" /><span></span></label>
+          </div>
+        </div>
+        <h2>Screenshots</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Include all displays</div>
+              <div class="desc">Off: only the screen your cursor is on. Faster and sends less.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="captureAllDisplays" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Detail</div>
+              <div class="desc">Higher detail helps with small text but answers a bit slower.</div>
+            </div>
+            <select id="captureMaxEdge">
+              <option value="960">Fast (960 px)</option>
+              <option value="1280">Balanced (1280 px)</option>
+              <option value="1600">Detailed (1600 px)</option>
+              <option value="1920">Maximum (1920 px)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="page-ai">
+        <h1>AI and voice</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Answer model</div>
+              <div class="desc">Looks at your screen and writes the answer.</div>
+            </div>
+            <select id="chatProvider">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Model</div>
+              <div class="desc">Leave empty for the fastest recommended model.</div>
+            </div>
+            <input type="text" id="chatModel" placeholder="Fast default" spellcheck="false" autocomplete="off" />
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Speech to text</div>
+              <div class="desc">Turns what you say into text while you hold the key.</div>
+            </div>
+            <select id="sttProvider">
+              <option value="assemblyai">AssemblyAI (fastest)</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Voice</div>
+              <div class="desc">Reads the answer aloud.</div>
+            </div>
+            <select id="ttsProvider">
+              <option value="elevenlabs">ElevenLabs (natural)</option>
+              <option value="openai">OpenAI</option>
+              <option value="system">Windows voice (free, offline)</option>
+            </select>
+          </div>
+          <div class="row" id="ttsVoiceRow">
+            <div class="label">
+              <div class="title">ElevenLabs voice ID</div>
+              <div class="desc">Leave empty for the default voice.</div>
+            </div>
+            <input type="text" id="ttsVoice" placeholder="Default voice" spellcheck="false" autocomplete="off" />
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="page-keys">
+        <h1>API keys</h1>
+        <p class="intro">
+          Keys are encrypted by Windows for your user account and stay on this PC. Clicky never shows a saved key again;
+          to change one, paste a new key over it.
+        </p>
+        <div id="encryption-banner" class="banner error" hidden>
+          Windows encryption isn't available, so keys can't be saved safely right now.
+        </div>
+        <div class="card" id="keys-list"></div>
+      </section>
+
+      <section class="page" id="page-about">
+        <h1>About</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Clicky</div>
+              <div class="desc" id="version"></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Privacy</div>
+              <div class="desc">
+                Clicky only listens and takes a screenshot while you hold the key. Audio goes to your speech-to-text
+                provider, the screenshot and question go to your answer model, and the answer text goes to your voice
+                provider. Nothing is saved on disk.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

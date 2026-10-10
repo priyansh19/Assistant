@@ -1,13 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { InteractionState } from '@clicky/core';
-import { IPC, type OverlayCursor } from '../shared/ipc';
+import type { IpcChannel, OverlayCursor } from '../shared/ipc';
+
+const CURSOR: IpcChannel = 'overlay:cursor';
+const STATE: IpcChannel = 'overlay:state';
 
 const api = {
   onCursor(fn: (cursor: OverlayCursor) => void): void {
-    ipcRenderer.on(IPC.overlayCursor, (_e, cursor: OverlayCursor) => fn(cursor));
+    ipcRenderer.on(CURSOR, (_e, cursor: OverlayCursor) => fn(cursor));
   },
   onState(fn: (state: InteractionState) => void): void {
-    ipcRenderer.on(IPC.overlayState, (_e, state: InteractionState) => fn(state));
+    ipcRenderer.on(STATE, (_e, state: InteractionState) => fn(state));
   },
 };
 
