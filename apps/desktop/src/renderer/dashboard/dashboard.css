@@ -812,3 +812,9 @@ input[type='search'] {
 .try-result {
   margin-top: 12px;
 }
+
+.status.warn {
+  background: rgba(255, 170, 0, 0.2);
+  color: var(--text);
+  border: 1px solid rgba(255, 170, 0, 0.6);
+}

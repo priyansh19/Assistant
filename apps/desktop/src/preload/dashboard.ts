@@ -7,6 +7,7 @@ import type {
   KeySetResult,
   MicDevice,
   TestResult,
+  TryResult,
 } from '../shared/ipc';
 
 // Channel names are inlined (type-checked against IpcChannel): sandboxed preloads can't share
@@ -30,7 +31,7 @@ const api = {
   runAction: (id: string) => invoke<undefined>('dash:action-run', id),
   openLink: (url: string) => invoke<undefined>('dash:open-link', url),
   holdKeyTest: (on: boolean) => invoke<undefined>('dash:hold-key-test', on),
-  tryIt: () => invoke<undefined>('dash:try-it'),
+  tryIt: () => invoke<TryResult | null>('dash:try-it'),
   diagnostics: () => invoke<string>('dash:diagnostics'),
   openLogs: () => invoke<undefined>('dash:open-logs'),
   onHoldKey(fn: (down: boolean) => void): void {

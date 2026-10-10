@@ -127,6 +127,13 @@ function isBusy(): boolean {
  * rejected (and blocks the wizard) until it's replaced.
  */
 const keyChecks: Partial<Record<CredentialId, TestResult & { checking?: boolean }>> = {};
+/** What the user pasted but hasn't saved yet, so re-renders never wipe it. */
+const keyDrafts: Partial<Record<CredentialId, string>> = {};
+
+function isRejected(id: CredentialId): boolean {
+  const c = keyChecks[id];
+  return !!c && !c.ok && c.kind === 'invalid';
+}
 
 async function checkKeyNow(id: CredentialId): Promise<void> {
   keyChecks[id] = { ok: true, message: 'Checking the key…', checking: true };
@@ -157,6 +164,11 @@ function showPage(page: string): void {
 }
 
 async function save(partial: Partial<Settings>, quiet = false): Promise<void> {
+  if ('chatProvider' in partial || 'chatModel' in partial || 'sttProvider' in partial || 'ttsProvider' in partial) {
+    for (const id of Object.keys(keyChecks) as CredentialId[]) {
+      if (keyChecks[id]?.ok === false && keyChecks[id]?.kind !== 'invalid') Reflect.deleteProperty(keyChecks, id);
+    }
+  }
   snap = await api.update(partial);
   render();
   if (!quiet) toast('Saved');
@@ -207,6 +219,10 @@ function renderControls(s: Settings): void {
   edge.value = String(s.captureMaxEdge);
   check('rememberHistory', s.rememberHistory);
   check('useRecentContext', s.useRecentContext);
+  const micSel = $<HTMLSelectElement>('micDeviceId');
+  if (s.micDeviceId && ![...micSel.options].some((o) => o.value === s.micDeviceId)) {
+    micSel.add(new Option('Saved microphone', s.micDeviceId));
+  }
   set('micDeviceId', s.micDeviceId);
   check('micAlwaysReady', s.micAlwaysReady);
   set('cursorSize', s.cursorSize);
@@ -409,7 +425,9 @@ function renderActions(): void {
 
 function keyStatus(id: CredentialId, needed: boolean): { cls: string; text: string } {
   const c = keyChecks[id];
-  if (snap.keys[id] && c && !c.ok) return { cls: 'rejected', text: 'Rejected' };
+  if (snap.keys[id] && c?.checking) return { cls: 'optional', text: 'Checking…' };
+  if (snap.keys[id] && isRejected(id)) return { cls: 'rejected', text: 'Rejected' };
+  if (snap.keys[id] && c && !c.ok) return { cls: 'warn', text: 'Saved · needs attention' };
   if (snap.keys[id]) return { cls: 'saved', text: snap.keyHints[id] ? `Saved · …${snap.keyHints[id]}` : 'Saved' };
   return needed ? { cls: 'needed', text: 'Needed' } : { cls: 'optional', text: 'Optional' };
 }
@@ -439,9 +457,10 @@ function keyRow(id: CredentialId, needed: boolean): HTMLElement {
   input.spellcheck = false;
   input.disabled = !snap.encryptionAvailable;
   input.setAttribute('aria-label', `${info.name} API key`);
+  input.value = keyDrafts[id] ?? '';
   const saveBtn = el('button', { className: 'primary', text: 'Save' });
   saveBtn.type = 'button';
-  saveBtn.disabled = true;
+  saveBtn.disabled = input.value.trim() === '';
   let saving = false;
   saveBtn.addEventListener('click', async () => {
     if (saving || !input.value.trim()) return;
@@ -450,12 +469,13 @@ function keyRow(id: CredentialId, needed: boolean): HTMLElement {
     try {
       const r = await api.setKey(id, input.value);
       if (!r.ok) {
-        // Keep what they pasted so a small mistake doesn't force a re-copy.
-        keyChecks[id] = { ok: false, message: r.reason };
-        showFeedback(feedback, keyChecks[id]);
+        // Keep what they pasted so a small mistake doesn't force a re-copy. The saved key (if any)
+        // is unchanged, so this doesn't touch its check result.
+        showFeedback(feedback, { ok: false, message: r.reason });
         return;
       }
       input.value = '';
+      Reflect.deleteProperty(keyDrafts, id);
       snap = r.snapshot;
       toast(`${info.name} key saved`);
       rerenderKeyLists();
@@ -468,6 +488,7 @@ function keyRow(id: CredentialId, needed: boolean): HTMLElement {
     }
   });
   input.addEventListener('input', () => {
+    keyDrafts[id] = input.value;
     saveBtn.disabled = saving || input.value.trim() === '';
   });
   input.addEventListener('keydown', (e) => {
@@ -510,10 +531,10 @@ function updateKeyRows(id: CredentialId): void {
   }
 }
 
-/** True while the user is typing a key: rebuilding the rows would wipe what they typed. */
+/** True while focus is in a key field: rebuilding the rows would steal focus mid-typing. */
 function typingKey(): boolean {
   const a = document.activeElement;
-  return a instanceof HTMLInputElement && a.type === 'password' && a.value !== '';
+  return a instanceof HTMLInputElement && a.type === 'password';
 }
 
 function rerenderKeyLists(): void {
@@ -649,6 +670,7 @@ const PRESETS: Preset[] = [
 
 const STEPS = ['welcome', 'providers', 'keys', 'mic', 'key', 'done'] as const;
 let step = 0;
+let focusedStep = -1;
 
 function presetFor(s: Settings): string | null {
   return (
@@ -663,7 +685,7 @@ function presetFor(s: Settings): string | null {
 
 /** Keys that are missing or failed their last check. */
 function keysBlocking(): CredentialId[] {
-  return requiredCredentials(snap.settings).filter((id) => !snap.keys[id] || keyChecks[id]?.ok === false);
+  return requiredCredentials(snap.settings).filter((id) => !snap.keys[id] || isRejected(id) || keyChecks[id]?.checking);
 }
 
 function firstIncompleteStep(): number {
@@ -672,6 +694,7 @@ function firstIncompleteStep(): number {
 
 function openWizard(at = 0): void {
   step = at;
+  focusedStep = -1;
   $('wizard').hidden = false;
   document.querySelector('main')?.setAttribute('inert', '');
   document.querySelector('nav')?.setAttribute('inert', '');
@@ -710,32 +733,15 @@ function updateWizardNext(): void {
   $<HTMLButtonElement>('wizard-next').disabled = blocking.length > 0;
   const note = document.getElementById('wizard-keys-note');
   if (note) {
-    const rejected = blocking.filter((id) => snap.keys[id]);
-    note.textContent = blocking.length
-      ? rejected.length
-        ? `${listNames(rejected)} ${rejected.length > 1 ? 'were' : 'was'} rejected. Paste the key again, or skip and fix it later.`
-        : `Still needed: ${listNames(blocking)}. You can also skip and add them later.`
-      : 'All keys work.';
-  }
-}
-
-let tryStartedAt = 0;
-function renderTryResult(): void {
-  const target = document.getElementById('try-result');
-  if (!target || !tryStartedAt) return;
-  const busy = BUSY_TEXT[snap.state];
-  const latest = snap.history[0];
-  if (busy) {
-    target.className = 'try-result desc';
-    target.textContent = busy;
-  } else if (latest && latest.at >= tryStartedAt - 1000) {
-    if (latest.outcome === 'answered') {
-      target.className = 'try-result key-ok';
-      target.textContent = `✓ “${latest.answer}”${latest.pointLabel ? ` (pointed at ${latest.pointLabel})` : ''}`;
-    } else {
-      target.className = 'try-result key-error';
-      target.textContent = latest.detail ?? 'That did not work.';
-    }
+    const rejected = blocking.filter((id) => snap.keys[id] && isRejected(id));
+    const checking = blocking.filter((id) => keyChecks[id]?.checking);
+    note.textContent = checking.length
+      ? `Checking ${listNames(checking)}…`
+      : blocking.length
+        ? rejected.length
+          ? `${listNames(rejected)} ${rejected.length > 1 ? 'were' : 'was'} rejected. Paste the key again, or skip and fix it later.`
+          : `Still needed: ${listNames(blocking)}. You can also skip and add them later.`
+        : 'All keys work.';
   }
 }
 
@@ -752,7 +758,8 @@ function renderWizard(): void {
   next.disabled = false;
   next.textContent = 'Next';
   $('wizard-skip').hidden = step === STEPS.length - 1;
-  $('wizard-skip').textContent = step === 0 ? 'Set up later' : 'Skip the rest';
+  $('wizard-skip').textContent =
+    step === 0 ? 'Set up later' : STEPS[step] === 'keys' ? 'Skip for now' : 'Skip the rest';
   void setKeyDetection(STEPS[step] === 'key');
 
   const h1 = (text: string): HTMLElement => el('h1', { text, id: 'wizard-title' });
@@ -819,7 +826,10 @@ function renderWizard(): void {
       el('p', { id: 'wizard-keys-note' }),
     );
     updateWizardNext();
-    focusTarget = body.querySelector<HTMLInputElement>('input[type=password]');
+    const firstMissing = needed.find((id) => !snap.keys[id] || isRejected(id));
+    focusTarget =
+      body.querySelector<HTMLInputElement>(`.key-row[data-key="${firstMissing ?? ''}"] input[type=password]`) ??
+      body.querySelector<HTMLInputElement>('input[type=password]');
   } else if (name === 'mic') {
     const desc = el('div', { className: 'desc', text: 'Press Test and say something.' });
     const meter = el('div', { className: 'meter-fill' });
@@ -900,10 +910,20 @@ function renderWizard(): void {
         result.textContent = `Add your ${listNames(snap.missing)} key first.`;
         return;
       }
-      tryStartedAt = Date.now();
       result.className = 'try-result desc';
-      result.textContent = 'Clicky is looking at your screen…';
-      await api.tryIt();
+      result.textContent = 'Clicky is looking at your screen and answering…';
+      const r = await api.tryIt();
+      if (!r) return;
+      if (r.outcome === 'answered') {
+        result.className = 'try-result key-ok';
+        result.textContent = `✓ “${r.answer}”${r.pointLabel ? ` (pointed at ${r.pointLabel})` : ''}`;
+      } else {
+        result.className = 'try-result key-error';
+        result.textContent =
+          r.outcome === 'cancelled'
+            ? 'That was stopped before it finished. Try again.'
+            : (r.detail ?? 'That did not work.');
+      }
     });
     body.replaceChildren(
       h1("You're all set"),
@@ -923,10 +943,13 @@ function renderWizard(): void {
     );
     next.textContent = 'Finish';
     focusTarget = tryBtn;
-    renderTryResult();
   }
-  // Move focus into the new step so keyboard and screen-reader users land in the right place.
-  (focusTarget ?? next).focus();
+  // Move focus into a new step so keyboard and screen-reader users land in the right place, but
+  // never on background refreshes of the same step.
+  if (focusedStep !== step) {
+    focusedStep = step;
+    (focusTarget ?? next).focus();
+  }
 }
 
 // ----------------------------------------------------------------- render all
@@ -938,7 +961,6 @@ function render(): void {
   renderActions();
   if (!typingKey()) renderKeys();
   renderMissing();
-  renderTryResult();
   $('version').textContent = `Version ${snap.appVersion}`;
 }
 
@@ -1066,20 +1088,29 @@ async function init(): Promise<void> {
     renderHome();
   });
 
-  $('wizard-next').addEventListener('click', async () => {
-    const next = $<HTMLButtonElement>('wizard-next');
-    if (next.disabled) return;
-    if (STEPS[step] === 'mic') await stopMicTest();
-    if (step >= STEPS.length - 1) return void closeWizard();
-    step++;
-    renderWizard();
+  let moving = false;
+  const move = async (delta: number): Promise<void> => {
+    if (moving) return;
+    moving = true;
+    try {
+      if (STEPS[step] === 'mic') await stopMicTest();
+      if (delta > 0 && step >= STEPS.length - 1) return void (await closeWizard());
+      step = Math.min(STEPS.length - 1, Math.max(0, step + delta));
+      renderWizard();
+    } finally {
+      moving = false;
+    }
+  };
+  $('wizard-next').addEventListener('click', () => {
+    if (!$<HTMLButtonElement>('wizard-next').disabled) void move(1);
   });
-  $('wizard-back').addEventListener('click', async () => {
-    if (STEPS[step] === 'mic') await stopMicTest();
-    step = Math.max(0, step - 1);
-    renderWizard();
+  $('wizard-back').addEventListener('click', () => void move(-1));
+  $('wizard-skip').addEventListener('click', () => {
+    if (STEPS[step] === 'keys') {
+      step++;
+      renderWizard();
+    } else void closeWizard();
   });
-  $('wizard-skip').addEventListener('click', () => void closeWizard());
   document.addEventListener('keydown', (e) => {
     if ($('wizard').hidden) return;
     if (e.key === 'Escape' && snap.settings.onboardingDone) void closeWizard();

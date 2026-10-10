@@ -51,6 +51,14 @@ export interface OverlayPort {
   caption?(text: string): void;
 }
 
+/** How a typed question or action ended, for UI that waits on it. */
+export interface AskResult {
+  outcome: HistoryEntry['outcome'];
+  answer: string;
+  pointLabel: string | null;
+  detail?: string;
+}
+
 /** Thrown by provider getters when configuration is missing; shown to the user as-is. */
 export class ConfigError extends Error {}
 
@@ -159,6 +167,7 @@ interface Run {
   keyDownAt: number;
   finished: boolean;
   listenTimer?: ReturnType<typeof setTimeout>;
+  result?: AskResult;
 }
 
 export class Orchestrator {
@@ -293,13 +302,13 @@ export class Orchestrator {
   /**
    * Ask a typed question (dashboard) or replay a saved action: no microphone, same answer path.
    */
-  async ask(question: string, source: 'typed' | 'action'): Promise<void> {
+  async ask(question: string, source: 'typed' | 'action'): Promise<AskResult | null> {
     const q = question.trim();
-    if (!q) return;
+    if (!q) return null;
     if (this.run && !this.run.finished) this.cancel('replaced by a new question');
     this.machine.dispatch({ type: 'keyDown' });
     const interaction = this.machine.interaction;
-    if (!interaction) return;
+    if (!interaction) return null;
     const latency = new LatencyRecorder(interaction.id, this.now);
     latency.mark('keyDown');
     const run: Run = {
@@ -319,6 +328,7 @@ export class Orchestrator {
     latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
     await this.answer(run, this.deps.capture.take(interaction.signal), q);
+    return run.result ?? null;
   }
 
   private async afterKeyUp(run: Run): Promise<void> {
@@ -488,6 +498,7 @@ export class Orchestrator {
   private finish(run: Run, outcome: HistoryEntry['outcome'], detail?: string): void {
     if (run.finished) return;
     run.finished = true;
+    run.result = { outcome, answer: run.answer.trim(), pointLabel: run.pointLabel, ...(detail ? { detail } : {}) };
     const summary = run.latency.summary();
     this.deps.onLatency?.(summary);
     if (run.question || run.answer) {

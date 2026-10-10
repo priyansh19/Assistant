@@ -62,6 +62,17 @@ export interface DashboardSnapshot {
 }
 
 export type KeySetResult = { ok: true; snapshot: DashboardSnapshot } | { ok: false; reason: string };
-export type TestResult = { ok: true; message: string } | { ok: false; message: string };
+/**
+ * A live check result. `kind` says what failed: only 'invalid' means the key itself is wrong;
+ * billing, transient (network/rate limit) and model problems are warnings, not rejections.
+ */
+export type TestResult =
+  { ok: true; message: string } | { ok: false; message: string; kind?: 'invalid' | 'billing' | 'transient' | 'model' };
+export interface TryResult {
+  outcome: 'answered' | 'cancelled' | 'error';
+  answer: string;
+  pointLabel: string | null;
+  detail?: string;
+}
 export type ActionSaveResult = { ok: true; action: SavedAction } | { ok: false; reason: string };
 export type { MicDevice };

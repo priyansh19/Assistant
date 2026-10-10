@@ -5,6 +5,7 @@ import {
   contextTurns,
   Orchestrator,
   requiredCredentials,
+  type AskResult,
   type CredentialId,
   type InteractionState,
   type Settings,
@@ -148,13 +149,13 @@ export class Controller {
     this.holdKey = null;
   }
 
-  async ask(question: string, source: 'typed' | 'action'): Promise<void> {
+  async ask(question: string, source: 'typed' | 'action'): Promise<AskResult | null> {
     if (this.missingKeys().length) {
       this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
       this.hooks.needKeys?.();
-      return;
+      return { outcome: 'error', answer: '', pointLabel: null, detail: 'Add your API keys first.' };
     }
-    await this.orchestrator.ask(question, source);
+    return this.orchestrator.ask(question, source);
   }
 
   /** Voice preview for the dashboard. */

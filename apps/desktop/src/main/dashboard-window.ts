@@ -9,6 +9,7 @@ import {
   type KeySetResult,
   type MicDevice,
   type TestResult,
+  type TryResult,
 } from '../shared/ipc';
 import type { WorkerEvent } from '../shared/worker-protocol';
 import type { Controller } from './controller';
@@ -40,24 +41,37 @@ function isCredentialId(v: unknown): v is CredentialId {
   return typeof v === 'string' && (CREDENTIAL_IDS as readonly string[]).includes(v);
 }
 
-/** Turn a key-check failure into something the user can act on. */
-export function explainKeyError(id: CredentialId, msg: string): string {
+type KeyFailure = Extract<TestResult, { ok: false }>;
+const failure = (kind: NonNullable<KeyFailure['kind']>, message: string): KeyFailure => ({ ok: false, kind, message });
+
+/**
+ * Turn a key-check failure into something the user can act on. Only `invalid` means the key itself
+ * is wrong; billing, model and network problems are warnings that must not block setup.
+ */
+export function explainKeyError(id: CredentialId, msg: string): KeyFailure {
   // Billing first: Anthropic labels these invalid_request_error, which would read as "bad key".
   if (/credit|quota|billing|insufficient|payment|balance|\b402\b/i.test(msg)) {
-    return `The key is valid, but the account has no credit. Add billing at ${BILLING_PAGES[id] ?? 'the provider'}.`;
+    return failure(
+      'billing',
+      `The key is valid, but the account has no credit. Add billing at ${BILLING_PAGES[id] ?? 'the provider'}.`,
+    );
   }
-  if (/\b429\b|rate.?limit/i.test(msg))
-    return 'The key works but is being rate limited right now. Try again in a minute.';
-  if (/\b404\b|not[_ ]found|model/i.test(msg) && id !== 'assemblyai' && id !== 'elevenlabs') {
-    return "The key works, but the model wasn't found. Clear the Model field in AI and voice to use the default.";
+  if (/\b429\b|rate.?limit/i.test(msg)) {
+    return failure('transient', 'The key works but is being rate limited right now. Try again in a minute.');
   }
   if (/\b(401|403)\b|unauthori[sz]ed|authentication|invalid.?(api.?)?key|invalid x-api-key/i.test(msg)) {
-    return 'The key was rejected. Check that you copied all of it, or create a new one.';
+    return failure('invalid', 'The key was rejected. Check that you copied all of it, or create a new one.');
+  }
+  if (/\b404\b|not[_ ]found|model/i.test(msg) && id !== 'assemblyai' && id !== 'elevenlabs') {
+    return failure(
+      'model',
+      "The key works, but the model wasn't found. Clear the Model field in AI and voice to use the default.",
+    );
   }
   if (/fetch failed|ENOTFOUND|ECONN|network|socket|timed out/i.test(msg)) {
-    return 'Could not reach the service. Check your internet connection.';
+    return failure('transient', 'Could not reach the service. Check your internet connection.');
   }
-  return `The check failed: ${msg.slice(0, 140)}`;
+  return failure('transient', `The check failed: ${msg.slice(0, 140)}`);
 }
 
 /** Wait for the dashboard to get out of the way before a screenshot is taken. */
@@ -68,8 +82,6 @@ export class DashboardWindow {
   private win: BrowserWindow | null = null;
   private micTestOff: (() => void) | null = null;
   private micTesting = false;
-  /** Set when we minimised the window for a typed question; restored when the answer ends. */
-  private restoreAfterAnswer = false;
 
   constructor(
     private readonly settings: SettingsStore,
@@ -105,7 +117,7 @@ export class DashboardWindow {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log.warn(`key test failed for ${id}`, msg);
-        return { ok: false, message: explainKeyError(id, msg) };
+        return explainKeyError(id, msg);
       }
     });
     handle(IPC.dashMicDevices, () => this.worker.request<MicDevice[]>({ op: 'mic.devices' }));
@@ -159,13 +171,11 @@ export class DashboardWindow {
     });
     handle(IPC.dashAsk, async (question) => {
       if (typeof question !== 'string' || !question.trim()) return;
-      await this.getOutOfTheWay(true);
-      void this.controller.ask(question, 'typed');
+      void this.whileHidden(() => this.controller.ask(question, 'typed'));
     });
-    handle(IPC.dashTryIt, async () => {
-      await this.getOutOfTheWay(true);
-      void this.controller.ask('What am I looking at?', 'typed');
-    });
+    handle(IPC.dashTryIt, (): Promise<TryResult | null> =>
+      this.whileHidden(() => this.controller.ask('What am I looking at?', 'typed')),
+    );
     handle(IPC.dashHoldKeyTest, (on) => {
       this.controller.setKeyTest(
         on
@@ -198,10 +208,9 @@ export class DashboardWindow {
       if (typeof id === 'string') this.history.removeAction(id);
       return this.snapshot();
     });
-    handle(IPC.dashActionRun, async (id) => {
+    handle(IPC.dashActionRun, (id) => {
       if (typeof id !== 'string') return;
-      await this.getOutOfTheWay(true);
-      await this.runAction(id);
+      void this.runAction(id);
     });
     handle(IPC.dashOpenLink, (url) => {
       if (typeof url !== 'string') return;
@@ -219,24 +228,15 @@ export class DashboardWindow {
     this.history.onChange(push);
     this.settings.onChange(push);
     this.credentials.onChange(push);
-    this.controller.onState((state) => {
-      push();
-      // Bring the window back after a typed question so the answer shows up in History and stats.
-      if (this.restoreAfterAnswer && (state === 'idle' || state === 'cancelled' || state === 'error')) {
-        this.restoreAfterAnswer = false;
-        setTimeout(() => {
-          if (this.win && !this.win.isDestroyed() && this.win.isMinimized()) this.win.restore();
-        }, 1500);
-      }
-    });
+    this.controller.onState(push);
   }
 
-  /** Run a saved action against whatever is on screen now. */
+  /** Run a saved action against whatever is on screen now (from the dashboard or the tray). */
   async runAction(id: string): Promise<void> {
     const action = this.history.getAction(id);
     if (!action) return;
     this.history.markActionRun(id);
-    await this.controller.ask(action.question, 'action');
+    await this.whileHidden(() => this.controller.ask(action.question, 'action'));
   }
 
   open(page?: string): void {
@@ -301,12 +301,26 @@ export class DashboardWindow {
     }
   }
 
-  /** Minimise the dashboard so the screenshot shows what the user is actually working on. */
-  private async getOutOfTheWay(restoreLater: boolean): Promise<void> {
-    if (this.win && !this.win.isDestroyed() && this.win.isVisible() && !this.win.isMinimized()) {
-      this.win.minimize();
-      this.restoreAfterAnswer = restoreLater;
+  /**
+   * Minimise the dashboard so the screenshot shows what the user is working on, run the question,
+   * then bring the window back so the answer shows up in History and the stats.
+   */
+  private async whileHidden<T>(fn: () => Promise<T>): Promise<T> {
+    const win = this.win;
+    const hid = !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+    if (hid) {
+      win.minimize();
       await new Promise((r) => setTimeout(r, HIDE_BEFORE_CAPTURE_MS));
+    }
+    try {
+      return await fn();
+    } finally {
+      if (hid) {
+        setTimeout(() => {
+          // Only if nothing newer started meanwhile (a newer question owns the screen).
+          if (!win.isDestroyed() && win.isMinimized() && this.controller.orchestrator.state === 'idle') win.restore();
+        }, 1200);
+      }
     }
   }
 
