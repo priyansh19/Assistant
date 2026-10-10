@@ -135,7 +135,7 @@ export class DashboardWindow {
       });
       try {
         this.micTesting = true;
-        await this.worker.request({ op: 'mic.start', deviceId: this.settings.get().micDeviceId }, 8000);
+        await this.worker.request({ op: 'mic.start', deviceId: this.settings.get().micDeviceId, owner: 'test' }, 8000);
         return { ok: true, message: 'Listening…' };
       } catch (e) {
         this.stopMicTest();
@@ -297,7 +297,7 @@ export class DashboardWindow {
     this.micTestOff = null;
     if (this.micTesting) {
       this.micTesting = false;
-      this.worker.send({ op: 'mic.stop' });
+      this.worker.send({ op: 'mic.stop', owner: 'test' });
     }
   }
 

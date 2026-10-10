@@ -15,8 +15,9 @@ export interface CapturedFrame {
 }
 
 export type WorkerRequest =
-  | { op: 'mic.start'; deviceId: string }
-  | { op: 'mic.stop' }
+  /** `owner` lets the voice loop and the dashboard mic test use the mic at the same time. */
+  | { op: 'mic.start'; deviceId: string; owner: 'voice' | 'test' }
+  | { op: 'mic.stop'; owner: 'voice' | 'test' }
   /** Keep the device open between presses (deviceId '' = default), or close it (null). */
   | { op: 'mic.arm'; deviceId: string | null }
   | { op: 'mic.devices' }

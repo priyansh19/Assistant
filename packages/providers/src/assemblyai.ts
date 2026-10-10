@@ -50,7 +50,7 @@ function fetchToken(fetchImpl: FetchLike, apiKey: string, signal?: AbortSignal):
 }
 
 function prefetchToken(fetchImpl: FetchLike, apiKey: string): void {
-  const token = fetchToken(fetchImpl, apiKey);
+  const token = fetchToken(fetchImpl, apiKey, AbortSignal.timeout(5000));
   token.catch(() => spareTokens.delete(apiKey));
   spareTokens.set(apiKey, { token, expiresAt: Date.now() + (TOKEN_TTL_S - 60) * 1000 });
 }
@@ -59,7 +59,14 @@ async function takeToken(fetchImpl: FetchLike, apiKey: string, signal: AbortSign
   const spare = spareTokens.get(apiKey);
   spareTokens.delete(apiKey);
   let token: string | null = null;
-  if (spare && spare.expiresAt > Date.now()) token = await spare.token.catch(() => null);
+  if (spare && spare.expiresAt > Date.now()) {
+    // A stuck prefetch (dead socket after a network change) must not block the press: give it a
+    // moment, then fetch a fresh one.
+    token = await Promise.race([
+      spare.token.catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 1000)),
+    ]);
+  }
   token ??= await fetchToken(fetchImpl, apiKey, signal);
   prefetchToken(fetchImpl, apiKey); // keep one ready for the next question
   return token;

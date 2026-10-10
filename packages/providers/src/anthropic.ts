@@ -69,6 +69,8 @@ export class AnthropicChat implements VisionChatProvider {
     }
     const final = await stream.finalMessage();
     if (final.stop_reason === 'refusal') throw new Error('The AI declined to answer this question.');
+    // No stop reason means the stream ended without message_stop: the answer was cut off.
+    if (final.stop_reason === null) throw new Error('anthropic: the answer was cut off (connection closed early)');
   }
 }
 

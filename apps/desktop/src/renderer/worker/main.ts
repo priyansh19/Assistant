@@ -41,7 +41,8 @@ registerProcessor('clicky-pcm', ClickyPcm);
 let micReady: Promise<AudioContext> | null = null;
 let mic: { stream: MediaStream; nodes: AudioNode[]; deviceId: string } | null = null;
 let micOpening: Promise<void> | null = null;
-/** Frames are forwarded to main only while emitting (key held, or a mic test). */
+/** Frames are forwarded to main only while someone wants them (key held, and/or a mic test). */
+const owners = new Set<string>();
 let emitting = false;
 /** Armed: keep the device open between presses so listening starts instantly. */
 let armedDevice: string | null = null;
@@ -69,15 +70,25 @@ async function openMic(deviceId: string): Promise<void> {
   closeMic();
   micOpening = (async () => {
     const ctx = await micContext();
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const constraints = (id: string): MediaStreamConstraints => ({
       audio: {
-        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        ...(id ? { deviceId: { exact: id } } : {}),
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       },
     });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints(deviceId));
+    } catch (e) {
+      // The chosen microphone was unplugged: fall back to the Windows default instead of failing
+      // every press until the user changes settings.
+      const name = e instanceof DOMException ? e.name : '';
+      if (!deviceId || (name !== 'OverconstrainedError' && name !== 'NotFoundError')) throw e;
+      stream = await navigator.mediaDevices.getUserMedia(constraints(''));
+    }
     try {
       await ctx.resume();
       const source = ctx.createMediaStreamSource(stream);
@@ -135,11 +146,14 @@ function reconcileMic(): void {
 /** Bumped by every start/stop so a slow device open can tell it has been overtaken. */
 let micGen = 0;
 
-async function micStart(deviceId: string): Promise<void> {
+async function micStart(deviceId: string, owner: string): Promise<void> {
   const gen = ++micGen;
   const warm = mic !== null && mic.deviceId === deviceId;
+  owners.add(owner);
+  // Someone is already emitting from an open device: just join.
+  if (emitting && mic) return;
   await openMic(deviceId);
-  if (gen !== micGen) {
+  if (gen !== micGen || !owners.has(owner)) {
     // Released (or cancelled) while the device was opening: don't start emitting.
     reconcileMic();
     return;
@@ -150,7 +164,9 @@ async function micStart(deviceId: string): Promise<void> {
   preroll.length = 0;
 }
 
-function micStop(): void {
+function micStop(owner: string): void {
+  owners.delete(owner);
+  if (owners.size > 0) return; // the other user (voice or test) still needs it
   micGen++;
   emitting = false;
   preroll.length = 0;
@@ -432,9 +448,9 @@ function voiceSay(id: string, text: string): void {
 async function handle(req: WorkerRequest): Promise<unknown> {
   switch (req.op) {
     case 'mic.start':
-      return micStart(req.deviceId);
+      return micStart(req.deviceId, req.owner);
     case 'mic.stop':
-      return micStop();
+      return micStop(req.owner);
     case 'mic.arm':
       return micArm(req.deviceId);
     case 'mic.devices':

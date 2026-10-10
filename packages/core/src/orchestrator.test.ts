@@ -244,6 +244,7 @@ describe('Orchestrator', () => {
     await new Promise((r) => setTimeout(r, MIC_TAIL_MS + 15));
     t.o.keyDown();
     expect(t.o.state).toBe('listening');
+    await tick(); // history is written after the new mic has started
     expect(t.history[0]?.outcome).toBe('cancelled');
   });
 

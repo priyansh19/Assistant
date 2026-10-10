@@ -41,7 +41,10 @@ class SourceCache {
     const refresh = (): void => void this.refresh();
     screen.on('display-added', refresh);
     screen.on('display-removed', refresh);
-    screen.on('display-metrics-changed', refresh);
+    // Only geometry changes matter; taskbar/work-area changes would cost a blocking getSources.
+    screen.on('display-metrics-changed', (_e, _d, changed: string[]) => {
+      if (changed.some((c) => c === 'bounds' || c === 'scaleFactor' || c === 'rotation')) refresh();
+    });
     // Off the startup critical path.
     setTimeout(refresh, 1500);
   }
@@ -146,31 +149,37 @@ export function createCapturePort(
 
 export function createMicPort(worker: WorkerHost, deviceId: () => string, onLevel: (level: number) => void): MicPort {
   let off: (() => void) | null = null;
+  let current = 0;
   return {
     async start(onFrame, signal, onError) {
       off?.();
-      off = worker.on((e: WorkerEvent) => {
+      const me = ++current;
+      const myOff = worker.on((e: WorkerEvent) => {
         if (signal.aborted) return;
         if (e.type === 'mic.frame') onFrame(e.frame);
         else if (e.type === 'mic.level') onLevel(e.level);
         else if (e.type === 'mic.error') onError?.(new Error(e.message));
         else if (e.type === 'worker.crashed') onError?.(new Error('The audio worker stopped unexpectedly.'));
       });
+      off = myOff;
       try {
-        await worker.request({ op: 'mic.start', deviceId: deviceId() }, 8000);
+        await worker.request({ op: 'mic.start', deviceId: deviceId(), owner: 'voice' }, 8000);
       } catch (e) {
-        off?.();
-        off = null;
-        // A start main gave up on must not leave the device emitting.
-        worker.send({ op: 'mic.stop' });
+        myOff();
+        // Only clean up if no newer press has taken over the mic meanwhile.
+        if (current === me) {
+          off = null;
+          worker.send({ op: 'mic.stop', owner: 'voice' });
+        }
         throw new Error(`Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
       }
     },
     stop() {
+      current++;
       off?.();
       off = null;
       onLevel(0);
-      worker.send({ op: 'mic.stop' });
+      worker.send({ op: 'mic.stop', owner: 'voice' });
     },
   };
 }

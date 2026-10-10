@@ -149,8 +149,14 @@ export function describeError(e: unknown): string {
   if (status === 'server') return 'The AI service had a problem. Please try again.';
   if (/fetch failed|network|ENOTFOUND|ECONN|socket/i.test(msg))
     return 'Network problem. Check your internet connection.';
-  if (/microphone|NotAllowedError|Permission/i.test(msg))
-    return 'Clicky cannot use the microphone. Check Windows microphone privacy settings.';
+  if (/NotAllowedError|Permission denied/i.test(msg)) {
+    return 'Windows is blocking the microphone. Open Settings > Privacy & security > Microphone and allow desktop apps.';
+  }
+  if (/NotFoundError|OverconstrainedError|no microphone/i.test(msg))
+    return 'No microphone found. Plug one in or pick another in Clicky > General.';
+  if (/NotReadableError/i.test(msg)) return 'Another app is using the microphone. Close it and try again.';
+  if (/mic\.start timed out|disconnected|Microphone unavailable/i.test(msg))
+    return 'The microphone did not respond. Try again, or pick another in Clicky > General.';
   return `Something went wrong: ${msg.slice(0, 120)}`;
 }
 
@@ -168,6 +174,8 @@ interface Run {
   finished: boolean;
   listenTimer?: ReturnType<typeof setTimeout>;
   result?: AskResult;
+  /** Only runs that started the mic may stop it (typed questions never touch it). */
+  usedMic: boolean;
 }
 
 export class Orchestrator {
@@ -214,6 +222,7 @@ export class Orchestrator {
       speech: null,
       keyDownAt: this.now(),
       finished: false,
+      usedMic: true,
     };
     this.run = run;
     const { signal } = interaction;
@@ -306,6 +315,7 @@ export class Orchestrator {
     const q = question.trim();
     if (!q) return null;
     if (this.run && !this.run.finished) this.cancel('replaced by a new question');
+    // Not a voice press: a mic test in the dashboard must not be affected.
     this.machine.dispatch({ type: 'keyDown' });
     const interaction = this.machine.interaction;
     if (!interaction) return null;
@@ -323,11 +333,14 @@ export class Orchestrator {
       speech: null,
       keyDownAt: this.now(),
       finished: false,
+      usedMic: false,
     };
     this.run = run;
     latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
-    await this.answer(run, this.deps.capture.take(interaction.signal), q);
+    const screens = this.deps.capture.take(interaction.signal);
+    screens.catch(() => undefined); // handled (or deliberately dropped) in answer()
+    await this.answer(run, screens, q);
     return run.result ?? null;
   }
 
@@ -500,6 +513,11 @@ export class Orchestrator {
     run.finished = true;
     run.result = { outcome, answer: run.answer.trim(), pointLabel: run.pointLabel, ...(detail ? { detail } : {}) };
     const summary = run.latency.summary();
+    // History/log writes are deferred: when a new press interrupts this run, its mic must start first.
+    queueMicrotask(() => this.persist(run, outcome, summary, detail));
+  }
+
+  private persist(run: Run, outcome: HistoryEntry['outcome'], summary: LatencySummary, detail?: string): void {
     this.deps.onLatency?.(summary);
     if (run.question || run.answer) {
       this.deps.record({
@@ -519,7 +537,7 @@ export class Orchestrator {
     const run = this.run;
     if (!run || run.interaction.id !== interactionId) return;
     clearTimeout(run.listenTimer);
-    this.deps.mic.stop();
+    if (run.usedMic) this.deps.mic.stop();
     run.speech?.stop();
     void run.sttSession?.then(
       (s) => s.close(),

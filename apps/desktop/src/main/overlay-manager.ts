@@ -27,7 +27,7 @@ export class OverlayManager implements OverlayPort {
     this.rebuild();
     screen.on('display-added', this.scheduleRebuild);
     screen.on('display-removed', this.scheduleRebuild);
-    screen.on('display-metrics-changed', this.scheduleRebuild);
+    screen.on('display-metrics-changed', this.onMetrics);
     this.cursorTimer = setInterval(() => this.pushCursor(), CURSOR_INTERVAL_MS);
   }
 
@@ -36,7 +36,7 @@ export class OverlayManager implements OverlayPort {
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     screen.off('display-added', this.scheduleRebuild);
     screen.off('display-removed', this.scheduleRebuild);
-    screen.off('display-metrics-changed', this.scheduleRebuild);
+    screen.off('display-metrics-changed', this.onMetrics);
     this.destroyAll();
   }
 
@@ -84,6 +84,11 @@ export class OverlayManager implements OverlayPort {
   private broadcast(channel: string, payload: unknown): void {
     for (const win of this.windows.values()) if (!win.isDestroyed()) win.webContents.send(channel, payload);
   }
+
+  /** Taskbar moves and app bars change only the work area; overlays cover full bounds, so ignore those. */
+  private readonly onMetrics = (_e: unknown, _d: Display, changed: string[]): void => {
+    if (changed.some((c) => c === 'bounds' || c === 'scaleFactor' || c === 'rotation')) this.scheduleRebuild();
+  };
 
   /** Display events often come in bursts (docking, scaling); rebuild once they settle. */
   private readonly scheduleRebuild = (): void => {
