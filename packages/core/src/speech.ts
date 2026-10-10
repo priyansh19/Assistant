@@ -48,30 +48,49 @@ export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): Speech
         for (const fn of firstAudio) fn();
       });
       let stopped = false;
+      let ended = false;
+      let said = 0;
+      let audioBytes = 0;
       const sessionP = tts.start({ signal });
       const pending: string[] = [];
-      let ended = false;
       // Text that arrives before the session is ready is buffered; afterwards it goes straight in.
-      let live: { pushText(t: string): void; end(): void } | null = null;
+      let live: { pushText(t: string): void; end(): void; close(): void } | null = null;
 
       const done = (async () => {
         const session = await sessionP;
         live = session;
+        if (stopped || signal.aborted) {
+          session.close();
+          return;
+        }
         try {
           for (const s of pending.splice(0)) session.pushText(s);
           if (ended) session.end();
           for await (const chunk of session.audio()) {
             if (stopped || signal.aborted) break;
+            audioBytes += chunk.data.byteLength;
             sink.write(chunk);
           }
-          if (!stopped && !signal.aborted) await sink.finish();
+          if (stopped || signal.aborted) return;
+          // Text went in but nothing came out: the user heard silence, so this is a failure.
+          if (said > 0 && audioBytes === 0) throw new Error('The voice service returned no audio.');
+          await sink.finish();
         } finally {
           session.close();
         }
       })();
+      const stop = (): void => {
+        if (stopped) return;
+        stopped = true;
+        pending.length = 0;
+        sink.stop();
+        live?.close();
+      };
+      signal.addEventListener('abort', stop, { once: true });
       return {
         say(sentence) {
-          if (stopped || ended) return;
+          if (stopped || ended || !sentence.trim()) return;
+          said++;
           if (live) live.pushText(sentence);
           else pending.push(sentence);
         },
@@ -88,11 +107,7 @@ export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): Speech
           if (started) fn();
           else firstAudio.push(fn);
         },
-        stop() {
-          if (stopped) return;
-          stopped = true;
-          sink.stop();
-        },
+        stop,
       };
     },
   };

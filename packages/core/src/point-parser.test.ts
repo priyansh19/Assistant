@@ -129,4 +129,15 @@ describe('PointStreamParser', () => {
       'point',
     ]);
   });
+
+  it('finds tags after characters that change length when uppercased', () => {
+    const events = run(['Straße [POINT:1,2:Menü] öffnen.']);
+    expect(spoken(events)).toBe('Straße  öffnen.');
+    expect(events).toContainEqual({ type: 'point', tag: { kind: 'point', x: 1, y: 2, label: 'Menü', screen: null } });
+  });
+
+  it('releases an over-long bracket span as text even when it closes in one chunk', () => {
+    const prose = `[POINT: ${'x'.repeat(MAX_TAG_LENGTH)}] end`;
+    expect(spoken(run([prose]))).toBe(prose);
+  });
 });

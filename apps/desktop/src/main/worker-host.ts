@@ -6,14 +6,17 @@ type EventHandler = (e: WorkerEvent) => void;
 
 /**
  * The hidden worker window and a promise-based request channel to it. It is created at startup
- * so the first key press doesn't pay for window creation.
+ * so the first key press doesn't pay for window creation, and recreated if it crashes.
  */
 export class WorkerHost {
   private win: BrowserWindow | null = null;
   private ready: Promise<void> | null = null;
+  private loaded = false;
   private nextId = 1;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly handlers = new Set<EventHandler>();
+  /** Called after the worker had to be recreated, e.g. to re-arm the warm microphone. */
+  onRestart: (() => void) | null = null;
 
   constructor() {
     ipcMain.on('worker:reply', (e, reply: WorkerReply) => {
@@ -26,12 +29,8 @@ export class WorkerHost {
     });
     ipcMain.on('worker:event', (e, event: WorkerEvent) => {
       if (!this.win || e.sender !== this.win.webContents) return;
-      for (const h of this.handlers) h(event);
+      this.emit(event);
     });
-  }
-
-  start(): Promise<void> {
-    if (this.ready) return this.ready;
     // The worker may use the microphone and screen capture; every other permission is denied.
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
       callback(wc === this.win?.webContents && (permission === 'media' || permission === 'display-capture'));
@@ -39,6 +38,14 @@ export class WorkerHost {
     session.defaultSession.setPermissionCheckHandler((wc, permission) => {
       return wc === this.win?.webContents && (permission === 'media' || permission === 'display-capture');
     });
+  }
+
+  private emit(event: WorkerEvent): void {
+    for (const h of this.handlers) h(event);
+  }
+
+  start(): Promise<void> {
+    if (this.ready) return this.ready;
     const win = new BrowserWindow({
       show: false,
       width: 200,
@@ -54,49 +61,73 @@ export class WorkerHost {
       },
     });
     this.win = win;
+    this.loaded = false;
+    const ready = new Promise<void>((resolve, reject) => {
+      win.webContents.once('did-finish-load', () => {
+        this.loaded = true;
+        resolve();
+      });
+      win.webContents.once('did-fail-load', (_e, code, desc) => {
+        if (this.ready === ready) this.ready = null; // try again on next use
+        reject(new Error(`worker failed to load: ${code} ${desc}`));
+      });
+      win.webContents.once('render-process-gone', () => reject(new Error('audio/capture worker crashed')));
+    });
+    ready.catch(() => undefined);
+    this.ready = ready;
     win.webContents.on('render-process-gone', () => {
-      // Fail everything in flight and recreate on next use.
+      // Fail everything in flight, tell every stream waiter, and bring a new worker up.
       for (const p of this.pending.values()) p.reject(new Error('audio/capture worker crashed'));
       this.pending.clear();
-      this.win = null;
-      this.ready = null;
+      if (this.win === win) {
+        this.win = null;
+        this.ready = null;
+        this.loaded = false;
+      }
       if (!win.isDestroyed()) win.destroy();
-    });
-    this.ready = new Promise<void>((resolve, reject) => {
-      win.webContents.once('did-finish-load', () => resolve());
-      win.webContents.once('did-fail-load', (_e, code, desc) =>
-        reject(new Error(`worker failed to load: ${code} ${desc}`)),
-      );
+      this.emit({ type: 'worker.crashed' });
+      setTimeout(() => {
+        this.start()
+          .then(() => this.onRestart?.())
+          .catch(() => undefined);
+      }, 500);
     });
     if (process.env['ELECTRON_RENDERER_URL']) {
       void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/worker/index.html`);
     } else {
       void win.loadFile(join(__dirname, '../renderer/worker/index.html'));
     }
-    return this.ready;
+    return ready;
   }
 
-  async request<T = unknown>(req: WorkerRequest, timeoutMs = 15000): Promise<T> {
-    await this.start();
-    const win = this.win;
-    if (!win || win.isDestroyed()) throw new Error('worker unavailable');
+  /** Send a request; the timeout covers starting the worker too, so nothing can wait forever. */
+  request<T = unknown>(req: WorkerRequest, timeoutMs = 15000): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`worker ${req.op} timed out`));
       }, timeoutMs);
+      const fail = (e: unknown): void => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      };
       this.pending.set(id, {
         resolve: (v) => {
           clearTimeout(timer);
           resolve(v as T);
         },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
+        reject: fail,
       });
-      win.webContents.send('worker:request', id, req);
+      const sendNow = (): void => {
+        const win = this.win;
+        if (!win || win.isDestroyed()) return fail(new Error('worker unavailable'));
+        win.webContents.send('worker:request', id, req);
+      };
+      // Already loaded: send synchronously, so a key-down request isn't queued behind other work.
+      if (this.loaded && this.win && !this.win.isDestroyed()) sendNow();
+      else this.start().then(sendNow, fail);
     });
   }
 

@@ -43,7 +43,9 @@ export type WorkerEvent =
   | { type: 'mic.error'; message: string }
   | { type: 'audio.started'; streamId: string }
   | { type: 'audio.finished'; streamId: string }
-  | { type: 'audio.error'; streamId: string; message: string };
+  | { type: 'audio.error'; streamId: string; message: string }
+  /** Synthesised in main when the worker process dies, so every waiter fails fast. */
+  | { type: 'worker.crashed' };
 
 export interface WorkerReply {
   id: number;

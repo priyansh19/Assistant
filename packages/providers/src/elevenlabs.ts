@@ -41,7 +41,7 @@ export class ElevenLabsTts implements TtsProvider {
           },
         ),
       );
-      if (!res.body) return;
+      if (!res.body) throw new Error('ElevenLabs: empty audio response');
       for await (const data of bodyChunks(res.body)) yield { data, format: 'pcm_24000' };
     }.bind(this);
     return sentenceQueueSession(signal, synth);

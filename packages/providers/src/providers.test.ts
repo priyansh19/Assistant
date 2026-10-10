@@ -87,6 +87,41 @@ describe('OpenAICompatibleChat', () => {
   });
 });
 
+describe('OpenAICompatibleChat completion', () => {
+  it('treats a stream that ends without [DONE] as cut off', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(streamOf(['data: {"choices":[{"delta":{"content":"Half an"}}]}\n\n']));
+    const chat = new OpenAICompatibleChat({ id: 'openrouter', apiKey: 'k', fetch: fetchImpl });
+    await expect(
+      collect(chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 5, signal: signal() })),
+    ).rejects.toThrow(/cut off/);
+  });
+
+  it('sends max_completion_tokens to OpenAI', async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl: FetchLike = async (_u, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(streamOf(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n']));
+    };
+    const chat = new OpenAICompatibleChat({ id: 'openai', apiKey: 'k', fetch: fetchImpl });
+    await collect(chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 7, signal: signal() }));
+    expect(body['max_completion_tokens']).toBe(7);
+    expect(body['max_tokens']).toBeUndefined();
+  });
+});
+
+describe('sentenceQueueSession abort', () => {
+  it('ends the audio loop when aborted with nothing in flight', async () => {
+    const ac = new AbortController();
+    const session = sentenceQueueSession(ac.signal, async function* () {
+      yield { data: new Uint8Array([1]), format: 'pcm_24000' };
+    });
+    const p = collect(session.audio());
+    ac.abort();
+    await expect(p).resolves.toEqual([]);
+  });
+});
+
 describe('AnthropicChat', () => {
   const sse = (events: Array<Record<string, unknown>>) =>
     events.map((e) => `event: ${String(e['type'])}\ndata: ${JSON.stringify(e)}\n\n`);
@@ -210,7 +245,7 @@ describe('AssemblyAIStt', () => {
 
   it('reports a bad key from the token endpoint', async () => {
     const bad: FetchLike = async () => new Response('{"error":"Invalid API key"}', { status: 401 });
-    const stt = new AssemblyAIStt({ apiKey: 'k', fetch: bad, WebSocket: FakeWS });
+    const stt = new AssemblyAIStt({ apiKey: 'bad-key', fetch: bad, WebSocket: FakeWS });
     await expect(stt.start({ sampleRate: 16000, signal: signal() })).rejects.toThrow('401');
   });
 });

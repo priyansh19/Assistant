@@ -33,6 +33,7 @@ export type ParserEvent =
   | { type: 'invalid-tag'; raw: string };
 
 const OPEN = '[POINT:';
+const OPEN_RE = /\[POINT:/i;
 /** A tag longer than this is not a tag; release it as text so a stray "[POINT:" can't swallow the answer. */
 export const MAX_TAG_LENGTH = 160;
 
@@ -85,7 +86,8 @@ export class PointStreamParser {
     };
 
     for (;;) {
-      const start = this.buffer.toUpperCase().indexOf(OPEN);
+      // Search the original string: toUpperCase() can change length (ß → SS) and shift indexes.
+      const start = this.buffer.search(OPEN_RE);
       if (start === -1) {
         // No tag opening; keep back a possible partial "[POI" at the end.
         const keep = final ? 0 : partialOpenSuffix(this.buffer);
@@ -108,9 +110,15 @@ export class PointStreamParser {
         return events; // wait for more input
       }
 
+      if (close + 1 > MAX_TAG_LENGTH) {
+        // Too long to be a tag: prose with a "[POINT:" in it. Release the opening and keep scanning.
+        emitText(this.buffer.slice(0, OPEN.length));
+        this.buffer = this.buffer.slice(OPEN.length);
+        continue;
+      }
       const raw = this.buffer.slice(0, close + 1);
       this.buffer = this.buffer.slice(close + 1);
-      const tag = raw.length <= MAX_TAG_LENGTH ? parsePointTag(raw) : null;
+      const tag = parsePointTag(raw);
       events.push(tag ? { type: 'point', tag } : { type: 'invalid-tag', raw });
     }
   }

@@ -25,6 +25,11 @@ export const IPC = {
   dashActionRemove: 'dash:action-remove',
   dashActionRun: 'dash:action-run',
   dashOpenLink: 'dash:open-link',
+  dashHoldKeyTest: 'dash:hold-key-test',
+  dashTryIt: 'dash:try-it',
+  dashDiagnostics: 'dash:diagnostics',
+  dashOpenLogs: 'dash:open-logs',
+  dashHoldKey: 'dash:hold-key',
   dashChanged: 'dash:changed',
   dashMicLevel: 'dash:mic-level',
 } as const;
@@ -52,6 +57,8 @@ export interface DashboardSnapshot {
   stats: LatencyStatsView;
   history: HistoryEntry[];
   actions: SavedAction[];
+  /** Last four characters of each saved key, so the user can tell which key is stored. */
+  keyHints: Partial<Record<CredentialId, string>>;
 }
 
 export type KeySetResult = { ok: true; snapshot: DashboardSnapshot } | { ok: false; reason: string };

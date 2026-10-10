@@ -10,7 +10,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, etc.) and humans work
 - How we're building it: [`docs/development-plan.md`](docs/development-plan.md). Read it before starting work. Any deviation from the blueprint must be called out there with its reason.
 - Platform strategy: cross-platform architecture, **Windows-first delivery**. Windows is the only platform built, tested and shipped until the MVP loop is solid. macOS and Linux (X11) come later. Wayland is out of scope.
 
-Status: Phase 1. Phase 0 passed on the laptop (`docs/reference-findings.md`). The workspace, tray app, click-through overlay, hold-to-talk hook, the settings window with the encrypted key store, and the `core` logic (state machine, POINT parser, sentence chunker, coordinate mapping, prompt, latency recorder, provider interfaces) exist; providers and `pnpm bench` are still to come. Update this file when commands or layout change.
+Status: Phase 2. The full hold-to-talk loop is built (warm mic, streaming STT, capture, streaming answer, streaming speech, triangle cursor pointing), plus the dashboard (setup wizard, history, saved actions, settings). Verified on the laptop in demo mode (`CLICKY_DEMO=1`, offline providers); real-provider runs and `pnpm bench` need the owner's API keys. Update this file when commands or layout change.
 
 ## Stack
 

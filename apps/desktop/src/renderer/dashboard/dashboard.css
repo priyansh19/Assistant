@@ -789,3 +789,26 @@ input[type='search'] {
 .steps-list li {
   margin: 4px 0;
 }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.status.rejected {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.detected {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.try-result {
+  margin-top: 12px;
+}

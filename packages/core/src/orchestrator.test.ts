@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DisplayGeometry } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import type { InteractionState } from './interaction.js';
-import { ConfigError, MIN_HOLD_MS, Orchestrator, type OrchestratorDeps, type ScreenCapture } from './orchestrator.js';
+import {
+  ConfigError,
+  MIC_TAIL_MS,
+  MIN_HOLD_MS,
+  Orchestrator,
+  type OrchestratorDeps,
+  type ScreenCapture,
+} from './orchestrator.js';
 import type { SttProvider, SttSession, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { SpeechFactory, SpeechOutput } from './speech.js';
 
@@ -221,7 +228,7 @@ describe('Orchestrator', () => {
     t.o.keyDown();
     t.advance(1000);
     t.o.keyUp();
-    await new Promise((r) => setTimeout(r, 8));
+    await new Promise((r) => setTimeout(r, MIC_TAIL_MS + 20));
     t.o.cancel('escape');
     await settle(t.o);
     expect(t.o.state).toBe('cancelled');
@@ -234,7 +241,7 @@ describe('Orchestrator', () => {
     t.o.keyDown();
     t.advance(1000);
     t.o.keyUp();
-    await new Promise((r) => setTimeout(r, 7));
+    await new Promise((r) => setTimeout(r, MIC_TAIL_MS + 15));
     t.o.keyDown();
     expect(t.o.state).toBe('listening');
     expect(t.history[0]?.outcome).toBe('cancelled');
@@ -245,7 +252,7 @@ describe('Orchestrator', () => {
     t.o.keyDown();
     t.advance(1000);
     t.o.keyUp();
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, MIC_TAIL_MS + 80));
     expect(t.o.state).toBe('error');
     expect(t.messages[0]).toMatch(/took too long/);
   });

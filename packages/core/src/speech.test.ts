@@ -94,4 +94,33 @@ describe('cloudSpeech', () => {
     out.end();
     await expect(out.done).rejects.toThrow('401');
   });
+
+  it('fails when text went in but no audio came out', async () => {
+    const tts: TtsProvider = {
+      id: 'silent',
+      async start() {
+        let ended = false;
+        return {
+          pushText: () => undefined,
+          end: () => (ended = true),
+          async *audio() {
+            while (!ended) await new Promise((r) => setTimeout(r, 1));
+          },
+          close: () => undefined,
+        };
+      },
+    };
+    const out = cloudSpeech(tts, () => fakeSink()).create(new AbortController().signal);
+    out.say('Hello.');
+    out.end();
+    await expect(out.done).rejects.toThrow(/no audio/);
+  });
+
+  it('resolves done when the interaction is aborted', async () => {
+    const ac = new AbortController();
+    const out = cloudSpeech(fakeTts(), () => fakeSink()).create(ac.signal);
+    out.say('Hello.');
+    ac.abort();
+    await out.done;
+  });
 });

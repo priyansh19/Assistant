@@ -14,7 +14,7 @@ import type { WorkerEvent } from '../shared/worker-protocol';
 import type { Controller } from './controller';
 import type { CredentialStore } from './credential-store';
 import type { HistoryStore } from './history-store';
-import { log } from './log';
+import { log, redact } from './log';
 import type { SettingsStore } from './settings-store';
 import type { WorkerHost } from './worker-host';
 
@@ -28,8 +28,36 @@ const LINK_HOSTS = new Set([
   'github.com',
 ]);
 
+const BILLING_PAGES: Partial<Record<CredentialId, string>> = {
+  anthropic: 'console.anthropic.com → Billing',
+  openai: 'platform.openai.com → Billing',
+  openrouter: 'openrouter.ai → Credits',
+  elevenlabs: 'elevenlabs.io → Subscription',
+  assemblyai: 'assemblyai.com → Billing',
+};
+
 function isCredentialId(v: unknown): v is CredentialId {
   return typeof v === 'string' && (CREDENTIAL_IDS as readonly string[]).includes(v);
+}
+
+/** Turn a key-check failure into something the user can act on. */
+export function explainKeyError(id: CredentialId, msg: string): string {
+  // Billing first: Anthropic labels these invalid_request_error, which would read as "bad key".
+  if (/credit|quota|billing|insufficient|payment|balance|\b402\b/i.test(msg)) {
+    return `The key is valid, but the account has no credit. Add billing at ${BILLING_PAGES[id] ?? 'the provider'}.`;
+  }
+  if (/\b429\b|rate.?limit/i.test(msg))
+    return 'The key works but is being rate limited right now. Try again in a minute.';
+  if (/\b404\b|not[_ ]found|model/i.test(msg) && id !== 'assemblyai' && id !== 'elevenlabs') {
+    return "The key works, but the model wasn't found. Clear the Model field in AI and voice to use the default.";
+  }
+  if (/\b(401|403)\b|unauthori[sz]ed|authentication|invalid.?(api.?)?key|invalid x-api-key/i.test(msg)) {
+    return 'The key was rejected. Check that you copied all of it, or create a new one.';
+  }
+  if (/fetch failed|ENOTFOUND|ECONN|network|socket|timed out/i.test(msg)) {
+    return 'Could not reach the service. Check your internet connection.';
+  }
+  return `The check failed: ${msg.slice(0, 140)}`;
 }
 
 /** Wait for the dashboard to get out of the way before a screenshot is taken. */
@@ -39,6 +67,9 @@ const HIDE_BEFORE_CAPTURE_MS = 350;
 export class DashboardWindow {
   private win: BrowserWindow | null = null;
   private micTestOff: (() => void) | null = null;
+  private micTesting = false;
+  /** Set when we minimised the window for a typed question; restored when the answer ends. */
+  private restoreAfterAnswer = false;
 
   constructor(
     private readonly settings: SettingsStore,
@@ -74,14 +105,7 @@ export class DashboardWindow {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log.warn(`key test failed for ${id}`, msg);
-        if (/\b(401|403)\b|invalid|unauthori[sz]ed|authentication/i.test(msg)) {
-          return { ok: false, message: 'The key was rejected. Check that you copied all of it.' };
-        }
-        if (/\b404\b|not[_ ]found/i.test(msg))
-          return { ok: false, message: `Key works, but the model wasn't found: ${msg.slice(0, 120)}` };
-        if (/fetch failed|ENOTFOUND|ECONN|network/i.test(msg))
-          return { ok: false, message: 'Could not reach the service. Check your internet connection.' };
-        return { ok: false, message: msg.slice(0, 160) };
+        return { ok: false, message: explainKeyError(id, msg) };
       }
     });
     handle(IPC.dashMicDevices, () => this.worker.request<MicDevice[]>({ op: 'mic.devices' }));
@@ -89,27 +113,30 @@ export class DashboardWindow {
       this.micTestOff?.();
       this.micTestOff = null;
       if (!on) {
-        this.worker.send({ op: 'mic.stop' });
+        this.stopMicTest();
         return { ok: true, message: '' };
       }
       this.micTestOff = this.worker.on((e: WorkerEvent) => {
-        if (e.type === 'mic.level' && this.win && !this.win.isDestroyed())
+        if (e.type === 'mic.level' && this.win && !this.win.isDestroyed()) {
           this.win.webContents.send(IPC.dashMicLevel, e.level);
+        }
       });
       try {
+        this.micTesting = true;
         await this.worker.request({ op: 'mic.start', deviceId: this.settings.get().micDeviceId }, 8000);
         return { ok: true, message: 'Listening…' };
       } catch (e) {
-        this.micTestOff?.();
-        this.micTestOff = null;
+        this.stopMicTest();
         const msg = e instanceof Error ? e.message : String(e);
         return {
           ok: false,
           message: /NotAllowed|Permission/i.test(msg)
-            ? 'Windows is blocking the microphone. Open Settings > Privacy & security > Microphone and allow desktop apps.'
+            ? 'Windows is blocking the microphone. Open Settings > Privacy & security > Microphone and turn on "Let desktop apps access your microphone".'
             : /NotFound|Overconstrained/i.test(msg)
               ? 'No microphone found. Plug one in or pick another device.'
-              : msg,
+              : /NotReadable|in use/i.test(msg)
+                ? 'Another app is using the microphone exclusively. Close it and try again.'
+                : 'The microphone could not start. Try another device, or restart Clicky.',
         };
       }
     });
@@ -118,14 +145,38 @@ export class DashboardWindow {
         await this.controller.speakSample();
         return { ok: true, message: 'Played a sample.' };
       } catch (e) {
-        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+        const msg = e instanceof Error ? e.message : String(e);
+        log.warn('voice test failed', msg);
+        const tts = this.settings.get().ttsProvider;
+        if (/\b(401|403)\b/.test(msg))
+          return { ok: false, message: 'The voice key was rejected. Check it in API keys.' };
+        if (/credit|quota|\b402\b|\b429\b/i.test(msg))
+          return { ok: false, message: 'The voice account is out of credit or rate limited.' };
+        if (/Add your .* key/i.test(msg)) return { ok: false, message: msg };
+        if (tts === 'system') return { ok: false, message: 'The Windows voice did not play. Check that sound is on.' };
+        return { ok: false, message: `The voice did not play: ${msg.slice(0, 120)}` };
       }
     });
     handle(IPC.dashAsk, async (question) => {
       if (typeof question !== 'string' || !question.trim()) return;
-      await this.getOutOfTheWay();
+      await this.getOutOfTheWay(true);
       void this.controller.ask(question, 'typed');
     });
+    handle(IPC.dashTryIt, async () => {
+      await this.getOutOfTheWay(true);
+      void this.controller.ask('What am I looking at?', 'typed');
+    });
+    handle(IPC.dashHoldKeyTest, (on) => {
+      this.controller.setKeyTest(
+        on
+          ? (down) => {
+              if (this.win && !this.win.isDestroyed()) this.win.webContents.send(IPC.dashHoldKey, down);
+            }
+          : null,
+      );
+    });
+    handle(IPC.dashDiagnostics, () => this.diagnostics());
+    handle(IPC.dashOpenLogs, () => void shell.openPath(join(app.getPath('userData'), 'logs')));
     handle(IPC.dashHistoryRemove, (id) => {
       if (typeof id === 'string') this.history.remove(id);
       return this.snapshot();
@@ -149,7 +200,7 @@ export class DashboardWindow {
     });
     handle(IPC.dashActionRun, async (id) => {
       if (typeof id !== 'string') return;
-      await this.getOutOfTheWay();
+      await this.getOutOfTheWay(true);
       await this.runAction(id);
     });
     handle(IPC.dashOpenLink, (url) => {
@@ -167,7 +218,17 @@ export class DashboardWindow {
     };
     this.history.onChange(push);
     this.settings.onChange(push);
-    this.controller.onState(push);
+    this.credentials.onChange(push);
+    this.controller.onState((state) => {
+      push();
+      // Bring the window back after a typed question so the answer shows up in History and stats.
+      if (this.restoreAfterAnswer && (state === 'idle' || state === 'cancelled' || state === 'error')) {
+        this.restoreAfterAnswer = false;
+        setTimeout(() => {
+          if (this.win && !this.win.isDestroyed() && this.win.isMinimized()) this.win.restore();
+        }, 1500);
+      }
+    });
   }
 
   /** Run a saved action against whatever is on screen now. */
@@ -188,9 +249,9 @@ export class DashboardWindow {
     }
     const win = new BrowserWindow({
       width: 980,
-      height: 700,
+      height: 720,
       minWidth: 720,
-      minHeight: 520,
+      minHeight: 540,
       title: 'Clicky',
       show: false,
       autoHideMenuBar: true,
@@ -207,8 +268,8 @@ export class DashboardWindow {
     win.setMenu(null);
     win.once('ready-to-show', () => win.show());
     win.on('closed', () => {
-      this.micTestOff?.();
-      this.micTestOff = null;
+      this.stopMicTest();
+      this.controller.setKeyTest(null);
       this.win = null;
     });
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -222,16 +283,58 @@ export class DashboardWindow {
     this.win = win;
   }
 
+  /** On a voice question: if the Clicky window is in front, minimise it so the screenshot shows the user's work. */
+  minimizeIfFocused(): void {
+    if (this.win && !this.win.isDestroyed() && this.win.isFocused() && !this.win.isMinimized()) this.win.minimize();
+  }
+
   get window(): BrowserWindow | null {
     return this.win;
   }
 
+  private stopMicTest(): void {
+    this.micTestOff?.();
+    this.micTestOff = null;
+    if (this.micTesting) {
+      this.micTesting = false;
+      this.worker.send({ op: 'mic.stop' });
+    }
+  }
+
   /** Minimise the dashboard so the screenshot shows what the user is actually working on. */
-  private async getOutOfTheWay(): Promise<void> {
+  private async getOutOfTheWay(restoreLater: boolean): Promise<void> {
     if (this.win && !this.win.isDestroyed() && this.win.isVisible() && !this.win.isMinimized()) {
       this.win.minimize();
+      this.restoreAfterAnswer = restoreLater;
       await new Promise((r) => setTimeout(r, HIDE_BEFORE_CAPTURE_MS));
     }
+  }
+
+  private diagnostics(): string {
+    const s = this.settings.get();
+    const keys = this.credentials.status();
+    const stats = this.history.stats();
+    const recent = this.history
+      .list()
+      .slice(0, 10)
+      .map(
+        (e) =>
+          `  ${new Date(e.at).toISOString()} ${e.source} ${e.outcome}${e.detail ? ` (${e.detail})` : ''}${
+            typeof e.keyUpToFirstAudioMs === 'number' ? ` first audio ${e.keyUpToFirstAudioMs} ms` : ''
+          }`,
+      );
+    const lines = [
+      `Clicky ${app.getVersion()} (Electron ${process.versions.electron}, Windows ${process.getSystemVersion()})`,
+      `Answer: ${s.chatProvider} ${s.chatModel || `(default ${defaultChatModel(s.chatProvider)})`}`,
+      `Speech to text: ${s.sttProvider}; voice: ${s.ttsProvider}`,
+      `Keys saved: ${CREDENTIAL_IDS.filter((id) => keys[id]).join(', ') || 'none'}`,
+      `Hold key: ${s.holdKey}; mic: ${s.micDeviceId ? 'custom' : 'default'}, keep ready ${s.micAlwaysReady}; paused ${s.paused}`,
+      `Screenshots: ${s.captureMaxEdge} px, all displays ${s.captureAllDisplays}`,
+      `Response time (key up → first audio): last ${stats.lastMs ?? '–'} ms, typical ${stats.p50Ms ?? '–'} ms, p95 ${stats.p95Ms ?? '–'} ms`,
+      'Recent questions (no text):',
+      ...recent,
+    ];
+    return redact(lines.join('\n'));
   }
 
   private snapshot(): DashboardSnapshot {
@@ -239,6 +342,7 @@ export class DashboardWindow {
     return {
       settings: s,
       keys: this.credentials.status(),
+      keyHints: this.credentials.hints(),
       encryptionAvailable: this.credentials.encryptionAvailable,
       appVersion: app.getVersion(),
       defaultModel: defaultChatModel(s.chatProvider),

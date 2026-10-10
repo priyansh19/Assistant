@@ -78,31 +78,38 @@ async function openMic(deviceId: string): Promise<void> {
         autoGainControl: true,
       },
     });
-    await ctx.resume();
-    const source = ctx.createMediaStreamSource(stream);
-    const node = new AudioWorkletNode(ctx, 'clicky-pcm');
-    // The worklet only runs when connected to the output; a muted gain keeps it silent.
-    const mute = ctx.createGain();
-    mute.gain.value = 0;
-    source.connect(node).connect(mute).connect(ctx.destination);
-    node.port.onmessage = (ev: MessageEvent<{ frame: Int16Array; rms: number }>) => {
-      if (!emitting) {
-        preroll.push(ev.data.frame);
-        if (preroll.length > PREROLL_FRAMES) preroll.shift();
-        return;
-      }
-      api.emit({ type: 'mic.frame', frame: ev.data.frame });
-      api.emit({ type: 'mic.level', level: Math.min(1, ev.data.rms * 4) });
-    };
-    const current = { stream, nodes: [source, node, mute] as AudioNode[], deviceId };
-    for (const t of stream.getAudioTracks()) {
-      t.onended = () => {
-        if (mic !== current) return;
-        closeMic();
-        if (emitting) api.emit({ type: 'mic.error', message: 'The microphone was disconnected.' });
+    try {
+      await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, 'clicky-pcm');
+      // The worklet only runs when connected to the output; a muted gain keeps it silent.
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      source.connect(node).connect(mute).connect(ctx.destination);
+      node.port.onmessage = (ev: MessageEvent<{ frame: Int16Array; rms: number }>) => {
+        if (!emitting) {
+          preroll.push(ev.data.frame);
+          if (preroll.length > PREROLL_FRAMES) preroll.shift();
+          return;
+        }
+        api.emit({ type: 'mic.frame', frame: ev.data.frame });
+        api.emit({ type: 'mic.level', level: Math.min(1, ev.data.rms * 4) });
       };
+      const current = { stream, nodes: [source, node, mute] as AudioNode[], deviceId };
+      for (const t of stream.getAudioTracks()) {
+        t.onended = () => {
+          if (mic !== current) return;
+          const wasEmitting = emitting;
+          closeMic();
+          if (wasEmitting) api.emit({ type: 'mic.error', message: 'The microphone was disconnected.' });
+        };
+      }
+      mic = current;
+    } catch (e) {
+      // Never leave a device open that nothing references.
+      for (const t of stream.getTracks()) t.stop();
+      throw e;
     }
-    mic = current;
   })();
   try {
     await micOpening;
@@ -119,9 +126,24 @@ function closeMic(): void {
   preroll.length = 0;
 }
 
+/** Close the device unless someone still wants it: a running capture, or warm mode for this device. */
+function reconcileMic(): void {
+  if (!mic || emitting) return;
+  if (armedDevice === null || mic.deviceId !== armedDevice) closeMic();
+}
+
+/** Bumped by every start/stop so a slow device open can tell it has been overtaken. */
+let micGen = 0;
+
 async function micStart(deviceId: string): Promise<void> {
+  const gen = ++micGen;
   const warm = mic !== null && mic.deviceId === deviceId;
   await openMic(deviceId);
+  if (gen !== micGen) {
+    // Released (or cancelled) while the device was opening: don't start emitting.
+    reconcileMic();
+    return;
+  }
   emitting = true;
   // Only a warm device has a meaningful pre-roll; flush it first.
   if (warm) for (const f of preroll.splice(0)) api.emit({ type: 'mic.frame', frame: f });
@@ -129,18 +151,16 @@ async function micStart(deviceId: string): Promise<void> {
 }
 
 function micStop(): void {
+  micGen++;
   emitting = false;
   preroll.length = 0;
-  if (armedDevice === null || (mic && mic.deviceId !== armedDevice)) closeMic();
+  reconcileMic();
 }
 
 async function micArm(deviceId: string | null): Promise<void> {
   armedDevice = deviceId;
-  if (deviceId === null) {
-    if (!emitting) closeMic();
-    return;
-  }
-  if (!emitting) await openMic(deviceId);
+  if (deviceId !== null && !emitting) await openMic(deviceId);
+  reconcileMic();
 }
 
 async function micDevices(): Promise<MicDevice[]> {
@@ -209,19 +229,23 @@ function openCapture(src: CaptureSource): LiveCapture {
   return live;
 }
 
+function stopCapture(sourceId: string, live: LiveCapture): void {
+  live.stream?.getTracks().forEach((t) => t.stop());
+  live.video.srcObject = null;
+  if (captures.get(sourceId) === live) captures.delete(sourceId);
+}
+
 function captureStop(): void {
-  for (const c of captures.values()) {
-    c.stream?.getTracks().forEach((t) => t.stop());
-    c.video.srcObject = null;
-  }
-  captures.clear();
+  for (const [id, c] of [...captures]) stopCapture(id, c);
 }
 
 async function captureTake(sources: CaptureSource[], maxEdge: number, quality: number): Promise<CapturedFrame[]> {
+  const used: Array<[string, LiveCapture]> = [];
   try {
     const frames: CapturedFrame[] = [];
     for (const src of sources) {
       const live = openCapture(src);
+      used.push([src.sourceId, live]);
       await live.ready;
       const vw = live.video.videoWidth || src.width;
       const vh = live.video.videoHeight || src.height;
@@ -239,7 +263,8 @@ async function captureTake(sources: CaptureSource[], maxEdge: number, quality: n
     return frames;
   } finally {
     // Capture only lives while the key is held: stop the streams as soon as the frame is taken.
-    captureStop();
+    // Only ours: a newer press may already have opened its own.
+    for (const [id, live] of used) stopCapture(id, live);
   }
 }
 
@@ -331,6 +356,8 @@ function audioStop(id: string): void {
 // ---------------------------------------------------------------- offline Windows voice
 
 interface VoiceStream {
+  /** Held so Chromium can't garbage-collect an utterance before its end event fires. */
+  utterances: Set<SpeechSynthesisUtterance>;
   pending: number;
   started: boolean;
   finishing: boolean;
@@ -369,7 +396,7 @@ function voiceDone(id: string, v: VoiceStream): void {
 function voiceSay(id: string, text: string): void {
   let v = voices.get(id);
   if (!v) {
-    v = { pending: 0, started: false, finishing: false, done: false };
+    v = { utterances: new Set(), pending: 0, started: false, finishing: false, done: false };
     voices.set(id, v);
   }
   const stream = v;
@@ -378,6 +405,7 @@ function voiceSay(id: string, text: string): void {
   if (voice) u.voice = voice;
   u.rate = 1.08;
   stream.pending++;
+  stream.utterances.add(u);
   u.onstart = () => {
     if (!stream.started && !stream.done) {
       stream.started = true;
@@ -385,6 +413,7 @@ function voiceSay(id: string, text: string): void {
     }
   };
   const end = (): void => {
+    stream.utterances.delete(u);
     stream.pending--;
     voiceDone(id, stream);
   };
@@ -475,5 +504,9 @@ api.onRequest((id, req) => {
   );
 });
 
-// Warm up the mic pipeline so the first key press is fast (no device is opened here).
+// Warm up the mic pipeline and the audio output so the first press and first answer are fast
+// (no microphone device is opened here).
 void micContext().catch(() => undefined);
+void playbackContext()
+  .resume()
+  .catch(() => undefined);

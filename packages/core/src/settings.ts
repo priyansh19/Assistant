@@ -161,6 +161,13 @@ export function validateApiKey(
   if (k.length < 16 || k.length > 300) return { ok: false, reason: 'That does not look like a full API key.' };
   const prefixes: Partial<Record<CredentialId, string>> = { anthropic: 'sk-ant-', openrouter: 'sk-or-', openai: 'sk-' };
   const prefix = prefixes[id];
-  if (prefix && !k.startsWith(prefix)) return { ok: false, reason: `${id} keys start with "${prefix}".` };
+  const names: Record<CredentialId, string> = {
+    anthropic: 'Anthropic',
+    openrouter: 'OpenRouter',
+    openai: 'OpenAI',
+    assemblyai: 'AssemblyAI',
+    elevenlabs: 'ElevenLabs',
+  };
+  if (prefix && !k.startsWith(prefix)) return { ok: false, reason: `${names[id]} keys start with "${prefix}".` };
   return { ok: true, key: k };
 }

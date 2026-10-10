@@ -51,6 +51,8 @@ export interface SttProvider {
   readonly id: string;
   /** Called at key-down so the connection is open before the user stops talking. */
   start(options: { sampleRate: 16000; signal: AbortSignal }): Promise<SttSession>;
+  /** Optional: get ready for the next start (e.g. fetch a session token) while idle. */
+  prewarm?(): void;
 }
 
 export interface TtsAudioChunk {

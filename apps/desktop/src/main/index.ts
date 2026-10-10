@@ -58,9 +58,15 @@ if (!app.requestSingleInstanceLock()) {
     });
     controller.onState((s) => tray?.setState(s));
     history.onChange(() => tray?.refresh());
+    credentials.onChange(() => tray?.refresh());
+    ctl.hooks = {
+      beforeListen: () => dashboard.minimizeIfFocused(),
+      needKeys: () => dashboard.open('keys'),
+    };
 
     ctl.startHoldKey();
     ctl.syncMicArm();
+    ctl.prewarm();
     ctl.applyLaunchAtLogin(settings.get().launchAtLogin);
 
     settings.onChange((next, prev) => {

@@ -36,6 +36,11 @@
       <!-- Home -->
       <section class="page active" id="page-home">
         <h1>Home</h1>
+        <div class="banner error" id="last-error" hidden>
+          <span id="last-error-text"></span>
+          <button class="secondary small" id="last-error-fix" hidden></button>
+          <button class="link" id="last-error-dismiss">Dismiss</button>
+        </div>
         <div class="card hero" id="status-card">
           <div class="hero-mark" aria-hidden="true">
             <svg class="tri" viewBox="0 0 24 24" aria-hidden="true">
@@ -157,6 +162,16 @@
             <select id="micDeviceId">
               <option value="">Windows default</option>
             </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the microphone ready</div>
+              <div class="desc">
+                Clicky starts listening the instant you press the key instead of about a second later. Windows shows the
+                microphone as in use; nothing is recorded or sent until you hold the key.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="micAlwaysReady" /><span></span></label>
           </div>
           <div class="row">
             <div class="label">
@@ -338,13 +353,34 @@
             </div>
           </div>
         </div>
+        <h2>Troubleshooting</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Diagnostics</div>
+              <div class="desc">
+                Copies the app version, your provider choices, which keys are saved (never the keys), recent errors and
+                response times, ready to paste into a bug report.
+              </div>
+            </div>
+            <button class="secondary" id="copy-diagnostics">Copy diagnostics</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Log files</div>
+              <div class="desc">Clicky's own logs. They never contain audio, screenshots or your questions.</div>
+            </div>
+            <button class="secondary" id="open-logs">Open log folder</button>
+          </div>
+        </div>
       </section>
     </main>
 
     <!-- First-run setup wizard -->
     <div id="wizard" class="wizard" hidden>
       <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
-        <div class="wizard-steps" id="wizard-steps"></div>
+        <div class="wizard-steps" id="wizard-steps" aria-hidden="true"></div>
+        <div class="sr-only" id="wizard-progress" aria-live="polite"></div>
         <div class="wizard-body" id="wizard-body"></div>
         <div class="wizard-foot">
           <button class="link" id="wizard-skip">Skip setup</button>

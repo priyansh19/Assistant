@@ -1,5 +1,8 @@
 appId: dev.clicky.desktop
 productName: Clicky
+# The workspace package name (@clicky/desktop) would otherwise become the install folder name.
+extraMetadata:
+  name: clicky
 directories:
   output: release
   buildResources: resources
@@ -12,4 +15,14 @@ asarUnpack:
 win:
   target: nsis
   icon: resources/icon.png
-  signAndEditExecutable: false
+  # Keep icon/name editing of Clicky.exe; there is no code-signing certificate (personal build).
+  signExecutable: false
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Clicky
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: Clicky-Setup-${version}.${ext}

@@ -51,7 +51,8 @@ export class OpenAICompatibleChat implements VisionChatProvider {
     const body = {
       model: this.model,
       stream: true,
-      max_tokens: req.maxTokens,
+      // OpenAI's newer models only accept max_completion_tokens; OpenRouter uses max_tokens.
+      ...(this.id === 'openai' ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
       messages: [
         { role: 'system', content: req.system },
         ...req.history.map((t) => ({ role: t.role, content: t.text })),
@@ -77,6 +78,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       }),
     );
     if (!res.body) throw new Error(`${this.id}: empty response`);
+    let finished = false;
     for await (const data of sseData(res.body)) {
       if (data === '[DONE]') return;
       let chunk: ChatChunk;
@@ -86,9 +88,14 @@ export class OpenAICompatibleChat implements VisionChatProvider {
         continue; // keep-alive or vendor comment
       }
       if (chunk.error) throw new Error(`${this.id}: ${chunk.error.message ?? 'stream error'}`);
-      const text = chunk.choices?.[0]?.delta?.content;
+      const choice = chunk.choices?.[0];
+      if (choice?.finish_reason === 'error') throw new Error(`${this.id}: the model stopped with an error`);
+      if (choice?.finish_reason) finished = true;
+      const text = choice?.delta?.content;
       if (text) yield text;
     }
+    // The connection ended without [DONE] or a finish reason: the answer was cut off.
+    if (!finished) throw new Error(`${this.id}: the answer was cut off (connection closed early)`);
   }
 }
 

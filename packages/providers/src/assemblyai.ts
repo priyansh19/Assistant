@@ -28,7 +28,42 @@ export interface AssemblyAIOptions {
   finalizeTimeoutMs?: number;
 }
 
-const TOKEN_URL = 'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60';
+const TOKEN_TTL_S = 600;
+const TOKEN_URL = `https://streaming.assemblyai.com/v3/token?expires_in_seconds=${TOKEN_TTL_S}`;
+const KEY_CHECK_URL = 'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60';
+
+/**
+ * One spare single-use streaming token per API key, fetched ahead of time so key-down only has to
+ * open the WebSocket (the token round trip used to sit on the key-up → first audio path for short
+ * questions).
+ */
+const spareTokens = new Map<string, { token: Promise<string>; expiresAt: number }>();
+
+function fetchToken(fetchImpl: FetchLike, apiKey: string, signal?: AbortSignal): Promise<string> {
+  return fetchImpl(TOKEN_URL, { headers: { authorization: apiKey }, ...(signal ? { signal } : {}) })
+    .then((r) => ensureOk('AssemblyAI', r))
+    .then((r) => r.json() as Promise<{ token?: string }>)
+    .then((j) => {
+      if (!j.token) throw new Error('AssemblyAI: no streaming token returned');
+      return j.token;
+    });
+}
+
+function prefetchToken(fetchImpl: FetchLike, apiKey: string): void {
+  const token = fetchToken(fetchImpl, apiKey);
+  token.catch(() => spareTokens.delete(apiKey));
+  spareTokens.set(apiKey, { token, expiresAt: Date.now() + (TOKEN_TTL_S - 60) * 1000 });
+}
+
+async function takeToken(fetchImpl: FetchLike, apiKey: string, signal: AbortSignal): Promise<string> {
+  const spare = spareTokens.get(apiKey);
+  spareTokens.delete(apiKey);
+  let token: string | null = null;
+  if (spare && spare.expiresAt > Date.now()) token = await spare.token.catch(() => null);
+  token ??= await fetchToken(fetchImpl, apiKey, signal);
+  prefetchToken(fetchImpl, apiKey); // keep one ready for the next question
+  return token;
+}
 const WS_URL = 'wss://streaming.assemblyai.com/v3/ws';
 /** AssemblyAI wants 50–1000 ms per message; 16 kHz × 0.1 s = 1600 samples. */
 const SEND_SAMPLES = 1600;
@@ -53,13 +88,14 @@ export class AssemblyAIStt implements SttProvider {
     this.WS = ws;
   }
 
+  /** Fetch a spare streaming token so the next key press skips that round trip. */
+  prewarm(): void {
+    const spare = spareTokens.get(this.opts.apiKey);
+    if (!spare || spare.expiresAt <= Date.now()) prefetchToken(this.fetchImpl, this.opts.apiKey);
+  }
+
   async start({ sampleRate, signal }: { sampleRate: 16000; signal: AbortSignal }): Promise<SttSession> {
-    const tokenRes = await ensureOk(
-      'AssemblyAI',
-      await this.fetchImpl(TOKEN_URL, { headers: { authorization: this.opts.apiKey }, signal }),
-    );
-    const { token } = (await tokenRes.json()) as { token?: string };
-    if (!token) throw new Error('AssemblyAI: no streaming token returned');
+    const token = await takeToken(this.fetchImpl, this.opts.apiKey, signal);
     if (signal.aborted) throw new Error('aborted');
 
     const url = `${WS_URL}?sample_rate=${sampleRate}&encoding=pcm_s16le&format_turns=false&token=${encodeURIComponent(token)}`;
@@ -212,5 +248,5 @@ export class AssemblyAIStt implements SttProvider {
 }
 
 export async function checkAssemblyAIKey(apiKey: string, fetchImpl: FetchLike = (u, i) => fetch(u, i)): Promise<void> {
-  await ensureOk('AssemblyAI', await fetchImpl(TOKEN_URL, { headers: { authorization: apiKey } }));
+  await ensureOk('AssemblyAI', await fetchImpl(KEY_CHECK_URL, { headers: { authorization: apiKey } }));
 }

@@ -12,7 +12,7 @@ import {
   type Settings,
 } from '@clicky/core';
 import type { DashboardApi } from '../../preload/dashboard';
-import type { DashboardSnapshot } from '../../shared/ipc';
+import type { DashboardSnapshot, TestResult } from '../../shared/ipc';
 
 declare global {
   interface Window {
@@ -38,29 +38,50 @@ const KEY_INFO: Record<CredentialId, { name: string; desc: string; url: string }
   elevenlabs: { name: 'ElevenLabs', desc: 'Natural voices.', url: 'https://elevenlabs.io/app/settings/api-keys' },
 };
 
+const BUSY_TEXT: Partial<Record<string, string>> = {
+  listening: 'Listening…',
+  transcribing: 'Got it, one moment…',
+  thinking: 'Thinking…',
+  speaking: 'Answering…',
+};
+
+// ----------------------------------------------------------------- small DOM helpers
+
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`dashboard: #${id} missing`);
-  return el as T;
+  const e = document.getElementById(id);
+  if (!e) throw new Error(`dashboard: #${id} missing`);
+  return e as T;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
-  props: { className?: string; text?: string; title?: string } = {},
+  props: { className?: string; text?: string; title?: string; id?: string } = {},
   children: Array<Node | string> = [],
 ): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   if (props.className) e.className = props.className;
   if (props.text !== undefined) e.textContent = props.text;
   if (props.title) e.title = props.title;
+  if (props.id) e.id = props.id;
   for (const c of children) e.append(c);
   return e;
 }
 
+/** A button that disables itself while its handler runs, so double clicks can't repeat an action. */
 function button(text: string, cls: string, onClick: () => void | Promise<void>): HTMLButtonElement {
   const b = el('button', { className: cls, text });
   b.type = 'button';
-  b.addEventListener('click', () => void onClick());
+  b.addEventListener('click', async () => {
+    if (b.dataset['busy']) return;
+    b.dataset['busy'] = '1';
+    b.disabled = true;
+    try {
+      await onClick();
+    } finally {
+      delete b.dataset['busy'];
+      b.disabled = false;
+    }
+  });
   return b;
 }
 
@@ -72,7 +93,7 @@ function toast(text: string): void {
   t.textContent = text;
   t.classList.add('show');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => t.classList.remove('show'), 1800);
+  toastTimer = window.setTimeout(() => t.classList.remove('show'), 2200);
 }
 
 function timeAgo(at: number): string {
@@ -85,8 +106,35 @@ function timeAgo(at: number): string {
   return new Date(at).toLocaleDateString();
 }
 
-function seconds(ms: number | null): string {
-  return ms === null ? '–' : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+function seconds(ms: number | null | undefined): string {
+  return ms === null || ms === undefined ? '–' : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+}
+
+/** "A", "A and B", "A, B and C" */
+function listNames(ids: CredentialId[]): string {
+  const names = ids.map((id) => KEY_INFO[id].name);
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`;
+}
+
+function isBusy(): boolean {
+  return BUSY_TEXT[snap.state] !== undefined;
+}
+
+// ----------------------------------------------------------------- key check results
+
+/**
+ * Result of the last live check per key, kept across re-renders so a rejected key stays visibly
+ * rejected (and blocks the wizard) until it's replaced.
+ */
+const keyChecks: Partial<Record<CredentialId, TestResult & { checking?: boolean }>> = {};
+
+async function checkKeyNow(id: CredentialId): Promise<void> {
+  keyChecks[id] = { ok: true, message: 'Checking the key…', checking: true };
+  updateKeyRows(id);
+  const r = await api.testKey(id);
+  keyChecks[id] = r;
+  updateKeyRows(id);
+  if (!$('wizard').hidden && STEPS[step] === 'keys') updateWizardNext();
 }
 
 // ----------------------------------------------------------------- navigation
@@ -95,11 +143,16 @@ let currentPage = 'home';
 function showPage(page: string): void {
   if (!document.getElementById(`page-${page}`)) page = 'home';
   currentPage = page;
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item'))
-    b.classList.toggle('active', b.dataset['page'] === page);
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item')) {
+    const active = b.dataset['page'] === page;
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  }
   for (const s of document.querySelectorAll<HTMLElement>('.page'))
     s.classList.toggle('active', s.id === `page-${page}`);
   if (page !== 'general') void stopMicTest();
+  if (snap) renderMissing();
   document.querySelector('main')?.scrollTo(0, 0);
 }
 
@@ -122,6 +175,17 @@ function bindToggle(id: keyof Settings): void {
 function bindText(id: keyof Settings): void {
   const e = $<HTMLInputElement>(id);
   e.addEventListener('change', () => void save({ [id]: e.value } as Partial<Settings>));
+}
+
+/** Toggles and selects sit next to a visible title; give them that as their accessible name. */
+function labelControls(): void {
+  for (const row of document.querySelectorAll<HTMLElement>('.row')) {
+    const title = row.querySelector('.title')?.textContent?.trim();
+    if (!title) continue;
+    for (const c of row.querySelectorAll<HTMLElement>('input, select')) {
+      if (!c.getAttribute('aria-label')) c.setAttribute('aria-label', title);
+    }
+  }
 }
 
 function renderControls(s: Settings): void {
@@ -155,12 +219,23 @@ function renderControls(s: Settings): void {
   set('ttsProvider', s.ttsProvider);
   set('ttsVoice', s.ttsVoice);
   $('ttsVoiceRow').hidden = s.ttsProvider !== 'elevenlabs';
-  for (const sw of document.querySelectorAll<HTMLElement>('.swatch'))
-    sw.classList.toggle('selected', sw.dataset['color'] === s.cursorColor);
+  for (const sw of document.querySelectorAll<HTMLElement>('.swatch')) {
+    const on = sw.dataset['color'] === s.cursorColor;
+    sw.classList.toggle('selected', on);
+    sw.setAttribute('aria-pressed', String(on));
+  }
   document.documentElement.style.setProperty('--cursor', CURSOR_COLOR_HEX[s.cursorColor]);
 }
 
 // ----------------------------------------------------------------- home
+
+/** The newest failure the user hasn't dismissed, if it's recent. */
+let dismissedErrorId: string | null = null;
+function lastError(): HistoryEntry | null {
+  const latest = snap.history[0];
+  if (!latest || latest.outcome !== 'error' || latest.id === dismissedErrorId) return null;
+  return Date.now() - latest.at < 30 * 60_000 ? latest : null;
+}
 
 function renderHome(): void {
   const s = snap.settings;
@@ -172,34 +247,50 @@ function renderHome(): void {
   card.className = 'card hero';
   action.hidden = true;
   action.onclick = null;
-  const busy: Partial<Record<string, string>> = {
-    listening: 'Listening…',
-    transcribing: 'Got it, one moment…',
-    thinking: 'Thinking…',
-    speaking: 'Answering…',
-  };
   if (snap.missing.length) {
     title.textContent = 'Almost ready';
-    desc.textContent = `Add your ${snap.missing.map((id) => KEY_INFO[id].name).join(' and ')} key to start.`;
+    desc.textContent = `Add your ${listNames(snap.missing)} key${snap.missing.length > 1 ? 's' : ''} to start.`;
     action.hidden = false;
     action.textContent = 'Finish setup';
-    action.onclick = () => openWizard();
+    action.onclick = () => openWizard(firstIncompleteStep());
   } else if (s.paused) {
     title.textContent = 'Paused';
     desc.textContent = `Clicky is ignoring ${key} until you resume.`;
     action.hidden = false;
     action.textContent = 'Resume';
     action.onclick = () => void save({ paused: false });
-  } else if (busy[snap.state]) {
+  } else if (isBusy()) {
     card.classList.add('busy');
-    title.textContent = busy[snap.state] ?? '';
+    title.textContent = BUSY_TEXT[snap.state] ?? '';
     desc.textContent = 'Press Esc to stop.';
   } else {
     card.classList.add('ok');
     title.textContent = 'Ready';
     desc.textContent = `Hold ${key}, ask about anything on your screen, and let go.`;
   }
-  $<HTMLButtonElement>('ask-btn').disabled = snap.missing.length > 0;
+
+  const err = lastError();
+  $('last-error').hidden = !err;
+  if (err) {
+    $('last-error-text').textContent = `The last question failed: ${err.detail ?? 'unknown error'}`;
+    const fix = $<HTMLButtonElement>('last-error-fix');
+    const d = (err.detail ?? '').toLowerCase();
+    const target = /key|credit|billing/.test(d)
+      ? 'keys'
+      : /microphone/.test(d)
+        ? 'general'
+        : /model/.test(d)
+          ? 'ai'
+          : null;
+    fix.hidden = target === null;
+    fix.textContent =
+      target === 'keys' ? 'Open API keys' : target === 'general' ? 'Microphone settings' : 'AI settings';
+    fix.onclick = () => {
+      if (target) showPage(target);
+    };
+  }
+
+  $<HTMLButtonElement>('ask-btn').disabled = snap.missing.length > 0 || isBusy();
   $('stat-count').textContent = String(snap.stats.count);
   $('stat-last').textContent = seconds(snap.stats.lastMs);
   $('stat-p50').textContent = seconds(snap.stats.p50Ms);
@@ -216,26 +307,26 @@ function historyItem(e: HistoryEntry, compact = false): HTMLElement {
     el('span', { className: 'pill', text: e.source === 'voice' ? 'Voice' : e.source === 'typed' ? 'Typed' : 'Action' }),
   ]);
   if (e.outcome !== 'answered') {
-    meta.append(
-      el('span', {
-        className: 'pill err',
-        text: e.outcome === 'cancelled' ? 'Stopped' : 'Failed',
-        title: e.detail ?? '',
-      }),
-    );
+    meta.append(el('span', { className: 'pill err', text: e.outcome === 'cancelled' ? 'Stopped' : 'Failed' }));
   }
   if (e.pointLabel) meta.append(el('span', { text: `Pointed at: ${e.pointLabel}` }));
   if (typeof e.keyUpToFirstAudioMs === 'number')
     meta.append(el('span', { text: `${seconds(e.keyUpToFirstAudioMs)} to answer` }));
+  // Failures show their reason in the text itself, not only in a tooltip.
+  const body = e.outcome === 'answered' ? e.answer : [e.answer, e.detail].filter(Boolean).join(' · ');
   const main = el('div', { className: 'item-main' }, [
     el('div', { className: 'item-q', text: e.question || '(no question heard)' }),
-    el('div', { className: 'item-a', text: e.answer || e.detail || '' }),
+    el('div', { className: 'item-a', text: body }),
     meta,
   ]);
   const buttons = el('div', { className: 'item-buttons' });
   if (e.question) {
     buttons.append(
-      button('Ask again', 'secondary small', () => api.ask(e.question)),
+      button('Ask again', 'secondary small', async () => {
+        if (snap.missing.length) return toast('Add your API keys first.');
+        if (isBusy()) return toast('Clicky is busy. Press Esc to stop the current answer.');
+        await api.ask(e.question);
+      }),
       button('Save as action', 'secondary small', async () => {
         const r = await api.saveAction({ name: actionNameFrom(e.question), question: e.question });
         toast(r.ok ? 'Saved to Actions' : r.reason);
@@ -279,10 +370,8 @@ function actionItem(a: SavedAction): HTMLElement {
     ]),
     el('div', { className: 'item-buttons' }, [
       button('Run', 'primary small', async () => {
-        if (snap.missing.length) {
-          toast('Add your API keys first.');
-          return;
-        }
+        if (snap.missing.length) return toast('Add your API keys first.');
+        if (isBusy()) return toast('Clicky is busy. Press Esc to stop the current answer.');
         await api.runAction(a.id);
       }),
       button('Edit', 'secondary small', () => {
@@ -295,6 +384,7 @@ function actionItem(a: SavedAction): HTMLElement {
       }),
       button('Delete', 'secondary small', async () => {
         snap = await api.removeAction(a.id);
+        if ($<HTMLInputElement>('action-id').value === a.id) resetActionForm();
         render();
       }),
     ]),
@@ -317,90 +407,119 @@ function renderActions(): void {
 
 // ----------------------------------------------------------------- keys
 
-function keyRow(id: CredentialId, needed: boolean, onSaved?: () => void): HTMLElement {
+function keyStatus(id: CredentialId, needed: boolean): { cls: string; text: string } {
+  const c = keyChecks[id];
+  if (snap.keys[id] && c && !c.ok) return { cls: 'rejected', text: 'Rejected' };
+  if (snap.keys[id]) return { cls: 'saved', text: snap.keyHints[id] ? `Saved · …${snap.keyHints[id]}` : 'Saved' };
+  return needed ? { cls: 'needed', text: 'Needed' } : { cls: 'optional', text: 'Optional' };
+}
+
+function showFeedback(target: HTMLElement, r: TestResult & { checking?: boolean }): void {
+  target.className = `key-feedback ${r.checking ? 'desc' : r.ok ? 'key-ok' : 'key-error'}`;
+  target.textContent = r.checking ? r.message : r.ok ? `✓ ${r.message}` : r.message;
+}
+
+function keyRow(id: CredentialId, needed: boolean): HTMLElement {
   const info = KEY_INFO[id];
   const saved = snap.keys[id];
-  const status = el('span', {
-    className: `status ${saved ? 'saved' : needed ? 'needed' : 'optional'}`,
-    text: saved ? 'Saved' : needed ? 'Needed' : 'Optional',
-  });
+  const st = keyStatus(id, needed);
+  const status = el('span', { className: `status ${st.cls}`, text: st.text });
   const title = el('div', { className: 'title', text: info.name }, [status]);
   const getKey = el('button', { className: 'link', text: 'Get a key' });
   getKey.type = 'button';
   getKey.addEventListener('click', () => void api.openLink(info.url));
   const desc = el('div', { className: 'desc' }, [`${info.desc} `, getKey]);
-  const feedback = el('div', { className: 'key-error' });
-  feedback.hidden = true;
+  const feedback = el('div', { className: 'key-feedback' });
   const label = el('div', { className: 'label' }, [title, desc, feedback]);
 
   const input = el('input');
   input.type = 'password';
-  input.placeholder = saved ? '•••••••••• (paste to replace)' : 'Paste key';
+  input.placeholder = saved ? 'Paste a new key to replace' : 'Paste key';
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.disabled = !snap.encryptionAvailable;
-  const saveBtn = button('Save', 'primary', async () => {
-    saveBtn.disabled = true;
-    const r = await api.setKey(id, input.value);
-    input.value = '';
-    if (!r.ok) {
-      feedback.className = 'key-error';
-      feedback.textContent = r.reason;
-      feedback.hidden = false;
-      return;
-    }
-    snap = r.snapshot;
-    toast(`${info.name} key saved`);
-    // Check it straight away so mistakes show up now, not on the first question.
-    feedback.className = 'desc';
-    feedback.textContent = 'Checking the key…';
-    feedback.hidden = false;
-    const t = await api.testKey(id);
-    render();
-    onSaved?.();
-    showKeyResult(id, t.ok, t.message);
-  });
+  input.setAttribute('aria-label', `${info.name} API key`);
+  const saveBtn = el('button', { className: 'primary', text: 'Save' });
+  saveBtn.type = 'button';
   saveBtn.disabled = true;
+  let saving = false;
+  saveBtn.addEventListener('click', async () => {
+    if (saving || !input.value.trim()) return;
+    saving = true;
+    saveBtn.disabled = true;
+    try {
+      const r = await api.setKey(id, input.value);
+      if (!r.ok) {
+        // Keep what they pasted so a small mistake doesn't force a re-copy.
+        keyChecks[id] = { ok: false, message: r.reason };
+        showFeedback(feedback, keyChecks[id]);
+        return;
+      }
+      input.value = '';
+      snap = r.snapshot;
+      toast(`${info.name} key saved`);
+      rerenderKeyLists();
+      renderMissing();
+      renderHome();
+      await checkKeyNow(id);
+    } finally {
+      saving = false;
+      saveBtn.disabled = input.value.trim() === '';
+    }
+  });
   input.addEventListener('input', () => {
-    saveBtn.disabled = input.value.trim() === '';
-    feedback.hidden = true;
+    saveBtn.disabled = saving || input.value.trim() === '';
   });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && input.value.trim()) saveBtn.click();
+    if (e.key === 'Enter') saveBtn.click();
   });
   const controls = el('div', { className: 'key-actions' }, [input, saveBtn]);
   if (saved) {
     controls.append(
-      button('Test', 'secondary', async () => {
-        feedback.className = 'desc';
-        feedback.textContent = 'Checking…';
-        feedback.hidden = false;
-        const t = await api.testKey(id);
-        feedback.className = t.ok ? 'key-ok' : 'key-error';
-        feedback.textContent = t.message;
-      }),
+      button('Test', 'secondary', () => checkKeyNow(id)),
       button('Remove', 'secondary', async () => {
         snap = await api.clearKey(id);
-        render();
-        onSaved?.();
+        Reflect.deleteProperty(keyChecks, id);
+        rerenderKeyLists();
+        renderMissing();
+        renderHome();
         toast(`${info.name} key removed`);
       }),
     );
   }
   const row = el('div', { className: 'row key-row' }, [label, controls]);
   row.dataset['key'] = id;
+  const c = keyChecks[id];
+  if (c) showFeedback(feedback, c);
   return row;
 }
 
-/** After a re-render, show the test result on the freshly built row(s). */
-function showKeyResult(id: CredentialId, ok: boolean, message: string): void {
+/** Update only the rows for one key (status pill + feedback) without touching typed input. */
+function updateKeyRows(id: CredentialId): void {
+  const needed = new Set(requiredCredentials(snap.settings));
   for (const row of document.querySelectorAll<HTMLElement>(`.key-row[data-key="${id}"]`)) {
-    const fb = row.querySelector<HTMLElement>('.label > div:last-child');
-    if (!fb) continue;
-    fb.className = ok ? 'key-ok' : 'key-error';
-    fb.textContent = ok ? `✓ ${message}` : message;
-    fb.hidden = false;
+    const st = keyStatus(id, needed.has(id));
+    const pill = row.querySelector<HTMLElement>('.status');
+    if (pill) {
+      pill.className = `status ${st.cls}`;
+      pill.textContent = st.text;
+    }
+    const fb = row.querySelector<HTMLElement>('.key-feedback');
+    const c = keyChecks[id];
+    if (fb && c) showFeedback(fb, c);
   }
+}
+
+/** True while the user is typing a key: rebuilding the rows would wipe what they typed. */
+function typingKey(): boolean {
+  const a = document.activeElement;
+  return a instanceof HTMLInputElement && a.type === 'password' && a.value !== '';
+}
+
+function rerenderKeyLists(): void {
+  if (typingKey()) return;
+  renderKeys();
+  if (!$('wizard').hidden && STEPS[step] === 'keys') renderWizard();
 }
 
 function renderKeys(): void {
@@ -412,9 +531,10 @@ function renderKeys(): void {
 
 function renderMissing(): void {
   const m = snap.missing;
-  $('missing-banner').hidden = m.length === 0 || !$('wizard').hidden;
+  // Home says this in its status card, and the keys page lists them itself.
+  $('missing-banner').hidden = m.length === 0 || currentPage === 'home' || currentPage === 'keys';
   $('missing-text').textContent =
-    `Add your ${m.map((id) => KEY_INFO[id].name).join(', ')} key${m.length > 1 ? 's' : ''}, or pick other providers in AI and voice.`;
+    `Add your ${listNames(m)} key${m.length > 1 ? 's' : ''}, or pick other providers in AI and voice.`;
   const badge = $('keys-badge');
   badge.hidden = m.length === 0;
   badge.textContent = String(m.length);
@@ -423,12 +543,30 @@ function renderMissing(): void {
 // ----------------------------------------------------------------- mic test
 
 let micTesting = false;
+let micStarting = false;
+let activeMeter: HTMLElement | null = null;
+/** Bumped whenever the UI that started a test goes away, so a slow start can tell it's stale. */
+let micTestOwner = 0;
+
 async function startMicTest(target: {
   desc: HTMLElement;
   meter: HTMLElement;
   button: HTMLButtonElement;
 }): Promise<void> {
+  if (micStarting || micTesting) return;
+  micStarting = true;
+  const owner = ++micTestOwner;
+  target.button.disabled = true;
+  target.desc.className = 'desc';
+  target.desc.textContent = 'Starting the microphone…';
   const r = await api.micTest(true);
+  micStarting = false;
+  target.button.disabled = false;
+  if (owner !== micTestOwner) {
+    // The user moved on while it was starting.
+    if (r.ok) await api.micTest(false);
+    return;
+  }
   if (!r.ok) {
     target.desc.textContent = r.message;
     target.desc.className = 'key-error';
@@ -437,12 +575,12 @@ async function startMicTest(target: {
   micTesting = true;
   activeMeter = target.meter;
   target.button.textContent = 'Stop';
-  target.desc.className = 'desc';
   target.desc.textContent = 'Speak now. The bar should move when you talk.';
-  void refreshMicDevices(); // labels become available once permission is granted
+  void refreshMicDevices(); // device names become available once permission is granted
 }
-let activeMeter: HTMLElement | null = null;
+
 async function stopMicTest(): Promise<void> {
+  micTestOwner++;
   if (!micTesting) return;
   micTesting = false;
   await api.micTest(false);
@@ -451,20 +589,26 @@ async function stopMicTest(): Promise<void> {
   const b = document.getElementById('mic-test');
   if (b) b.textContent = 'Test';
 }
+
 api.onMicLevel((level) => {
   if (activeMeter) activeMeter.style.width = `${Math.round(Math.min(1, level * 1.4) * 100)}%`;
 });
 
-async function refreshMicDevices(): Promise<void> {
+async function fillMicSelect(sel: HTMLSelectElement): Promise<void> {
   try {
     const devices = await api.micDevices();
-    const sel = $<HTMLSelectElement>('micDeviceId');
     const current = snap.settings.micDeviceId;
     sel.replaceChildren(new Option('Windows default', ''), ...devices.map((d) => new Option(d.label, d.deviceId)));
     sel.value = devices.some((d) => d.deviceId === current) ? current : '';
   } catch {
     // worker not ready yet; keep the default option
   }
+}
+
+async function refreshMicDevices(): Promise<void> {
+  await fillMicSelect($<HTMLSelectElement>('micDeviceId'));
+  const wizardSel = document.getElementById('wizard-mic') as HTMLSelectElement | null;
+  if (wizardSel) await fillMicSelect(wizardSel);
 }
 
 // ----------------------------------------------------------------- setup wizard
@@ -480,25 +624,25 @@ const PRESETS: Preset[] = [
   {
     id: 'best',
     title: 'Best experience (recommended)',
-    desc: 'Claude answers, AssemblyAI hears you live, ElevenLabs speaks. Needs 3 keys.',
+    desc: 'Claude answers, AssemblyAI hears you live, ElevenLabs speaks. 3 keys.',
     settings: { chatProvider: 'anthropic', sttProvider: 'assemblyai', ttsProvider: 'elevenlabs' },
   },
   {
     id: 'fewer',
     title: 'Two keys, free voice',
-    desc: 'Claude and AssemblyAI, with the built-in Windows voice.',
+    desc: 'Claude and AssemblyAI, with the built-in Windows voice. 2 keys.',
     settings: { chatProvider: 'anthropic', sttProvider: 'assemblyai', ttsProvider: 'system' },
   },
   {
     id: 'openai',
-    title: 'Just OpenAI',
-    desc: 'One OpenAI key for answers, speech to text and voice.',
+    title: 'Fastest to set up: just OpenAI',
+    desc: 'One OpenAI key for answers, speech to text and voice. 1 key.',
     settings: { chatProvider: 'openai', sttProvider: 'openai', ttsProvider: 'openai' },
   },
   {
     id: 'openrouter',
     title: 'OpenRouter',
-    desc: 'Any model through OpenRouter, AssemblyAI for speech, Windows voice.',
+    desc: 'Any model through OpenRouter, AssemblyAI for speech, Windows voice. 2 keys.',
     settings: { chatProvider: 'openrouter', sttProvider: 'assemblyai', ttsProvider: 'system' },
   },
 ];
@@ -517,17 +661,82 @@ function presetFor(s: Settings): string | null {
   );
 }
 
+/** Keys that are missing or failed their last check. */
+function keysBlocking(): CredentialId[] {
+  return requiredCredentials(snap.settings).filter((id) => !snap.keys[id] || keyChecks[id]?.ok === false);
+}
+
+function firstIncompleteStep(): number {
+  return keysBlocking().length ? STEPS.indexOf('keys') : STEPS.indexOf('mic');
+}
+
 function openWizard(at = 0): void {
   step = at;
   $('wizard').hidden = false;
+  document.querySelector('main')?.setAttribute('inert', '');
+  document.querySelector('nav')?.setAttribute('inert', '');
   renderWizard();
 }
 
 async function closeWizard(): Promise<void> {
   await stopMicTest();
+  await setKeyDetection(false);
   $('wizard').hidden = true;
+  document.querySelector('main')?.removeAttribute('inert');
+  document.querySelector('nav')?.removeAttribute('inert');
   if (!snap.settings.onboardingDone) await save({ onboardingDone: true }, true);
   render();
+}
+
+let keyDetectOn = false;
+async function setKeyDetection(on: boolean): Promise<void> {
+  if (keyDetectOn === on) return;
+  keyDetectOn = on;
+  await api.holdKeyTest(on);
+}
+
+api.onHoldKey((down) => {
+  const target = document.getElementById('key-detect');
+  if (!target) return;
+  target.className = 'detected';
+  target.textContent = down
+    ? `✓ ${HOLD_KEY_LABELS[snap.settings.holdKey]} detected. Let go…`
+    : '✓ Works. When you use Clicky, talk while holding it.';
+});
+
+function updateWizardNext(): void {
+  if (STEPS[step] !== 'keys') return;
+  const blocking = keysBlocking();
+  $<HTMLButtonElement>('wizard-next').disabled = blocking.length > 0;
+  const note = document.getElementById('wizard-keys-note');
+  if (note) {
+    const rejected = blocking.filter((id) => snap.keys[id]);
+    note.textContent = blocking.length
+      ? rejected.length
+        ? `${listNames(rejected)} ${rejected.length > 1 ? 'were' : 'was'} rejected. Paste the key again, or skip and fix it later.`
+        : `Still needed: ${listNames(blocking)}. You can also skip and add them later.`
+      : 'All keys work.';
+  }
+}
+
+let tryStartedAt = 0;
+function renderTryResult(): void {
+  const target = document.getElementById('try-result');
+  if (!target || !tryStartedAt) return;
+  const busy = BUSY_TEXT[snap.state];
+  const latest = snap.history[0];
+  if (busy) {
+    target.className = 'try-result desc';
+    target.textContent = busy;
+  } else if (latest && latest.at >= tryStartedAt - 1000) {
+    if (latest.outcome === 'answered') {
+      target.className = 'try-result key-ok';
+      target.textContent = `✓ “${latest.answer}”${latest.pointLabel ? ` (pointed at ${latest.pointLabel})` : ''}`;
+    } else {
+      target.className = 'try-result key-error';
+      target.textContent = latest.detail ?? 'That did not work.';
+    }
+  }
 }
 
 function renderWizard(): void {
@@ -536,17 +745,22 @@ function renderWizard(): void {
   const s = snap.settings;
   const key = HOLD_KEY_LABELS[s.holdKey];
   $('wizard-steps').replaceChildren(...STEPS.map((_, i) => el('span', { className: i <= step ? 'done' : '' })));
+  $('wizard-progress').textContent = `Step ${step + 1} of ${STEPS.length}`;
   const back = $<HTMLButtonElement>('wizard-back');
   const next = $<HTMLButtonElement>('wizard-next');
   back.hidden = step === 0;
   next.disabled = false;
   next.textContent = 'Next';
   $('wizard-skip').hidden = step === STEPS.length - 1;
+  $('wizard-skip').textContent = step === 0 ? 'Set up later' : 'Skip the rest';
+  void setKeyDetection(STEPS[step] === 'key');
 
+  const h1 = (text: string): HTMLElement => el('h1', { text, id: 'wizard-title' });
   const name = STEPS[step];
+  let focusTarget: HTMLElement | null;
   if (name === 'welcome') {
     body.replaceChildren(
-      el('h1', { text: 'Meet Clicky', className: '' }),
+      h1('Meet Clicky'),
       el('p', {
         text: 'A little companion that lives next to your mouse pointer. Ask it about anything on your screen and it answers out loud, then points at the right spot.',
       }),
@@ -556,52 +770,62 @@ function renderWizard(): void {
         el('li', { text: 'The triangle flies to whatever it is talking about.' }),
       ]),
       el('p', {
-        text: 'Setup takes about two minutes: pick your AI services, paste their keys, and check your microphone.',
+        text: 'Setup: pick your AI services, paste their API keys, and check your microphone. Have your keys ready, or create them as you go.',
       }),
     );
     next.textContent = 'Get started';
+    focusTarget = next;
   } else if (name === 'providers') {
     const current = presetFor(s);
+    const choices = PRESETS.map((p) => {
+      const c = el('button', { className: `choice${current === p.id ? ' selected' : ''}` }, [
+        el('div', { className: 'title', text: p.title }),
+        el('div', { className: 'desc', text: p.desc }),
+      ]);
+      c.type = 'button';
+      c.setAttribute('aria-pressed', String(current === p.id));
+      c.addEventListener('click', () => void save(p.settings, true).then(renderWizard));
+      return c;
+    });
     body.replaceChildren(
-      el('h1', { text: 'Choose your AI services' }),
+      h1('Choose your AI services'),
       el('p', { text: 'You can change this any time in AI and voice.' }),
-      el(
-        'div',
-        { className: 'choices' },
-        PRESETS.map((p) => {
-          const c = el('button', { className: `choice${current === p.id ? ' selected' : ''}` }, [
-            el('div', { className: 'title', text: p.title }),
-            el('div', { className: 'desc', text: p.desc }),
-          ]);
-          c.type = 'button';
-          c.addEventListener('click', () => void save(p.settings, true).then(renderWizard));
-          return c;
-        }),
-      ),
+      el('div', { className: 'choices' }, choices),
     );
     if (!current) body.append(el('p', { text: 'You have a custom combination selected. Keep it, or pick one above.' }));
+    focusTarget = choices.find((c) => c.classList.contains('selected')) ?? choices[0] ?? null;
   } else if (name === 'keys') {
     const needed = requiredCredentials(s);
-    const list = el(
-      'div',
-      { className: 'card' },
-      needed.map((id) => keyRow(id, true, () => renderWizard())),
-    );
     body.replaceChildren(
-      el('h1', { text: 'Add your keys' }),
+      h1('Add your keys'),
       el('p', {
-        text: 'Paste each key and press Save. Clicky checks it right away. Keys are encrypted by Windows and never leave this PC except to call that service.',
+        text: 'Paste each key and press Save. Clicky checks it right away. Keys are encrypted by Windows and only ever sent to the service they belong to.',
       }),
-      list,
     );
-    const missing = needed.filter((id) => !snap.keys[id]);
-    next.disabled = missing.length > 0;
-    if (missing.length)
-      body.append(el('p', { text: `Waiting for: ${missing.map((id) => KEY_INFO[id].name).join(', ')}.` }));
+    if (!snap.encryptionAvailable) {
+      body.append(
+        el('div', {
+          className: 'banner error',
+          text: "Windows encryption isn't available, so keys can't be saved safely right now. Restart your PC and try again.",
+        }),
+      );
+    }
+    body.append(
+      el(
+        'div',
+        { className: 'card' },
+        needed.map((id) => keyRow(id, true)),
+      ),
+      el('p', { id: 'wizard-keys-note' }),
+    );
+    updateWizardNext();
+    focusTarget = body.querySelector<HTMLInputElement>('input[type=password]');
   } else if (name === 'mic') {
     const desc = el('div', { className: 'desc', text: 'Press Test and say something.' });
     const meter = el('div', { className: 'meter-fill' });
-    const testBtn = button('Test microphone', 'secondary', async () => {
+    const testBtn = el('button', { className: 'secondary', text: 'Test microphone' });
+    testBtn.type = 'button';
+    testBtn.addEventListener('click', async () => {
       if (micTesting) {
         await stopMicTest();
         testBtn.textContent = 'Test microphone';
@@ -609,19 +833,14 @@ function renderWizard(): void {
         await startMicTest({ desc, meter, button: testBtn });
       }
     });
-    const sel = el('select');
+    const sel = el('select', { id: 'wizard-mic' });
+    sel.setAttribute('aria-label', 'Microphone');
     sel.append(new Option('Windows default', ''));
-    void api
-      .micDevices()
-      .then((devices) => {
-        sel.append(...devices.map((d) => new Option(d.label, d.deviceId)));
-        sel.value = devices.some((d) => d.deviceId === s.micDeviceId) ? s.micDeviceId : '';
-      })
-      .catch(() => undefined);
+    void fillMicSelect(sel);
     sel.addEventListener('change', () => void save({ micDeviceId: sel.value }, true));
     body.replaceChildren(
-      el('h1', { text: 'Check your microphone' }),
-      el('p', { text: 'Clicky only listens while you hold the key.' }),
+      h1('Check your microphone'),
+      el('p', { text: 'Clicky only sends audio while you hold the key.' }),
       el('div', { className: 'card' }, [
         el('div', { className: 'row' }, [
           el('div', { className: 'label' }, [el('div', { className: 'title', text: 'Microphone' })]),
@@ -633,29 +852,37 @@ function renderWizard(): void {
         ]),
       ]),
     );
+    focusTarget = testBtn;
   } else if (name === 'key') {
     const sel = el('select');
+    sel.setAttribute('aria-label', 'Hold-to-talk key');
     for (const k of HOLD_KEYS) sel.add(new Option(HOLD_KEY_LABELS[k], k));
     sel.value = s.holdKey;
     sel.addEventListener(
       'change',
       () => void save({ holdKey: sel.value as Settings['holdKey'] }, true).then(renderWizard),
     );
+    const detect = el('div', {
+      className: 'desc',
+      id: 'key-detect',
+      text: `Press and hold ${key} now to check it works.`,
+    });
     const voiceDesc = el('div', { className: 'desc', text: 'Hear how Clicky sounds.' });
     const play = button('Play sample', 'secondary', async () => {
-      play.disabled = true;
+      voiceDesc.className = 'desc';
       voiceDesc.textContent = 'Playing…';
       const r = await api.voiceTest();
       voiceDesc.textContent = r.message;
       voiceDesc.className = r.ok ? 'key-ok' : 'key-error';
-      play.disabled = false;
     });
     body.replaceChildren(
-      el('h1', { text: 'Your talk key and voice' }),
-      el('p', { text: 'Pick a key you can hold comfortably. It does nothing else while Clicky is running.' }),
+      h1('Your talk key and voice'),
+      el('p', {
+        text: 'Pick a key you can hold comfortably. Some laptops have no Right Ctrl; choose another key if nothing is detected.',
+      }),
       el('div', { className: 'card' }, [
         el('div', { className: 'row' }, [
-          el('div', { className: 'label' }, [el('div', { className: 'title', text: 'Hold-to-talk key' })]),
+          el('div', { className: 'label' }, [el('div', { className: 'title', text: 'Hold-to-talk key' }), detect]),
           sel,
         ]),
         el('div', { className: 'row' }, [
@@ -664,28 +891,45 @@ function renderWizard(): void {
         ]),
       ]),
     );
+    focusTarget = sel;
   } else {
+    const result = el('div', { className: 'try-result desc', id: 'try-result' });
+    const tryBtn = button('Try it now', 'primary', async () => {
+      if (snap.missing.length) {
+        result.className = 'try-result key-error';
+        result.textContent = `Add your ${listNames(snap.missing)} key first.`;
+        return;
+      }
+      tryStartedAt = Date.now();
+      result.className = 'try-result desc';
+      result.textContent = 'Clicky is looking at your screen…';
+      await api.tryIt();
+    });
     body.replaceChildren(
-      el('h1', { text: "You're all set" }),
-      el('p', { text: 'Try it now. Close this window or leave it open, then:' }),
+      h1("You're all set"),
+      el('p', {
+        text: 'Try a typed question first: Clicky hides this window, looks at your screen, answers out loud and points, then comes back here. Then try your voice:',
+      }),
+      tryBtn,
+      result,
       el('ol', { className: 'steps-list' }, [
         el('li', {}, ['Hold ', el('span', { className: 'big-key', text: key }), '.']),
         el('li', { text: 'Ask “What am I looking at?” or “Where is the settings button?”' }),
         el('li', { text: 'Let go and listen. Press Esc to stop an answer.' }),
       ]),
-      el('p', { text: 'Clicky lives in the tray (bottom right, near the clock). Click it to come back here.' }),
+      el('p', {
+        text: 'Clicky lives in the tray. If you don’t see it near the clock, click the ^ arrow. Opening Clicky from the Start menu also brings you back here.',
+      }),
     );
     next.textContent = 'Finish';
+    focusTarget = tryBtn;
+    renderTryResult();
   }
+  // Move focus into the new step so keyboard and screen-reader users land in the right place.
+  (focusTarget ?? next).focus();
 }
 
 // ----------------------------------------------------------------- render all
-
-/** True while the user is typing a key: re-rendering the key rows would wipe what they typed. */
-function typingKey(): boolean {
-  const a = document.activeElement;
-  return a instanceof HTMLInputElement && a.type === 'password' && a.value !== '';
-}
 
 function render(): void {
   renderControls(snap.settings);
@@ -694,14 +938,19 @@ function render(): void {
   renderActions();
   if (!typingKey()) renderKeys();
   renderMissing();
+  renderTryResult();
   $('version').textContent = `Version ${snap.appVersion}`;
 }
 
 async function refresh(): Promise<void> {
   snap = await api.get();
   render();
-  // Keep the wizard's key list in sync, but don't rebuild steps with live mic meters.
-  if ((STEPS[step] === 'keys' || STEPS[step] === 'providers') && !typingKey()) renderWizard();
+  // Keep the wizard in sync, but don't rebuild steps with live controls (mic meter, key detection).
+  if (!$('wizard').hidden && STEPS[step] === 'providers') renderWizard();
+  else if (!$('wizard').hidden && STEPS[step] === 'keys') {
+    if (typingKey()) updateWizardNext();
+    else renderWizard();
+  }
 }
 
 async function init(): Promise<void> {
@@ -717,6 +966,7 @@ async function init(): Promise<void> {
     sw.addEventListener('click', () => void save({ cursorColor: c }));
     swatches.append(sw);
   }
+  labelControls();
 
   for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item')) {
     b.addEventListener('click', () => showPage(b.dataset['page'] ?? 'home'));
@@ -747,8 +997,9 @@ async function init(): Promise<void> {
     e.preventDefault();
     const input = $<HTMLInputElement>('ask-input');
     const q = input.value.trim();
-    if (!q) return;
+    if (!q || isBusy() || snap.missing.length) return;
     input.value = '';
+    $<HTMLButtonElement>('ask-btn').disabled = true;
     void api.ask(q);
   });
 
@@ -761,21 +1012,28 @@ async function init(): Promise<void> {
     toast('History cleared');
   });
 
+  let savingAction = false;
   $('action-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const id = $<HTMLInputElement>('action-id').value;
-    const r = await api.saveAction({
-      ...(id ? { id } : {}),
-      name: $<HTMLInputElement>('action-name').value,
-      question: $<HTMLInputElement>('action-question').value,
-    });
-    if (!r.ok) {
-      $('action-error').textContent = r.reason;
-      $('action-error').hidden = false;
-      return;
+    if (savingAction) return;
+    savingAction = true;
+    try {
+      const id = $<HTMLInputElement>('action-id').value;
+      const r = await api.saveAction({
+        ...(id ? { id } : {}),
+        name: $<HTMLInputElement>('action-name').value,
+        question: $<HTMLInputElement>('action-question').value,
+      });
+      if (!r.ok) {
+        $('action-error').textContent = r.reason;
+        $('action-error').hidden = false;
+        return;
+      }
+      resetActionForm();
+      toast(id ? 'Action updated' : 'Action saved');
+    } finally {
+      savingAction = false;
     }
-    resetActionForm();
-    toast(id ? 'Action updated' : 'Action saved');
   });
   $('action-cancel').addEventListener('click', resetActionForm);
 
@@ -786,6 +1044,7 @@ async function init(): Promise<void> {
   });
   $('voice-test').addEventListener('click', async () => {
     const b = $<HTMLButtonElement>('voice-test');
+    if (b.disabled) return;
     const d = $('voice-test-desc');
     b.disabled = true;
     d.className = 'desc';
@@ -796,8 +1055,20 @@ async function init(): Promise<void> {
     b.disabled = false;
   });
   $('rerun-setup').addEventListener('click', () => openWizard());
+  $('copy-diagnostics').addEventListener('click', async () => {
+    const text = await api.diagnostics();
+    await navigator.clipboard.writeText(text);
+    toast('Diagnostics copied');
+  });
+  $('open-logs').addEventListener('click', () => void api.openLogs());
+  $('last-error-dismiss').addEventListener('click', () => {
+    dismissedErrorId = snap.history[0]?.id ?? null;
+    renderHome();
+  });
 
   $('wizard-next').addEventListener('click', async () => {
+    const next = $<HTMLButtonElement>('wizard-next');
+    if (next.disabled) return;
     if (STEPS[step] === 'mic') await stopMicTest();
     if (step >= STEPS.length - 1) return void closeWizard();
     step++;
@@ -810,7 +1081,24 @@ async function init(): Promise<void> {
   });
   $('wizard-skip').addEventListener('click', () => void closeWizard());
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('wizard').hidden && snap.settings.onboardingDone) void closeWizard();
+    if ($('wizard').hidden) return;
+    if (e.key === 'Escape' && snap.settings.onboardingDone) void closeWizard();
+    // Keep Tab inside the wizard.
+    if (e.key === 'Tab') {
+      const focusables = [
+        ...$('wizard').querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select'),
+      ].filter((x) => x.offsetParent !== null);
+      const first = focusables[0];
+      const last = focusables.at(-1);
+      if (!first || !last) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   });
 
   api.onChanged((page) => {
@@ -824,7 +1112,7 @@ async function init(): Promise<void> {
   const page = new URLSearchParams(location.search).get('page');
   if (page) showPage(page);
   if (!snap.settings.onboardingDone) openWizard();
-  else if (snap.missing.length) showPage('keys');
+  else if (snap.missing.length && !page) showPage('keys');
   // Relative times ("2 min ago") stay fresh.
   window.setInterval(() => {
     if (currentPage === 'home') renderHome();

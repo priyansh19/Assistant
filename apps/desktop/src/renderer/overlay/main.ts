@@ -296,17 +296,16 @@ function frame(now: number): void {
     drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1);
     if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
   }
-  if (message && pos) {
-    if (now > message.until) message = null;
-    else drawBubble(message.text, pos, message.kind);
-  }
+  if (message && now > message.until) message = null;
+  if (message && pos) drawBubble(message.text, pos, message.kind);
 
   // Stop the loop when nothing is moving; the last frame stays on the canvas until the next input.
   const resting = state === 'idle' || state === 'cancelled' || state === 'error';
   const settled =
     mode.kind === 'follow' &&
     (!visible || (pos !== null && target !== null && Math.hypot(target.x - pos.x, target.y - pos.y) < 0.3));
-  if (!settled || !resting || message !== null) requestAnimationFrame(frame);
+  // A message only keeps the loop alive while it's visible here (the cursor may be on another display).
+  if (!settled || !resting || (message !== null && pos !== null)) requestAnimationFrame(frame);
   else running = false;
 }
 

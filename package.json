@@ -17,7 +17,8 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "dist": "pnpm --filter @clicky/desktop dist"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

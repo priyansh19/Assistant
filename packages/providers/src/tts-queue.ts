@@ -26,6 +26,15 @@ export function sentenceQueueSession(
     wake = null;
     w?.();
   };
+  // A cancelled interaction must end the audio loop even when no synthesis is in flight.
+  signal.addEventListener(
+    'abort',
+    () => {
+      closed = true;
+      notify();
+    },
+    { once: true },
+  );
 
   const run = (job: Job): void => {
     job.started = true;

@@ -122,6 +122,16 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 
 **Benchmark:** `pnpm bench` replays a fixed set of recorded questions and screenshots through the real providers and reports p50/p95 per stage. In Phase 0 we also measure the original's pipeline shape (full response, then TTS) with the same providers, so "faster than official" is a number. A PR that makes the headline p50 more than 10% worse needs a stated reason.
 
+### 3.4 Decisions made while building Phase 2 (2026-10-11)
+
+- **Warm microphone (default on).** Opening a Windows audio device takes 0.5–1 s, which cut off the start of every question. The worker keeps the device open between presses and forwards frames only while the key is held, plus a ~200 ms pre-roll. Measured key-down → recording: ~1 s cold, under 10 ms warm. It can be turned off in General > Microphone; `docs/privacy.md` explains the trade-off.
+- **Capture sources are cached.** `desktopCapturer.getSources` blocks the main process for ~200–300 ms on Windows; calling it at key-down delayed the microphone by the same amount. Sources are fetched at startup and on display changes only.
+- **Deviation (TTS transport):** ElevenLabs and OpenAI voices use one streaming HTTP request per sentence (raw PCM) instead of the ElevenLabs WebSocket input-streaming API. First audio still arrives after the first sentence, and the code is simpler to make robust. Revisit with `pnpm bench` once real keys are available.
+- **Default answer model:** `claude-opus-5-5` with `effort: low` and server-side refusal fallbacks. The model field in AI and voice accepts any model id (e.g. `claude-haiku-5-5`); pick by measured time-to-first-token once `pnpm bench` exists.
+- **Typed questions and saved actions** reuse the same answer path without the microphone, which also makes the loop testable without speaking.
+- **History is text only** (question, answer, pointed-at label, timing) and opt-out; it feeds follow-up context and saved actions.
+- **`CLICKY_DEMO=1`** swaps in offline providers so the full loop (mic, capture, overlay flight, voice, history) can be smoke-tested on the laptop without keys.
+
 ## 4. Phases
 
 Every phase ends with something runnable on the Windows laptop and a short demo checklist in its PR.

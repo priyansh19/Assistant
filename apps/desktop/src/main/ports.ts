@@ -52,6 +52,7 @@ class SourceCache {
       .then((s) => {
         this.sources = s;
       })
+      .catch(() => undefined)
       .finally(() => {
         this.pending = null;
       });
@@ -93,8 +94,9 @@ export function createCapturePort(
   settings: () => { captureMaxEdge: number; captureAllDisplays: boolean },
 ): CapturePort {
   const cache = new SourceCache();
-  // The displays and sources chosen at key-down are reused at key-up, so the frame matches.
-  let planned: Promise<{ displays: Display[]; sources: CaptureSource[] }> | null = null;
+  // The displays and sources chosen at key-down are reused at key-up, so the frame matches. The
+  // plan belongs to one interaction: a cancelled press must not leak it into the next question.
+  let planned: { signal: AbortSignal; plan: Promise<{ displays: Display[]; sources: CaptureSource[] }> } | null = null;
   const plan = (): Promise<{ displays: Display[]; sources: CaptureSource[] }> => {
     const displays = targetDisplays(settings().captureAllDisplays);
     return cache.get(displays).then((sources) => ({ displays, sources }));
@@ -102,15 +104,23 @@ export function createCapturePort(
   return {
     begin(signal) {
       const p = plan();
-      planned = p;
+      planned = { signal, plan: p };
       p.then((pl) => {
         if (!signal.aborted) worker.send({ op: 'capture.begin', sources: pl.sources });
       }).catch(() => undefined);
-      signal.addEventListener('abort', () => worker.send({ op: 'capture.stop' }), { once: true });
+      signal.addEventListener(
+        'abort',
+        () => {
+          if (planned?.signal === signal) planned = null;
+          worker.send({ op: 'capture.stop' });
+        },
+        { once: true },
+      );
     },
     async take(signal): Promise<ScreenCapture> {
-      const pl = await (planned ?? plan());
+      const mine = planned?.signal === signal ? planned.plan : null;
       planned = null;
+      const pl = await (mine ?? plan());
       if (signal.aborted) throw new Error('aborted');
       const frames = await worker
         .request<CapturedFrame[]>(
@@ -137,18 +147,22 @@ export function createCapturePort(
 export function createMicPort(worker: WorkerHost, deviceId: () => string, onLevel: (level: number) => void): MicPort {
   let off: (() => void) | null = null;
   return {
-    async start(onFrame, signal) {
+    async start(onFrame, signal, onError) {
       off?.();
       off = worker.on((e: WorkerEvent) => {
         if (signal.aborted) return;
         if (e.type === 'mic.frame') onFrame(e.frame);
         else if (e.type === 'mic.level') onLevel(e.level);
+        else if (e.type === 'mic.error') onError?.(new Error(e.message));
+        else if (e.type === 'worker.crashed') onError?.(new Error('The audio worker stopped unexpectedly.'));
       });
       try {
         await worker.request({ op: 'mic.start', deviceId: deviceId() }, 8000);
       } catch (e) {
         off?.();
         off = null;
+        // A start main gave up on must not leave the device emitting.
+        worker.send({ op: 'mic.stop' });
         throw new Error(`Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
       }
     },
@@ -163,43 +177,58 @@ export function createMicPort(worker: WorkerHost, deviceId: () => string, onLeve
 
 let streamSeq = 0;
 
+type Outcome = { ok: true } | { ok: false; error: Error };
+
 /** Plays streamed PCM through the worker. */
 export function createAudioSink(worker: WorkerHost): AudioSink {
   const streamId = `a${++streamSeq}`;
   let opened = false;
-  let rate = 24000;
   const startFns: Array<() => void> = [];
+  // The outcome is remembered so finish() settles even if the worker reported before it was called.
+  let outcome: Outcome | null = null;
   let finished: { resolve: () => void; reject: (e: Error) => void } | null = null;
-  const off = worker.on((e) => {
+  let off: () => void = () => undefined;
+  const settle = (o: Outcome): void => {
+    if (outcome) return;
+    outcome = o;
+    off();
+    if (!finished) return;
+    if (o.ok) finished.resolve();
+    else finished.reject(o.error);
+  };
+  off = worker.on((e) => {
+    if (e.type === 'worker.crashed') {
+      settle({ ok: false, error: new Error('The audio worker stopped unexpectedly.') });
+      return;
+    }
     if (!('streamId' in e) || e.streamId !== streamId) return;
     if (e.type === 'audio.started') for (const fn of startFns.splice(0)) fn();
-    else if (e.type === 'audio.finished') {
-      off();
-      finished?.resolve();
-    } else if (e.type === 'audio.error') {
-      off();
-      finished?.reject(new Error(e.message));
-    }
+    else if (e.type === 'audio.finished') settle({ ok: true });
+    else if (e.type === 'audio.error') settle({ ok: false, error: new Error(e.message) });
   });
-  const open = (sampleRate: number): void => {
-    if (opened) return;
-    opened = true;
-    rate = sampleRate;
-    worker.send({ op: 'audio.open', streamId, sampleRate: rate });
-  };
   return {
     write(chunk) {
-      const m = /pcm_(\d+)/.exec(chunk.format);
-      open(m ? Number(m[1]) : 24000);
+      if (outcome) return;
+      if (!opened) {
+        opened = true;
+        const m = /pcm_(\d+)/.exec(chunk.format);
+        worker.send({ op: 'audio.open', streamId, sampleRate: m ? Number(m[1]) : 24000 });
+      }
       worker.send({ op: 'audio.chunk', streamId, data: chunk.data });
     },
     finish() {
       if (!opened) {
-        off();
+        settle({ ok: true });
         return Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
         finished = { resolve, reject };
+        const o = outcome as Outcome | null;
+        if (o) {
+          if (o.ok) resolve();
+          else reject(o.error);
+          return;
+        }
         worker.send({ op: 'audio.finish', streamId });
       });
     },
@@ -207,9 +236,8 @@ export function createAudioSink(worker: WorkerHost): AudioSink {
       startFns.push(fn);
     },
     stop() {
-      off();
       worker.send({ op: 'audio.stop', streamId });
-      finished?.resolve();
+      settle({ ok: true });
     },
   };
 }
@@ -223,6 +251,7 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
       let started = false;
       let stopped = false;
       let ended = false;
+      let said = 0;
       let resolveDone!: () => void;
       let rejectDone!: (e: Error) => void;
       const done = new Promise<void>((res, rej) => {
@@ -230,13 +259,19 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
         rejectDone = rej;
       });
       const off = worker.on((e) => {
+        if (e.type === 'worker.crashed') {
+          off();
+          rejectDone(new Error('The audio worker stopped unexpectedly.'));
+          return;
+        }
         if (!('streamId' in e) || e.streamId !== streamId) return;
         if (e.type === 'audio.started' && !started) {
           started = true;
           for (const fn of firstFns.splice(0)) fn();
         } else if (e.type === 'audio.finished') {
           off();
-          resolveDone();
+          if (said > 0 && !started && !stopped) rejectDone(new Error('The Windows voice produced no sound.'));
+          else resolveDone();
         } else if (e.type === 'audio.error') {
           off();
           rejectDone(new Error(e.message));
@@ -252,7 +287,9 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
       signal.addEventListener('abort', stop, { once: true });
       return {
         say(text) {
-          if (!stopped && !ended) worker.send({ op: 'voice.say', streamId, text });
+          if (stopped || ended || !text.trim()) return;
+          said++;
+          worker.send({ op: 'voice.say', streamId, text });
         },
         end() {
           if (ended || stopped) return;

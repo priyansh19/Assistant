@@ -23,12 +23,22 @@ import type { WorkerHost } from './worker-host';
 
 type StateListener = (state: InteractionState) => void;
 
+export interface ControllerHooks {
+  /** Called on key-down before listening starts, e.g. to get the Clicky window out of the shot. */
+  beforeListen?(): void;
+  /** Keys are missing: show the user where to add them. */
+  needKeys?(): void;
+}
+
 /** Owns the orchestrator and the hold key, and connects them to settings, keys and storage. */
 export class Controller {
   readonly orchestrator: Orchestrator;
   private holdKey: HoldKeyHook | null = null;
   private readonly stateListeners = new Set<StateListener>();
   private readonly speechFactory: () => SpeechFactory;
+  /** While set (setup wizard "press your key"), key presses are reported here instead of asking. */
+  private keyTest: ((down: boolean) => void) | null = null;
+  hooks: ControllerHooks = {};
 
   constructor(
     private readonly platform: Platform,
@@ -62,9 +72,12 @@ export class Controller {
       },
       onState: (state) => {
         for (const fn of this.stateListeners) fn(state);
+        // After each answer, get the speech-to-text service ready for the next question.
+        if (state === 'idle' || state === 'cancelled' || state === 'error') this.prewarm();
       },
       log: (m) => log.info(m),
     });
+    this.worker.onRestart = () => this.syncMicArm();
   }
 
   onState(fn: StateListener): () => void {
@@ -79,22 +92,43 @@ export class Controller {
     return requiredCredentials(s).filter((id) => !status[id]);
   }
 
+  /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
+  prewarm(): void {
+    if (DEMO || this.missingKeys().length) return;
+    try {
+      createStt(this.settings.get(), (id) => this.credentials.get(id)).prewarm?.();
+    } catch {
+      // missing config shows up when the user asks
+    }
+  }
+
+  /** Report hold-key presses to the setup wizard instead of starting a question. */
+  setKeyTest(fn: ((down: boolean) => void) | null): void {
+    this.keyTest = fn;
+  }
+
   startHoldKey(): void {
     this.holdKey?.stop();
     const s = this.settings.get();
     this.holdKey = this.platform.createHoldKeyHook(s.holdKey);
     this.holdKey.start({
       onDown: () => {
+        if (this.keyTest) return this.keyTest(true);
         if (this.settings.get().paused) return;
-        const missing = this.missingKeys();
-        if (missing.length) {
-          // Nothing can work yet: say so instead of listening and failing later.
-          this.overlays.message('Clicky needs your API keys first. Click the tray icon to open Clicky.', 'info');
+        if (this.missingKeys().length) {
+          // Nothing can work yet: say so and open the place to fix it, instead of failing later.
+          this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
+          this.hooks.needKeys?.();
           return;
         }
+        // The mic and capture start first; moving windows can wait a millisecond.
         this.orchestrator.keyDown();
+        this.hooks.beforeListen?.();
       },
-      onUp: () => this.orchestrator.keyUp(),
+      onUp: () => {
+        if (this.keyTest) return this.keyTest(false);
+        this.orchestrator.keyUp();
+      },
       onCancel: () => this.orchestrator.cancel('escape'),
     });
   }
@@ -115,9 +149,9 @@ export class Controller {
   }
 
   async ask(question: string, source: 'typed' | 'action'): Promise<void> {
-    const missing = this.missingKeys();
-    if (missing.length) {
-      this.overlays.message('Clicky needs your API keys first. Open Clicky from the tray to add them.', 'info');
+    if (this.missingKeys().length) {
+      this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
+      this.hooks.needKeys?.();
       return;
     }
     await this.orchestrator.ask(question, source);
@@ -128,14 +162,15 @@ export class Controller {
     const key = HOLD_KEY_LABELS[this.settings.get().holdKey];
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 20000);
+    const out = this.speechFactory().create(ac.signal);
     try {
-      const out = this.speechFactory().create(ac.signal);
       out.say(`Hi, I'm Clicky. Hold ${key}, ask me about anything on your screen, and let go.`);
       out.end();
       await out.done;
-      if (ac.signal.aborted) throw new Error('The voice took too long to respond.');
+      if (ac.signal.aborted) throw new Error('The voice took too long to respond. Check your internet connection.');
     } finally {
       clearTimeout(timer);
+      out.stop();
     }
   }
 

@@ -38,7 +38,7 @@ export interface CapturePort {
 
 export interface MicPort {
   /** Start the microphone; frames are 16 kHz mono PCM16. Resolves once recording has started. */
-  start(onFrame: (frame: Int16Array) => void, signal: AbortSignal): Promise<void>;
+  start(onFrame: (frame: Int16Array) => void, signal: AbortSignal, onError?: (e: Error) => void): Promise<void>;
   stop(): void;
 }
 
@@ -87,6 +87,12 @@ const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, an
 /** Upper bound on playing one answer, so a stuck audio device can't hang the loop. */
 const SPEAKING_TIMEOUT_MS = 120_000;
 
+/** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
+export const MIC_TAIL_MS = 80;
+
+/** A key held longer than this is treated as a missed key-up (e.g. Windows switched desktops). */
+export const MAX_LISTEN_MS = 60_000;
+
 /** Hold shorter than this is treated as an accidental tap. */
 export const MIN_HOLD_MS = 250;
 
@@ -128,6 +134,8 @@ export function describeError(e: unknown): string {
       : /\b5\d\d\b/.test(msg)
         ? 'server'
         : '';
+  if (/credit|quota|billing|insufficient|\b402\b/i.test(msg))
+    return 'An AI account is out of credit. Add billing with the provider, then try again.';
   if (status === 'auth') return 'An API key was rejected. Check your keys in Settings.';
   if (status === 'rate') return 'The AI service is rate limiting requests. Wait a moment and try again.';
   if (status === 'server') return 'The AI service had a problem. Please try again.';
@@ -150,6 +158,7 @@ interface Run {
   speech: SpeechOutput | null;
   keyDownAt: number;
   finished: boolean;
+  listenTimer?: ReturnType<typeof setTimeout>;
 }
 
 export class Orchestrator {
@@ -199,16 +208,29 @@ export class Orchestrator {
     };
     this.run = run;
     const { signal } = interaction;
+    run.listenTimer = setTimeout(() => {
+      if (this.run === run && this.machine.state === 'listening') {
+        this.deps.overlay.message('Stopped listening: the key was held for over a minute.', 'info');
+        this.cancel('key held too long');
+      }
+    }, MAX_LISTEN_MS);
 
     // Everything here runs in parallel while the user is still talking. The mic goes first: every
     // millisecond before it starts is speech lost.
     let ready: SttSession | null = null;
     this.deps.mic
-      .start((frame) => {
-        if (signal.aborted) return;
-        if (ready) ready.pushAudio(frame);
-        else run.micFrames.push(frame);
-      }, signal)
+      .start(
+        (frame) => {
+          if (signal.aborted) return;
+          if (ready) ready.pushAudio(frame);
+          else run.micFrames.push(frame);
+        },
+        signal,
+        (e) => {
+          if (!signal.aborted && (this.machine.state === 'listening' || this.machine.state === 'transcribing'))
+            this.fail(run, e);
+        },
+      )
       .then(
         () => latency.mark('recordingStarted'),
         (e: unknown) => {
@@ -251,15 +273,16 @@ export class Orchestrator {
   keyUp(): void {
     const run = this.run;
     if (!run || this.machine.state !== 'listening') return;
+    clearTimeout(run.listenTimer);
     const held = this.now() - run.keyDownAt;
-    this.deps.mic.stop();
     if (held < MIN_HOLD_MS) {
+      this.deps.mic.stop();
       this.machine.dispatch({ type: 'cancel', reason: 'key tapped, not held' });
       return;
     }
     run.latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
-    void this.afterKeyUp(run);
+    void this.afterKeyUp(run).catch((e: unknown) => this.fail(run, e));
   }
 
   /** Esc, or the user asked to stop. */
@@ -302,6 +325,10 @@ export class Orchestrator {
     const { signal } = run.interaction;
     const screens = this.deps.capture.take(signal);
     screens.catch(() => undefined); // handled in answer()
+    // Let the last few frames through before stopping the mic and finalising the transcript.
+    await new Promise((r) => setTimeout(r, MIC_TAIL_MS));
+    if (this.run === run) this.deps.mic.stop();
+    if (signal.aborted) return;
     let transcript: string;
     try {
       if (!run.sttSession) throw new Error('speech-to-text did not start');
@@ -317,6 +344,16 @@ export class Orchestrator {
   }
 
   private async answer(run: Run, screensP: Promise<ScreenCapture>, question: string): Promise<void> {
+    try {
+      await this.answerInner(run, screensP, question);
+    } catch (e) {
+      // Anything unexpected must end in a visible error, never a stuck "thinking".
+      run.speech?.stop();
+      if (!run.interaction.signal.aborted) this.fail(run, e);
+    }
+  }
+
+  private async answerInner(run: Run, screensP: Promise<ScreenCapture>, question: string): Promise<void> {
     const { signal } = run.interaction;
     if (signal.aborted) return;
     run.latency.mark('transcriptFinal');
@@ -360,6 +397,10 @@ export class Orchestrator {
 
     const speech = speechFactory.create(signal);
     run.speech = speech;
+    // A voice failure on the first sentence should surface now, not after the whole answer streams.
+    speech.done.catch((e: unknown) => {
+      if (!signal.aborted && !run.finished) this.fail(run, e);
+    });
     speech.onFirstAudio(() => {
       if (signal.aborted) return;
       run.latency.mark('firstAudio');
@@ -466,6 +507,7 @@ export class Orchestrator {
   private teardown(interactionId: string): void {
     const run = this.run;
     if (!run || run.interaction.id !== interactionId) return;
+    clearTimeout(run.listenTimer);
     this.deps.mic.stop();
     run.speech?.stop();
     void run.sttSession?.then(
