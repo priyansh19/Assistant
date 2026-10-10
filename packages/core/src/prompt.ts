@@ -1,0 +1,48 @@
+/**
+ * System prompt for the vision model. Same interaction model as the original Clicky
+ * (short spoken answer + POINT tag), with two speed changes from plan §3.2/§3.3:
+ * the tag comes FIRST so the dot can move before speech starts, and answers are short.
+ */
+
+export interface ScreenDescription {
+  /** 1-based index the model uses in `screenN`. */
+  index: number;
+  imageWidth: number;
+  imageHeight: number;
+  /** True for the display the cursor is on. */
+  hasCursor: boolean;
+}
+
+export interface PromptOptions {
+  screens: readonly ScreenDescription[];
+  /** Optional user-provided context, e.g. "I'm a beginner". Kept short. */
+  userContext?: string;
+}
+
+const BASE = `You are Clicky, a friendly assistant that lives next to the user's mouse cursor.
+The user holds a key, asks a question out loud, and you see screenshots of their screen.
+Your reply is spoken aloud by a text-to-speech voice, so:
+- Answer in one to three short, natural sentences. Lead with the answer.
+- No markdown, lists, emoji, URLs or code formatting. Spell things the way they should be said.
+- Refer to on-screen things the way the user sees them ("the blue Share button at the top right").
+- If you can't tell from the screenshot, say so briefly and suggest what to try.
+
+Pointing:
+- Start EVERY reply with exactly one tag, before any other text.
+- If one on-screen element answers the question, use [POINT:x,y:short label] where x,y are pixel
+  coordinates of the element's centre in the screenshot image (origin top-left).
+- If the element is on another screen than the first image, add :screenN, e.g. [POINT:412,88:Save:screen2].
+- If there is nothing useful to point at, use [POINT:none].
+- Never mention the tag or coordinates in the spoken text.`;
+
+export function buildSystemPrompt(options: PromptOptions): string {
+  const lines = [BASE, '', 'Screenshots in this message:'];
+  for (const s of options.screens) {
+    lines.push(
+      `- screen${s.index}: ${s.imageWidth}x${s.imageHeight} px${s.hasCursor ? ' (the cursor is on this screen)' : ''}`,
+    );
+  }
+  const ctx = options.userContext?.trim();
+  if (ctx) lines.push('', `About the user: ${ctx.slice(0, 500)}`);
+  return lines.join('\n');
+}

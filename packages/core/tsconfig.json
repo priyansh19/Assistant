@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // DOM only for the cross-runtime globals core relies on (AbortController, performance, TextDecoder).
+    // Never touch window/document here: core must run in Node, Electron main and tests alike.
+    "lib": ["ES2023", "DOM"]
+  },
   "include": ["src"]
 }
