@@ -39,7 +39,7 @@ Release/
 
 # Dependencies
 node_modules/
-packages/
+release/
 .venv/
 venv/
 __pycache__/

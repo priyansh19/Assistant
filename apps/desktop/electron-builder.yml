@@ -1,0 +1,15 @@
+appId: dev.clicky.desktop
+productName: Clicky
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**
+  - resources/**
+  - package.json
+asarUnpack:
+  - '**/*.node'
+win:
+  target: nsis
+  icon: resources/tray.png
+  signAndEditExecutable: false
