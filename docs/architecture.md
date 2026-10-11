@@ -123,24 +123,32 @@ On key-down, in parallel: start streaming mic frames (warm mic, pre-roll already
 
 AssemblyAI streams partial transcripts while the user talks. At key-up the latest partial is usually the final text. The `TranscriptGate` starts the LLM request on the partial immediately, sends ForceEndpoint in parallel, and compares when the final arrives. If the final only differs by punctuation or casing, the speculative request continues. If it differs in words, the request is aborted and restarted with the final text, which costs no more time than today. Audio from a speculative answer is held (not played) until the final transcript confirms it, so the user never hears an answer to the wrong question.
 
+As built: there is no separate `TranscriptGate` or machine sub-state. At key-up the orchestrator starts `runAnswer` on the interim transcript with a `confirm` promise and its own abort signal (`pipeline/speculation.ts`). The request goes out and its stream is pulled once, then the runner waits; trace marks go into a `HeldTrace` and are written to the real trace, with their original times, only on a hit. Comparison ignores case and punctuation. A guess is only made when the interim transcript has at least three words and hasn't changed for 250 ms before key-up (the user had stopped talking), since otherwise the final text almost always adds words.
+
 ### 6.4 Image sent ahead
 
 The screenshot is ready at key-down, long before the question. Two options, chosen per provider:
 
-- **Anthropic prompt-cache warm-up:** while the user is still talking, send the system prompt and image with a cache breakpoint and `max_tokens: 1`. The real request at key-up hits the cache, so the model only processes the question text, which cuts time to first token. It costs one extra small request per question, so it's a setting (on by default for voice).
+- **Anthropic prompt-cache warm-up:** while the user is still talking, send the system prompt and image with a cache breakpoint and `max_tokens: 0` (prefill only, no output). The real request at key-up hits the cache, so the model only processes the question text, which cuts time to first token. It costs one extra small request per question, so it's a setting (on by default for voice).
 - **Other providers:** keep the pre-encoded image and request body ready so key-up only appends the question.
+
+As built: the cache only hits if the warm-up and the question share a byte-identical prefix, so with warm-up on the screenshot is taken 300 ms after key-down (after the tap threshold, so a tap sends nothing, and after the Clicky window has moved away) and the answer reuses that same screenshot instead of taking a new one at key-up. The context turns are fixed at key-down for the same reason. The breakpoint goes on the last image; the question follows it. Without warm-up no image is marked cacheable, so ordinary questions don't pay the cache-write price. The newest Claude models cache prefixes of 512 tokens or more; one 1280 px screenshot is well above that.
 
 ### 6.5 Eager first chunk
 
-The chunker releases the first speakable clause (a comma, colon or about eight words) instead of waiting for a full sentence, then reverts to sentence chunks for natural prosody. The POINT-first prompt and parser stay as they are.
+The chunker releases the first speakable clause (a comma, colon or about eight words) instead of waiting for a full sentence, then reverts to sentence chunks for natural prosody. The POINT-first prompt and parser stay as they are. As built: a clause break counts once the chunk has three words ("So," alone is too clipped); with no break the chunk ends after eight words. A sentence end that comes first still wins.
 
 ### 6.6 Persistent TTS stream
 
 Replace one HTTP request per sentence with one streaming socket per interaction (ElevenLabs input streaming with a Flash model), opened at key-down. Text chunks go in as they arrive and audio comes back continuously. This reverses the Phase 2 deviation in plan §3.4, now that the pipeline makes it simpler to make robust. The per-sentence HTTP path stays as the fallback adapter.
 
+As built: `ElevenLabsTts.prewarm` (called at key-down) opens `stream-input` with `auto_mode=true` and sends the key in the first message, never in the URL. `start` takes that socket if it's still open, or opens one, or falls back to HTTP if the socket won't open. Each chunk is sent with `flush: true` because it is already a whole clause or sentence. A policy close (1008) is reported as a key problem.
+
 ### 6.7 Hedged fallback
 
-If the cloud voice hasn't produced audio within a budget (for example 700 ms after the first chunk was sent), the OS voice starts speaking the same text, and whichever starts first wins. The user is never left in silence (plan §3.3 point 9).
+If the cloud voice hasn't produced audio within a budget (for example 700 ms after the first chunk was sent), the OS voice starts speaking the same text, and whichever starts first wins.
+
+As built (`hedgedSpeech` in core): the budget is 1200 ms after the first chunk, so a normal cloud voice never trips it. Rather than racing both voices, the cloud voice is stopped and everything said so far is replayed into the Windows voice; once the cloud voice has started it is never switched, so no sentence is heard twice. A failure before first audio also switches. The trace records `voiceFallback`. The user is never left in silence (plan §3.3 point 9).
 
 ## 7. State management
 
@@ -179,7 +187,7 @@ Each step is one PR, keeps the app working, and is measured with the trace from 
 1. **Trace and typed errors** (landed). Event log, `StageError`, provider error classifiers, latency table in the dashboard. No behaviour change; this produces the real "before" numbers.
 2. **Pipeline stages** (landed). Split the orchestrator into stages and a runner in `core`, with the existing behaviour and tests carried over. Still in main.
 3. **Engine process and direct ports** (landed; needs the laptop check). Move the runner, providers and hold-key hook into a `utilityProcess`; wire media and overlay ports. Needs laptop verification of the hook.
-4. **Speed features.** Persistent TTS socket, eager first clause, image cache warm-up, speculative answer start, hedged fallback. Each behind a setting so its effect shows up in the trace on its own.
+4. **Speed features** (landed; needs the laptop check with real keys). Persistent TTS socket, eager first clause, image cache warm-up, speculative answer start, hedged fallback. Each is a setting under AI and voice > Speed (all on by default), so its effect shows up in the trace on its own. How each was built is noted under 6.3 to 6.7.
 
 ## 10. Working alongside Phase 2 fixes
 

@@ -1,6 +1,7 @@
 import {
   cloudSpeech,
   contextTurns,
+  hedgedSpeech,
   isResting,
   Orchestrator,
   type CredentialId,
@@ -77,6 +78,14 @@ export class Engine {
         if (isResting(state)) this.prewarm();
       },
       log: (message) => this.post({ type: 'log', level: 'info', message }),
+      speed: () => {
+        const s = settings();
+        return {
+          eagerFirstClause: s.eagerFirstClause,
+          speculate: s.speculativeAnswer,
+          warmCache: s.warmImageCache,
+        };
+      },
       ...(opts.now ? { now: opts.now } : {}),
     });
   }
@@ -127,7 +136,14 @@ export class Engine {
   private speech(): SpeechFactory {
     if (this.providers.speech) return this.providers.speech;
     const tts = this.providers.tts === undefined ? (this.providers.tts = this.createTts()) : this.providers.tts;
-    const factory = tts ? cloudSpeech(tts, () => createAudioSink(this.opts.media)) : systemSpeech(this.opts.media);
+    const system = systemSpeech(this.opts.media);
+    let factory = system;
+    if (tts) {
+      factory = cloudSpeech(tts, () => createAudioSink(this.opts.media));
+      // An online voice that stalls falls back to the Windows voice for that answer.
+      if (this.cfg().settings.backupVoice && this.cfg().settings.ttsProvider !== 'local')
+        factory = hedgedSpeech(factory, system);
+    }
     this.providers.speech = factory;
     return factory;
   }

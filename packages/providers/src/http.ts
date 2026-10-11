@@ -89,6 +89,15 @@ export function toBase64(data: Uint8Array): string {
   return btoa(s);
 }
 
+export function fromBase64(b64: string): Uint8Array {
+  const B = (globalThis as { Buffer?: { from(d: string, enc: string): Uint8Array } }).Buffer;
+  if (B) return new Uint8Array(B.from(b64, 'base64'));
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
 /** Fire a cheap request so DNS + TLS are warm before the real one. Errors are ignored. */
 export function prewarmOrigin(fetchImpl: FetchLike, url: string, signal: AbortSignal): Promise<void> {
   return fetchImpl(url, { method: 'HEAD', signal })

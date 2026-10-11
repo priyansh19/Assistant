@@ -217,6 +217,64 @@ describe('AnthropicChat', () => {
     expect(err).toMatchObject({ provider: 'anthropic', status: 401 });
     expect(describeError(err, 'answer')).toMatch(/^Your Anthropic key was rejected/);
   });
+
+  it('warms the cache with the same prefix the cached question then sends', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      bodies.push(b);
+      if (b['stream'])
+        return new Response(streamOf(body('end_turn', ['Hi.'])), { headers: { 'content-type': 'text/event-stream' } });
+      return new Response(
+        JSON.stringify({
+          ...msgStart.message,
+          stop_reason: 'max_tokens',
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    };
+    const chat = new AnthropicChat({ apiKey: 'k', fetch: fetchImpl });
+    const history = [{ role: 'user' as const, text: 'earlier' }];
+    await chat.warmCache({ system: 'sys', history, images: [image, image], signal: signal() });
+    await collect(
+      chat.stream({
+        system: 'sys',
+        history,
+        question: 'q',
+        images: [image, image],
+        maxTokens: 10,
+        signal: signal(),
+        cache: true,
+      }),
+    );
+    const [warm, real] = bodies as [Record<string, unknown>, Record<string, unknown>];
+    expect(warm['max_tokens']).toBe(0);
+    expect(warm['stream']).toBeFalsy();
+    expect(warm['output_config']).toEqual(real['output_config']);
+    expect(warm['system']).toEqual(real['system']);
+    type Msg = { content: string | Array<Record<string, unknown>> };
+    const lastUser = (b: Record<string, unknown>) =>
+      (b['messages'] as Msg[]).at(-1)?.content as Array<Record<string, unknown>>;
+    // Everything up to and including the last image matches byte for byte.
+    expect(lastUser(warm).slice(0, 2)).toEqual(lastUser(real).slice(0, 2));
+    expect(lastUser(real)[1]?.['cache_control']).toEqual({ type: 'ephemeral' });
+    expect(lastUser(real)[0]?.['cache_control']).toBeUndefined();
+    expect((warm['messages'] as Msg[]).slice(0, -1)).toEqual((real['messages'] as Msg[]).slice(0, -1));
+  });
+
+  it('marks no image cacheable on an ordinary question', async () => {
+    let req: Record<string, unknown> = {};
+    const fetchImpl: FetchLike = async (_url, init) => {
+      req = JSON.parse(String(init?.body));
+      return new Response(streamOf(body('end_turn', ['Hi.'])), { headers: { 'content-type': 'text/event-stream' } });
+    };
+    const chat = new AnthropicChat({ apiKey: 'k', fetch: fetchImpl });
+    await collect(
+      chat.stream({ system: 's', history: [], question: 'q', images: [image], maxTokens: 10, signal: signal() }),
+    );
+    expect(JSON.stringify(req['messages'])).not.toContain('cache_control');
+  });
 });
 
 class FakeWS implements WebSocketLike {
@@ -323,13 +381,113 @@ describe('ElevenLabsTts', () => {
       urls.push(url);
       return new Response(streamOf([new Uint8Array([1, 2, 3, 4])]));
     };
-    const tts = new ElevenLabsTts({ apiKey: 'k', fetch: fetchImpl });
+    const tts = new ElevenLabsTts({ apiKey: 'k', fetch: fetchImpl, streaming: false });
     const s = await tts.start({ signal: signal() });
     s.pushText('Hello.');
     s.end();
     const chunks = await collect(s.audio());
     expect(chunks[0]?.format).toBe('pcm_24000');
     expect(urls[0]).toContain('output_format=pcm_24000');
+  });
+
+  /** ElevenLabs' input stream: audio for each flushed chunk, isFinal after the empty end message. */
+  class FakeElevenWS implements WebSocketLike {
+    static all: FakeElevenWS[] = [];
+    static failOpen = false;
+    static closeWith: { code: number; reason: string } | null = null;
+    readyState = 0;
+    binaryType = 'blob';
+    sent: Array<Record<string, unknown>> = [];
+    onopen: ((ev: unknown) => void) | null = null;
+    onmessage: ((ev: { data: unknown }) => void) | null = null;
+    onerror: ((ev: unknown) => void) | null = null;
+    onclose: ((ev: { code?: number; reason?: string }) => void) | null = null;
+    constructor(readonly url: string) {
+      FakeElevenWS.all.push(this);
+      setTimeout(() => {
+        if (FakeElevenWS.failOpen) {
+          this.onerror?.({});
+          this.onclose?.({ code: 1006 });
+          return;
+        }
+        this.readyState = 1;
+        this.onopen?.({});
+      }, 1);
+    }
+    send(d: string | ArrayBufferLike | ArrayBufferView) {
+      const m = JSON.parse(String(d)) as Record<string, unknown>;
+      this.sent.push(m);
+      const reply = (x: unknown) => setTimeout(() => this.onmessage?.({ data: JSON.stringify(x) }), 1);
+      if (m['flush']) {
+        const close = FakeElevenWS.closeWith;
+        if (close) setTimeout(() => this.onclose?.(close), 1);
+        else reply({ audio: Buffer.from([1, 2]).toString('base64'), isFinal: false });
+      } else if (m['text'] === '') reply({ isFinal: true });
+    }
+    close() {
+      this.readyState = 3;
+    }
+  }
+
+  const reset = () => {
+    FakeElevenWS.all = [];
+    FakeElevenWS.failOpen = false;
+    FakeElevenWS.closeWith = null;
+  };
+
+  it('opens the voice stream at key-down and reuses it for the answer', async () => {
+    reset();
+    const tts = new ElevenLabsTts({ apiKey: 'secret', WebSocket: FakeElevenWS, fetch: async () => new Response('') });
+    const sig = signal();
+    await tts.prewarm(sig);
+    expect(FakeElevenWS.all).toHaveLength(1);
+    const ws = FakeElevenWS.all[0]!;
+    expect(ws.url).toContain('/stream-input?model_id=eleven_flash_v2_5&output_format=pcm_24000');
+    expect(ws.url).not.toContain('secret');
+    expect(ws.sent[0]).toEqual({ text: ' ', xi_api_key: 'secret' });
+    const s = await tts.start({ signal: sig });
+    expect(FakeElevenWS.all).toHaveLength(1);
+    s.pushText('Open the File menu,');
+    s.pushText('then click Export.');
+    s.end();
+    const chunks = await collect(s.audio());
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toEqual({ data: new Uint8Array([1, 2]), format: 'pcm_24000' });
+    expect(ws.sent.slice(1)).toEqual([
+      { text: 'Open the File menu, ', flush: true },
+      { text: 'then click Export. ', flush: true },
+      { text: '' },
+    ]);
+  });
+
+  it('falls back to one HTTP stream per sentence when the socket will not open', async () => {
+    reset();
+    FakeElevenWS.failOpen = true;
+    const urls: string[] = [];
+    const tts = new ElevenLabsTts({
+      apiKey: 'k',
+      WebSocket: FakeElevenWS,
+      fetch: async (url) => {
+        urls.push(url);
+        return new Response(streamOf([new Uint8Array([9, 9])]));
+      },
+    });
+    const s = await tts.start({ signal: signal() });
+    s.pushText('Hello.');
+    s.end();
+    expect(await collect(s.audio())).toHaveLength(1);
+    expect(urls[0]).toContain('/stream?output_format=pcm_24000');
+  });
+
+  it('reports a refused voice stream as a key problem', async () => {
+    reset();
+    FakeElevenWS.closeWith = { code: 1008, reason: 'invalid api key' };
+    const tts = new ElevenLabsTts({ apiKey: 'k', WebSocket: FakeElevenWS });
+    const s = await tts.start({ signal: signal() });
+    s.pushText('Hello.');
+    const err: unknown = await collect(s.audio()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err).toMatchObject({ provider: 'elevenlabs', status: 401 });
   });
 });
 

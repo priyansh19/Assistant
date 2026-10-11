@@ -1,5 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ConfigError, StageError, type VisionChatProvider, type VisionChatRequest } from '@clicky/core';
+import {
+  ConfigError,
+  StageError,
+  type CachePrefix,
+  type VisionChatProvider,
+  type VisionChatRequest,
+} from '@clicky/core';
 import { prewarmOrigin, ProviderError, toBase64, type FetchLike } from './http.js';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5-5';
@@ -38,32 +44,64 @@ export class AnthropicChat implements VisionChatProvider {
     return prewarmOrigin(this.fetchImpl, 'https://api.anthropic.com/', signal);
   }
 
+  /** The prompt up to and including the screenshots; identical for the warm-up and the question. */
+  private prefix(p: CachePrefix, cacheImages: boolean) {
+    const messages: Anthropic.Beta.BetaMessageParam[] = p.history.map((t) => ({ role: t.role, content: t.text }));
+    const images = p.images.map((img, i): Anthropic.Beta.BetaImageBlockParam => ({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: toBase64(img.data) },
+      // Breakpoint on the last screenshot: everything up to here is read from the cache.
+      ...(cacheImages && i === p.images.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+    }));
+    return {
+      model: this.model,
+      // The system prompt is identical across questions, so caching it saves time on every request.
+      system: [{ type: 'text' as const, text: p.system, cache_control: { type: 'ephemeral' as const } }],
+      messages,
+      images,
+      // Short spoken answers: lowest effort keeps time-to-first-token down. Effort is part of the
+      // cached prompt, so the warm-up sends the same value.
+      ...(EFFORT_MODELS.test(this.model) ? { output_config: { effort: 'low' as const } } : {}),
+    };
+  }
+
+  /**
+   * Write the system prompt, context and screenshots to the prompt cache while the user is still
+   * talking. max_tokens 0 runs prefill only: no output, billed as a cache write.
+   */
+  async warmCache(p: CachePrefix): Promise<void> {
+    if (!p.images.length) return;
+    const { images, messages, ...rest } = this.prefix(p, true);
+    try {
+      await this.client.beta.messages.create(
+        {
+          ...rest,
+          max_tokens: 0,
+          // Read during prefill, never answered; it sits after the breakpoint so it isn't cached.
+          messages: [...messages, { role: 'user', content: [...images, { type: 'text', text: 'warmup' }] }],
+        },
+        { signal: p.signal },
+      );
+    } catch (e) {
+      if (e instanceof Anthropic.APIError && typeof e.status === 'number')
+        throw new ProviderError('anthropic', e.status, e.message);
+      throw e;
+    }
+  }
+
   async *stream(req: VisionChatRequest): AsyncIterable<string> {
     if (req.audio)
       throw new ConfigError(
         "Claude can't listen to audio directly. In Clicky > AI and voice, choose a speech-to-text service.",
       );
-    const messages: Anthropic.Beta.BetaMessageParam[] = req.history.map((t) => ({ role: t.role, content: t.text }));
-    messages.push({
-      role: 'user',
-      content: [
-        ...req.images.map((img): Anthropic.Beta.BetaImageBlockParam => ({
-          type: 'image',
-          source: { type: 'base64', media_type: img.mediaType, data: toBase64(img.data) },
-        })),
-        { type: 'text', text: req.question },
-      ],
-    });
+    const { images, messages, ...rest } = this.prefix(req, req.cache ?? false);
+    messages.push({ role: 'user', content: [...images, { type: 'text', text: req.question }] });
     const useFallbacks = FALLBACK_MODELS.test(this.model);
     const stream = this.client.beta.messages.stream(
       {
-        model: this.model,
+        ...rest,
         max_tokens: req.maxTokens,
-        // The system prompt is identical across questions, so caching it saves time on every request.
-        system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
         messages,
-        // Short spoken answers: lowest effort keeps time-to-first-token down.
-        ...(EFFORT_MODELS.test(this.model) ? { output_config: { effort: 'low' as const } } : {}),
         ...(useFallbacks ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
       },
       { signal: req.signal },

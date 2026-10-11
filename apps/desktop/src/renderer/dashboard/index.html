@@ -371,6 +371,58 @@
           </div>
         </div>
         <div class="card list" id="local-models"></div>
+        <h2>Speed</h2>
+        <p class="intro">
+          These make Clicky answer faster and are all on by default. Turn one off to compare: "Where the time goes" on
+          the Home page shows the difference.
+        </p>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Start speaking sooner</div>
+              <div class="desc">Begin with the first phrase instead of waiting for the whole first sentence.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="eagerFirstClause" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Answer as you let go</div>
+              <div class="desc">
+                Send your question the moment you release the key, using what Clicky has heard so far. If the final
+                words differ it asks again, which costs one extra request.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="speculativeAnswer" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Send the screen early</div>
+              <div class="desc">
+                With Claude, upload the screenshot while you are still talking so the answer starts faster. The
+                screenshot is taken just after you press the key. Costs a little more per question.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="warmImageCache" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the voice connected</div>
+              <div class="desc">
+                With ElevenLabs, open one voice connection when you press the key and keep it for the whole answer.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="streamingVoice" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Backup voice</div>
+              <div class="desc">
+                If the online voice has not started after a moment, switch to the Windows voice for that answer.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="backupVoice" /><span></span></label>
+          </div>
+        </div>
       </section>
 
       <!-- API keys -->

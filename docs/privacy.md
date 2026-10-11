@@ -14,8 +14,8 @@ Clicky is a personal tool that calls AI providers directly with your own API key
 |---|---|---|
 | AssemblyAI (speech to text) | Your voice audio (16 kHz mono PCM) while the key is held | Each voice question |
 | OpenAI (speech to text, if chosen) | A WAV of your voice question | Each voice question, after you let go |
-| Anthropic / OpenAI / OpenRouter (answer model) | The screenshot(s) as JPEG (default 1280 px long edge; only the screen your cursor is on unless *Include all displays* is on), your question text, a short system prompt describing the screenshots, and, if *Follow-up questions* is on, the last few questions and answers from the past 10 minutes | Each question |
-| ElevenLabs / OpenAI (voice, if chosen) | The answer text, sentence by sentence | Each answer |
+| Anthropic / OpenAI / OpenRouter (answer model) | The screenshot(s) as JPEG (default 1280 px long edge; only the screen your cursor is on unless *Include all displays* is on), your question text, a short system prompt describing the screenshots, and, if *Follow-up questions* is on, the last few questions and answers from the past 10 minutes | Each question. With *Answer as you let go* on, the question may be sent twice: first as heard so far, then as finally transcribed if the words differ (the first request is cancelled). With *Send the screen early* on (Claude only), the screenshot, system prompt and recent turns are sent about 0.3 s after you press the key, while you are still holding it, and Anthropic keeps them in its prompt cache for a few minutes |
+| ElevenLabs / OpenAI (voice, if chosen) | The answer text, phrase by phrase. With ElevenLabs a voice connection opens when you press the key; your key is sent in its first message, not in the address | Each answer |
 | Windows voice | Nothing leaves the PC | Each answer |
 
 Key checks in the dashboard call each provider's key or model endpoint; they send no screenshots or audio.

@@ -228,6 +228,11 @@ function renderControls(s: Settings): void {
   check('micAlwaysReady', s.micAlwaysReady);
   set('cursorSize', s.cursorSize);
   check('showPointLabels', s.showPointLabels);
+  check('eagerFirstClause', s.eagerFirstClause);
+  check('speculativeAnswer', s.speculativeAnswer);
+  check('warmImageCache', s.warmImageCache);
+  check('streamingVoice', s.streamingVoice);
+  check('backupVoice', s.backupVoice);
   set('chatProvider', s.chatProvider);
   set('chatModel', s.chatModel);
   $<HTMLInputElement>('chatModel').placeholder = snap.defaultModel;
@@ -1146,6 +1151,11 @@ async function init(): Promise<void> {
   bindToggle('micAlwaysReady');
   bindSelect('cursorSize');
   bindToggle('showPointLabels');
+  bindToggle('eagerFirstClause');
+  bindToggle('speculativeAnswer');
+  bindToggle('warmImageCache');
+  bindToggle('streamingVoice');
+  bindToggle('backupVoice');
   bindSelect('chatProvider');
   bindText('chatModel');
   bindSelect('sttProvider');

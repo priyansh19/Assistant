@@ -71,7 +71,11 @@ export function createStt(s: Settings, getKey: KeyLookup): SttProvider {
 export function createTts(s: Settings, getKey: KeyLookup): TtsProvider | null {
   if (s.ttsProvider === 'system' || s.ttsProvider === 'local') return null; // handled by the desktop app
   if (s.ttsProvider === 'elevenlabs') {
-    return new ElevenLabsTts({ apiKey: need(getKey, 'elevenlabs'), ...(s.ttsVoice ? { voiceId: s.ttsVoice } : {}) });
+    return new ElevenLabsTts({
+      apiKey: need(getKey, 'elevenlabs'),
+      ...(s.ttsVoice ? { voiceId: s.ttsVoice } : {}),
+      streaming: s.streamingVoice,
+    });
   }
   return new OpenAITts({ apiKey: need(getKey, 'openai') });
 }
