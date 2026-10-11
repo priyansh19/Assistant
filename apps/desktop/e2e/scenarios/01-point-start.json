@@ -1,0 +1,6 @@
+{
+  "name": "Point: where is the Start button",
+  "key": "talk",
+  "say": "Where is the Start button?",
+  "expect": { "heard": ["start", "button"], "answered": true, "pointed": true }
+}

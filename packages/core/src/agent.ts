@@ -6,6 +6,7 @@
  */
 
 import { fromThousandths, mapPointToDisplay } from './coordinates.js';
+import { splitWake } from './wake.js';
 import { StageError } from './errors.js';
 import { delay, withTimeout } from './pipeline/budget.js';
 import type { CapturePort, InputAction, InputPort, OverlayPort, ScreenCapture } from './ports.js';
@@ -40,16 +41,14 @@ const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|d
  * older "Agent"/"Agents" work too. A question after the name ("Clicky, where is Save?") is still
  * answered normally.
  */
-const TRIGGER =
-  /^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:clickey|clicky|clicki|click\s+y|click\s+here|klicky|klickey|agents?)\b[\s,:.!-]*(.*)$/is;
-
-/** The task when the request starts with the trigger word; null otherwise (including questions). */
+/** The task when the request starts with the name (or the older "Agent"); null otherwise (including questions). */
 export function agentGoal(question: string): string | null {
-  const m = TRIGGER.exec(question);
-  if (!m) return null;
-  const rest = (m[1] ?? '').trim().replace(/[.!]+$/, '');
-  if (rest.length < 3 || QUESTION_START.test(rest)) return null;
-  return rest;
+  const { woke, rest } = splitWake(question);
+  const m = woke ? null : /^\s*agents?\b[\s,:.!-]*(.*)$/is.exec(question);
+  if (!woke && !m) return null;
+  const goal = (woke ? rest : (m?.[1] ?? '')).trim().replace(/[.!]+$/, '');
+  if (goal.length < 3 || QUESTION_START.test(goal)) return null;
+  return goal;
 }
 
 const ACTION_START =
@@ -62,8 +61,8 @@ const ACTION_START =
  */
 export function actionGoal(question: string): string | null {
   const q = question.trim().replace(/[?.!]+$/, '');
-  if (QUESTION_START.test(q.replace(/^(?:hey\s+)?clicky[\s,]+/i, ''))) return null;
-  const goal = ACTION_START.exec(q)?.[1]?.trim() ?? '';
+  if (QUESTION_START.test(splitWake(q).rest)) return null;
+  const goal = ACTION_START.exec(splitWake(q).rest)?.[1]?.trim() ?? '';
   return goal.split(/\s+/).length >= 2 ? goal : null;
 }
 

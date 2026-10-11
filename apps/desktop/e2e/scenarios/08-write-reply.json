@@ -1,0 +1,6 @@
+{
+  "name": "Right Alt write mode (reply)",
+  "key": "dictate",
+  "say": "Write a short thank you note to Sam for the help.",
+  "expect": { "typedAny": true, "notTyped": ["right a short", "right, a short", "thank you, no"], "typed": ["sam"] }
+}

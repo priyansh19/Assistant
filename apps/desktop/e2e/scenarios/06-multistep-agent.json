@@ -1,0 +1,11 @@
+{
+  "name": "Multi-step task (Notepad opens for real; typing recorded)",
+  "key": "talk",
+  "say": "Clicky, open Notepad and type hello world.",
+  "expect": {
+    "heard": ["notepad", "hello"],
+    "actions": [{ "kind": "open" }, { "kind": "type", "text": "hello world" }],
+    "noStartMenu": true
+  },
+  "live": ["open"]
+}

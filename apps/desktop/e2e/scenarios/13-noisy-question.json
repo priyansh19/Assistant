@@ -1,0 +1,7 @@
+{
+  "name": "Noisy audio still understood",
+  "key": "talk",
+  "say": "Where is the Start button?",
+  "noise": 0.04,
+  "expect": { "heard": ["start"], "answered": true }
+}

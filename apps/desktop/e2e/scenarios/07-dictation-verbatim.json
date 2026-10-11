@@ -1,0 +1,6 @@
+{
+  "name": "Right Alt dictation is verbatim",
+  "key": "dictate",
+  "say": "How are you doing today?",
+  "expect": { "typed": ["how are you doing today"], "notTyped": ["I am", "I'm doing"] }
+}

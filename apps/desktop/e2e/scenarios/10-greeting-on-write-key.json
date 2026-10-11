@@ -1,0 +1,1 @@
+{ "name": "Greeting on Right Alt types nothing", "key": "dictate", "say": "Hi Clicky.", "expect": { "noTyping": true } }

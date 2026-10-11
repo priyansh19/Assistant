@@ -1,3 +1,5 @@
+import { splitWake } from './wake.js';
+
 /**
  * Things the user tells Clicky to remember, especially corrections ("Comet is on my taskbar",
  * "remember my Downloads are on D:"). They're saved on the PC and added to every prompt, so a
@@ -33,6 +35,8 @@ export function notesText(notes: readonly string[]): string {
  * the screen or the earlier turns.
  */
 export function bareGreeting(question: string): boolean {
+  const w = splitWake(question);
+  if (w.woke && !/[a-z]{2}/i.test(w.rest.replace(/\b(there|you|are|listening|buddy)\b/gi, ''))) return true;
   const rest = question
     .toLowerCase()
     .replace(/[^a-z\s']/g, ' ')
