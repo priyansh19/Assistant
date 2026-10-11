@@ -28,16 +28,26 @@ export type AgentAction =
   | { type: 'wait'; ms: number; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
 
-/** "hey clicky agent, …", "agent: …", "Agent …" → the task; anything else → null. */
-export function agentGoal(question: string): string | null {
-  const m = /^\s*(?:hey\s+)?(?:clicky[\s,]+)?agent\b[\s,:.!-]*(.*)$/is.exec(question);
-  if (!m) return null;
-  const goal = (m[1] ?? '').trim();
-  return goal.length >= 3 ? goal : null;
-}
-
 /** Asking how or where is a question, even if an action verb follows ("how do I open…"). */
 const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|does|do|did|should|explain|tell me)\b/i;
+/**
+ * The agent-mode trigger is the assistant's name (owner's choice, 2026-10-11): "Clickey, open VS
+ * Code" or "Clicky, can you open Chrome". Speech recognition spellings ("click y", "klicky") and the
+ * older "Agent"/"Agents" work too. A question after the name ("Clicky, where is Save?") is still
+ * answered normally.
+ */
+const TRIGGER =
+  /^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:clickey|clicky|clicki|click\s+y|klicky|klickey|agents?)\b[\s,:.!-]*(.*)$/is;
+
+/** The task when the request starts with the trigger word; null otherwise (including questions). */
+export function agentGoal(question: string): string | null {
+  const m = TRIGGER.exec(question);
+  if (!m) return null;
+  const rest = (m[1] ?? '').trim().replace(/[.!]+$/, '');
+  if (rest.length < 3 || QUESTION_START.test(rest)) return null;
+  return rest;
+}
+
 const ACTION_START =
   /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
 
@@ -319,11 +329,18 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     bad = 0;
     note = '';
     const a = parsed.action;
-    if (a.type === 'done') return { outcome: 'done', summary: a.say, steps };
-    if (a.type === 'fail') return { outcome: 'failed', summary: a.say, steps };
+    if (a.type === 'done') {
+      deps.log?.(`agent done after ${steps.length} steps: ${a.say}`);
+      return { outcome: 'done', summary: a.say, steps };
+    }
+    if (a.type === 'fail') {
+      deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
+      return { outcome: 'failed', summary: a.say, steps };
+    }
     i++;
 
     const say = a.say || describe(a);
+    deps.log?.(`agent step ${i}: ${describe(a)}${a.say ? ` — "${a.say}"` : ''}${a.risky ? ' (risky)' : ''}`);
     deps.onStep?.(say);
     let input: InputAction | null = null;
     if (a.type === 'click' || a.type === 'double_click' || a.type === 'right_click' || a.type === 'scroll') {

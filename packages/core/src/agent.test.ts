@@ -3,13 +3,27 @@ import { actionGoal, agentGoal, parseAgentAction, parseKeys, runAgent, type Agen
 import type { CapturePort, InputAction, OverlayPort, ScreenCapture } from './ports.js';
 import type { VisionChatProvider } from './providers.js';
 
+describe('agentGoal with the "Clickey" trigger', () => {
+  it('runs tasks addressed to Clickey or Clicky, and keeps Agent working', () => {
+    expect(agentGoal('Clickey, can you open the vscode application')).toBe('can you open the vscode application');
+    expect(agentGoal('clicky open chrome')).toBe('open chrome');
+    expect(agentGoal('Click y, open notepad')).toBe('open notepad');
+    expect(agentGoal('agents, open the vscode app')).toBe('open the vscode app');
+  });
+
+  it('answers questions addressed to Clicky normally', () => {
+    expect(agentGoal('Clicky, where is the save button?')).toBeNull();
+    expect(agentGoal('Clickey how do I export this')).toBeNull();
+    expect(agentGoal('Clickey')).toBeNull();
+    expect(agentGoal('Click the save button')).toBeNull();
+  });
+});
+
 describe('agentGoal', () => {
   it('recognises the ways people ask for the agent', () => {
     expect(agentGoal('Agent, open Notepad and type hello')).toBe('open Notepad and type hello');
-    expect(agentGoal('hey clicky agent: rename this file')).toBe('rename this file');
     expect(agentGoal('agent open settings')).toBe('open settings');
     expect(agentGoal('Where is the agent setting?')).toBeNull();
-    expect(agentGoal('agents are cool')).toBeNull();
     expect(agentGoal('agent')).toBeNull();
   });
 });
@@ -153,5 +167,6 @@ describe('actionGoal (asked first, no "Agent" prefix needed)', () => {
     expect(actionGoal('what type of chart is this')).toBeNull();
     expect(actionGoal('open')).toBeNull();
     expect(agentGoal('can you open linkedin')).toBeNull();
+    expect(actionGoal('Click the save button')).toBe('Click the save button');
   });
 });

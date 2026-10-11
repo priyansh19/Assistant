@@ -70,7 +70,7 @@ export interface Settings {
   localSttModel: LocalSttModel;
   /** Local voice as 'engine:voice', e.g. 'kokoro:af_heart' or 'piper:lessac'. */
   localVoice: string;
-  /** Local voice speed, 0.7–1.5. */
+  /** Voice speed, 0.7–2.0 (on-device voices; OpenAI voices too). */
   localVoiceSpeed: number;
   holdKey: HoldKey;
   /** Second hold key for dictation; 'off' disables it. Never the same as holdKey. */
@@ -203,7 +203,7 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
       : base.localVoice,
     localVoiceSpeed:
       typeof o['localVoiceSpeed'] === 'number' && Number.isFinite(o['localVoiceSpeed'])
-        ? Math.min(1.5, Math.max(0.7, o['localVoiceSpeed']))
+        ? Math.min(2, Math.max(0.7, o['localVoiceSpeed']))
         : base.localVoiceSpeed,
     holdKey,
     dictationKey: dictation === holdKey ? 'off' : dictation,

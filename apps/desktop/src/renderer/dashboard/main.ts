@@ -389,7 +389,7 @@ function renderHome(): void {
     title.textContent = 'Ready';
     const tips = [`Hold ${key}, ask about anything on your screen, and let go.`];
     if (s.dictationKey !== 'off') tips.push(`Hold ${HOLD_KEY_LABELS[s.dictationKey]} to dictate into any app.`);
-    if (s.agentEnabled) tips.push('Start with "Agent" to have Clicky do it for you.');
+    if (s.agentEnabled) tips.push('Say "Clickey, …" to have it do the task for you.');
     desc.textContent = tips.join(' ');
   }
 
