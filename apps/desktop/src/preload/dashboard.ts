@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { CredentialId, Settings } from '@clicky/core';
+import type { CredentialId, Playbook, Settings } from '@clicky/core';
 import type {
   ActionSaveResult,
   DashboardSnapshot,
@@ -36,6 +36,9 @@ const api = {
   openLogs: () => invoke<undefined>('dash:open-logs'),
   localDownload: (id: string) => invoke<TestResult>('dash:local-download', id),
   localRemove: (id: string) => invoke<undefined>('dash:local-remove', id),
+  savePlaybook: (p: Omit<Playbook, 'id'> & { id?: string }) => invoke<DashboardSnapshot>('dash:playbook-save', p),
+  removePlaybook: (id: string) => invoke<DashboardSnapshot>('dash:playbook-remove', id),
+  openPlaybooks: () => invoke<undefined>('dash:playbooks-open'),
   onHoldKey(fn: (down: boolean) => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean) => fn(down));

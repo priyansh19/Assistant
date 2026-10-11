@@ -4,6 +4,7 @@ import type { InteractionState, MappedPoint, MappedShape, OverlayPort } from '@c
 import type { Platform } from '../platform';
 import { IPC } from '../shared/ipc';
 import type {
+  OverlayAnchor,
   OverlayConfig,
   OverlayCursor,
   OverlayDrawing,
@@ -88,6 +89,16 @@ export class OverlayManager implements OverlayPort {
     if (!display || !win || win.isDestroyed()) return;
     const p: OverlayPoint = { x: target.local.x, y: target.local.y, label };
     win.webContents.send(IPC.overlayPoint, p);
+  }
+
+  /** Sit the companion beside the text caret (write mode), or go back to following the pointer. */
+  anchor(caret: { displayId: number; x: number; y: number; height: number } | null): void {
+    for (const [id, win] of this.windows) {
+      if (win.isDestroyed()) continue;
+      const a: OverlayAnchor =
+        caret && caret.displayId === id ? { x: caret.x, y: caret.y, height: caret.height } : null;
+      win.webContents.send(IPC.overlayAnchor, a);
+    }
   }
 
   draw(shape: MappedShape): void {

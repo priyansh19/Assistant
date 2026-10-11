@@ -18,6 +18,9 @@ export interface OverlayDrawing {
   label: string;
 }
 
+/** The text caret the companion sits beside while dictating (DIP, relative to this display). */
+export type OverlayAnchor = { x: number; y: number; height: number } | null;
+
 export interface OverlayMessage {
   text: string;
   kind: 'error' | 'info';

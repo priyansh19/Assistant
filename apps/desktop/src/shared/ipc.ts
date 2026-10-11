@@ -2,6 +2,7 @@ import type {
   CredentialId,
   HistoryEntry,
   InteractionState,
+  Playbook,
   SavedAction,
   Settings,
   StageMetric,
@@ -16,6 +17,7 @@ export const IPC = {
   overlayState: 'overlay:state',
   overlayPoint: 'overlay:point',
   overlayDraw: 'overlay:draw',
+  overlayAnchor: 'overlay:anchor',
   overlayMessage: 'overlay:message',
   overlayLevel: 'overlay:level',
   overlayConfig: 'overlay:config',
@@ -43,6 +45,9 @@ export const IPC = {
   dashMicLevel: 'dash:mic-level',
   dashLocalDownload: 'dash:local-download',
   dashLocalRemove: 'dash:local-remove',
+  dashPlaybookSave: 'dash:playbook-save',
+  dashPlaybookRemove: 'dash:playbook-remove',
+  dashPlaybooksOpen: 'dash:playbooks-open',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -72,6 +77,7 @@ export interface DashboardSnapshot {
   /** Last four characters of each saved key, so the user can tell which key is stored. */
   keyHints: Partial<Record<CredentialId, string>>;
   local: LocalSpeechView;
+  playbooks: Playbook[];
 }
 
 export interface LocalModelView {

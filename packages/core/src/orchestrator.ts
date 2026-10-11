@@ -26,6 +26,19 @@ import type { CapturePort, InputPort, MicPort, OverlayPort, ScreenCapture } from
 import type { ChatTurn, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { AgentConfirmMode } from './settings.js';
 import type { SpeechFactory } from './speech.js';
+import {
+  backspaceCount,
+  isTerminal,
+  planDictation,
+  SayTagSplitter,
+  TypingQueue,
+  UNDO_WINDOW_MS,
+  writeQuestion,
+  writeSystemPrompt,
+  type AppInfo,
+  type LastInsert,
+  type WriteContext,
+} from './write.js';
 
 /** How a typed question or action ended, for UI that waits on it. */
 export interface AskResult {
@@ -52,7 +65,8 @@ export interface OrchestratorDeps {
   log?(message: string): void;
   now?(): number;
   maxTokens?: number;
-  userContext?(): string | undefined;
+  /** Profile and playbooks for the prompt, for the app in front when known. */
+  userContext?(app?: AppInfo | null): string | undefined;
   timeouts?: Partial<Timeouts>;
   /** Speed features to use for the next question (architecture §7). All off when absent. */
   speed?(): SpeedOptions;
@@ -64,6 +78,12 @@ export interface OrchestratorDeps {
   agent?(): { enabled: boolean; confirm: AgentConfirmMode };
   /** Ask the user to allow an agent step. */
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
+  /** Write mode: the app in front and any selected text, read at key-up. */
+  writeContext?(signal: AbortSignal): Promise<WriteContext>;
+  /** Write mode: tidy plain dictation with the AI before typing it. */
+  tidyDictation?(): boolean;
+  /** Write mode: the hint shown after an insert, e.g. "Tap Right Alt to undo". */
+  undoHint?(): string;
 }
 
 export interface SpeedOptions {
@@ -118,6 +138,8 @@ interface Speculation {
 interface Run {
   /** 'dictate': the transcript is typed into the focused app; no screenshot, no AI, no history. */
   mode: 'answer' | 'dictate';
+  /** Keep this interaction in history (false for plain dictation). */
+  record: boolean;
   interaction: Interaction;
   latency: LatencyRecorder;
   source: HistoryEntry['source'];
@@ -142,6 +164,8 @@ interface Run {
 export class Orchestrator {
   readonly machine: InteractionMachine;
   private run: Run | null = null;
+  /** The last write-mode insert, for one-tap undo and "shorter"-style rewrites. */
+  private lastInsert: LastInsert | null = null;
   private readonly timeouts: Timeouts;
   private readonly now: () => number;
 
@@ -174,6 +198,7 @@ export class Orchestrator {
     latency.setMeta('source', source);
     const run: Run = {
       mode,
+      record: mode !== 'dictate',
       interaction,
       latency,
       source,
@@ -241,7 +266,6 @@ export class Orchestrator {
       onSttReady: () => run.latency.mark('sttReady'),
       now: this.now,
     });
-    if (dictating) return; // nothing to capture or warm up: the words go straight to the keyboard
     try {
       this.deps.capture.begin(signal);
     } catch (e) {
@@ -256,7 +280,7 @@ export class Orchestrator {
     } catch {
       // Missing config surfaces when the answer starts; don't fail while the user is talking.
     }
-    if (run.speed.warmCache && !run.listen.direct) this.warmCache(run);
+    if (run.speed.warmCache && !run.listen.direct && !dictating) this.warmCache(run);
   }
 
   /**
@@ -309,6 +333,7 @@ export class Orchestrator {
     if (held < MIN_HOLD_MS) {
       this.deps.mic.stop();
       this.machine.dispatch({ type: 'cancel', reason: 'key tapped, not held' });
+      if (run.mode === 'dictate') void this.undoLastInsert();
       return;
     }
     run.latency.mark('keyUp');
@@ -583,6 +608,10 @@ export class Orchestrator {
     await delay(MIC_TAIL_MS);
     if (this.run === run) listen.stopMic();
     if (signal.aborted) return;
+    // Read the app and any selection while the transcript finalises.
+    const contextP: Promise<WriteContext> = this.deps.writeContext
+      ? this.deps.writeContext(signal).catch(() => ({ app: null, selection: null }))
+      : Promise.resolve({ app: null, selection: null });
     let text: string;
     try {
       text = (await listen.transcript(this.timeouts.transcriptMs)).trim();
@@ -600,18 +629,174 @@ export class Orchestrator {
     }
     const input = this.deps.input;
     if (!input) return this.fail(run, new ConfigError('Typing into other apps is not available here.'), 'config');
+    const context = await contextP;
+    if (signal.aborted) return;
+    const last = this.lastInsert;
+    let plan = planDictation(text, { hasSelection: !!context.selection, last, now: this.now() });
+    if (plan.kind === 'revise' && last?.app?.process !== context.app?.process)
+      plan = { kind: 'write', instruction: plan.instruction };
+    run.question = text;
+    run.record = plan.kind !== 'plain';
+    run.latency.setMeta('write', plan.kind);
+
+    const terminal = isTerminal(context.app);
+    const shape = (s: string): string => (terminal ? s.replace(/\s*\n\s*/g, ' ') : s);
+    const queue = new TypingQueue((chunk) => input.run({ kind: 'type', text: chunk }, signal));
+    let firstTyped = false;
+    const typeNow = (chunk: string): void => {
+      if (!chunk) return;
+      if (!firstTyped) {
+        firstTyped = true;
+        run.latency.mark('firstAudio'); // first text at the cursor is this mode's "first audio"
+      }
+      queue.push(shape(chunk));
+    };
+
+    let chat: VisionChatProvider | null = null;
+    const wantsAi = plan.kind !== 'plain' || (this.deps.tidyDictation?.() ?? false);
+    if (wantsAi) {
+      try {
+        chat = this.deps.chat();
+      } catch (e) {
+        if (plan.kind !== 'plain') return this.fail(run, e, 'config');
+        // No AI configured: plain dictation is typed as heard.
+      }
+    }
+
+    let say: string | null = null;
+    let typed: string;
     try {
-      // A trailing space so the next dictation continues the sentence naturally.
-      await input.run({ kind: 'type', text: `${text} ` }, signal);
+      if (plan.kind === 'revise' && last) {
+        await input.run({ kind: 'backspace', count: backspaceCount(last.text) }, signal);
+      }
+      if (!chat) {
+        typeNow(text);
+      } else {
+        const tidyOnly = plan.kind === 'plain';
+        const screens = tidyOnly ? null : await this.deps.capture.take(signal);
+        if (signal.aborted) return;
+        const opts = {
+          plan,
+          context,
+          previous: last,
+          ...(screens
+            ? {
+                screens: screens.images.map((img, i) => ({
+                  width: img.width,
+                  height: img.height,
+                  hasCursor: i + 1 === screens.cursorScreen,
+                })),
+              }
+            : {}),
+        };
+        const userContext = this.deps.userContext?.(context.app);
+        const request = {
+          system: writeSystemPrompt({ ...opts, ...(userContext ? { userContext } : {}) }),
+          history: [],
+          question: writeQuestion(opts),
+          images: screens?.images ?? [],
+          maxTokens: tidyOnly ? 600 : 1200,
+          signal,
+        };
+        run.latency.setMeta('chat', chat.id);
+        run.latency.mark('requestSent');
+        const splitter = new SayTagSplitter();
+        try {
+          const it = chat.stream(request)[Symbol.asyncIterator]();
+          const started = this.now();
+          try {
+            for (let first = true; ; first = false) {
+              const left = first
+                ? this.timeouts.firstTokenMs
+                : Math.max(1, this.timeouts.answerMs - (this.now() - started));
+              const r = await withTimeout(it.next(), left, 'answer', 'the writing', signal);
+              if (r.done) break;
+              if (first) run.latency.mark('firstToken');
+              typeNow(splitter.push(r.value));
+            }
+          } finally {
+            void it.return?.().catch(() => undefined);
+          }
+          const tail = splitter.end();
+          typeNow(tail.text);
+          say = tail.say;
+        } catch (e) {
+          if (signal.aborted) return;
+          // Tidying failed before anything was typed: the user's words still go in, as heard.
+          if (tidyOnly && !firstTyped) {
+            this.deps.log?.(`dictation tidy failed, typing as heard: ${String(e)}`);
+            typeNow(text);
+          } else throw e;
+        }
+      }
+      await queue.flush();
+      typed = queue.typed;
     } catch (e) {
-      if (!signal.aborted) this.fail(run, e, 'app');
+      if (!signal.aborted) this.fail(run, e, plan.kind === 'plain' && !chat ? 'app' : 'answer');
+      if (queue.typed) this.rememberInsert(queue.typed, context, plan, text);
       return;
     }
-    if (signal.aborted) return;
-    this.machine.dispatch({ type: 'firstAudio' });
+    if (signal.aborted) {
+      if (queue.typed) this.rememberInsert(queue.typed, context, plan, text);
+      return;
+    }
+    if (!typed && plan.kind !== 'plain') {
+      return this.fail(run, new Error('the AI wrote nothing to insert'), 'answer');
+    }
+    // Plain dictation continues the sentence naturally next time.
+    if (plan.kind === 'plain' && typed && !terminal) {
+      await input.run({ kind: 'type', text: ' ' }, signal).catch(() => undefined);
+      typed += ' ';
+    }
+    this.rememberInsert(typed, context, plan, text);
+    run.answer = typed;
+    if (plan.kind !== 'plain') {
+      const hint = this.deps.undoHint?.();
+      if (hint) this.deps.overlay.message(hint, 'info');
+    }
+    if (say) {
+      let speech: SpeechFactory | null;
+      try {
+        speech = this.deps.speech();
+      } catch {
+        speech = null; // no voice configured: the insert itself is the confirmation
+      }
+      if (speech) {
+        const out = speech.create(signal);
+        out.onFirstAudio(() => {
+          if (this.run === run && this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
+        });
+        out.say(say ?? '');
+        out.end();
+        await withTimeout(out.done, 30_000, 'speech', 'saying the confirmation', signal).catch(() => out.stop());
+        if (signal.aborted) return;
+      }
+    }
+    if (this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
     run.latency.mark('done');
     this.machine.dispatch({ type: 'speechDone' });
     this.finish(run, 'answered');
+  }
+
+  private rememberInsert(text: string, context: WriteContext, plan: { kind: string }, instruction: string): void {
+    const replaced = plan.kind === 'revise' ? (this.lastInsert?.replaced ?? null) : context.selection;
+    this.lastInsert = { text, replaced, instruction, at: this.now(), app: context.app };
+  }
+
+  /** Tap of the dictation key: take back the last insert (and restore what it replaced). */
+  private async undoLastInsert(): Promise<void> {
+    const last = this.lastInsert;
+    const input = this.deps.input;
+    if (!last || !input || this.now() - last.at > UNDO_WINDOW_MS) return;
+    this.lastInsert = null;
+    const signal = new AbortController().signal;
+    try {
+      await input.run({ kind: 'backspace', count: backspaceCount(last.text) }, signal);
+      if (last.replaced) await input.run({ kind: 'type', text: last.replaced }, signal);
+      this.deps.overlay.message('Undone.', 'info');
+    } catch (e) {
+      this.deps.overlay.message(`Couldn't undo: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
   }
 
   private async runAgentTask(
@@ -699,8 +884,8 @@ export class Orchestrator {
 
   private persist(run: Run, outcome: HistoryEntry['outcome'], summary: LatencySummary, detail?: string): void {
     this.deps.onLatency?.(summary);
-    // Dictated text is the user's own writing: it is typed, not kept.
-    if (run.mode !== 'dictate' && (run.question || run.answer)) {
+    // Plain dictation is the user's own words: typed, not kept. Write instructions are kept.
+    if (run.record && (run.question || run.answer)) {
       this.deps.record({
         question: run.question,
         answer: run.answer.trim(),

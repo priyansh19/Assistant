@@ -78,6 +78,13 @@ export interface Settings {
   /** Questions that start with "agent" are carried out with the mouse and keyboard. */
   agentEnabled: boolean;
   agentConfirm: AgentConfirmMode;
+  /** Plain dictation is tidied by the AI (punctuation, lists) before it's typed. */
+  tidyDictation: boolean;
+  /** "Writes like me": used when Clicky writes for the user. Stored on this PC only. */
+  profileName: string;
+  profileSignOff: string;
+  profileTone: string;
+  profileSamples: string;
   /** Long edge of the screenshot sent to the model, in pixels. */
   captureMaxEdge: number;
   captureAllDisplays: boolean;
@@ -130,6 +137,11 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   dictationKey: 'RightAlt',
   agentEnabled: true,
   agentConfirm: 'risky',
+  tidyDictation: true,
+  profileName: '',
+  profileSignOff: '',
+  profileTone: '',
+  profileSamples: '',
   captureMaxEdge: 1280,
   captureAllDisplays: false,
   launchAtLogin: false,
@@ -197,6 +209,11 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     dictationKey: dictation === holdKey ? 'off' : dictation,
     agentEnabled: bool(o['agentEnabled'], base.agentEnabled),
     agentConfirm: oneOf(AGENT_CONFIRM_MODES, o['agentConfirm'], base.agentConfirm),
+    tidyDictation: bool(o['tidyDictation'], base.tidyDictation),
+    profileName: shortString(o['profileName'], base.profileName, 80),
+    profileSignOff: shortString(o['profileSignOff'], base.profileSignOff, 200),
+    profileTone: shortString(o['profileTone'], base.profileTone, 200),
+    profileSamples: shortString(o['profileSamples'], base.profileSamples, 4000),
     captureMaxEdge: Math.round(Math.min(Math.max(edge, CAPTURE_EDGE_RANGE.min), CAPTURE_EDGE_RANGE.max)),
     captureAllDisplays:
       typeof o['captureAllDisplays'] === 'boolean' ? o['captureAllDisplays'] : base.captureAllDisplays,

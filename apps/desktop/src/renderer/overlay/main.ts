@@ -2,7 +2,13 @@
 // spins while it thinks, and flies along an arc to whatever it's pointing at, with a label bubble.
 import { CURSOR_COLOR_HEX, type InteractionState } from '@clicky/core';
 import type { OverlayApi } from '../../preload/overlay';
-import type { OverlayConfig, OverlayDrawing, OverlayMessage, OverlayPoint } from '../../shared/overlay-protocol';
+import type {
+  OverlayAnchor,
+  OverlayConfig,
+  OverlayDrawing,
+  OverlayMessage,
+  OverlayPoint,
+} from '../../shared/overlay-protocol';
 
 declare global {
   interface Window {
@@ -32,7 +38,10 @@ let config: OverlayConfig = { color: 'blue', size: 'medium', showLabels: true, p
 let state: InteractionState = 'idle';
 let cursor: { x: number; y: number } | null = null;
 let level = 0;
-const levels: number[] = new Array(24).fill(0);
+/** While dictating, the companion sits beside the text caret instead of the pointer. */
+let anchor: OverlayAnchor = null;
+/** Smoothed mic level for the pulse. */
+let pulseLevel = 0;
 
 type Mode =
   | { kind: 'follow' }
@@ -95,6 +104,11 @@ function arcControl(from: Pt, to: Pt): Pt {
 }
 
 function followTarget(): Pt | null {
+  if (anchor) {
+    // Just right of the caret, vertically centred on the line, tip pointing back at it.
+    const half = SIZES[config.size] / 2;
+    return { x: anchor.x + 10 + half, y: anchor.y + anchor.height / 2 };
+  }
   if (!cursor) return null;
   const o = followOffset();
   return { x: cursor.x + o.x, y: cursor.y + o.y };
@@ -110,7 +124,11 @@ function startFlight(to: Pt, then: 'point' | 'follow', label = ''): void {
 
 // ------------------------------------------------------------- drawing
 
+/** Amber: something failed (shown with a one-line reason next to it). */
+const AMBER = '#f59e0b';
+
 function color(): string {
+  if (message?.kind === 'error' && performance.now() < message.until) return AMBER;
   return CURSOR_COLOR_HEX[config.color];
 }
 
@@ -121,7 +139,10 @@ const TIP = 0.6;
  * An equilateral triangle with softly rounded corners. One vertex is the pointer tip: it faces the
  * real cursor while following and rests exactly on the target while pointing.
  */
-function drawTriangle(at: Pt, heading: number, scale: number, alpha: number): void {
+/**
+ * `trace` (0–1) draws a bright light running around the outline: Clicky is working on it.
+ */
+function drawTriangle(at: Pt, heading: number, scale: number, alpha: number, trace: number | null = null): void {
   const s = SIZES[config.size] * scale;
   const r = s * TIP;
   ctx.save();
@@ -151,6 +172,38 @@ function drawTriangle(at: Pt, heading: number, scale: number, alpha: number): vo
   ctx.lineJoin = 'round';
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.stroke();
+  if (trace !== null) {
+    // Perimeter of an equilateral triangle with circumradius r is 3·√3·r.
+    const per = 3 * Math.sqrt(3) * r;
+    const seg = per * 0.28;
+    ctx.setLineDash([seg, per - seg]);
+    ctx.lineDashOffset = -trace * per;
+    ctx.lineWidth = 2.6;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#ffffff';
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+/** Listening: soft rings breathe out from the triangle, stronger the louder the user speaks. */
+function drawPulse(at: Pt, now: number): void {
+  const base = SIZES[config.size] * 0.7;
+  ctx.save();
+  ctx.strokeStyle = color();
+  ctx.shadowColor = color();
+  ctx.shadowBlur = 8;
+  for (let i = 0; i < 3; i++) {
+    const t = (((now / 900 + i / 3) % 1) + 1) % 1;
+    ctx.globalAlpha = (1 - t) * (0.25 + pulseLevel * 0.75);
+    ctx.lineWidth = 2 - t;
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, base + t * (10 + pulseLevel * 26), 0, Math.PI * 2);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -159,25 +212,6 @@ function shade(hex: string, amt: number): string {
   const n = parseInt(hex.slice(1), 16);
   const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.round(v + (255 - v) * amt));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
-
-function drawWaveform(at: Pt): void {
-  const bars = 7;
-  const w = 3;
-  const gap = 3;
-  const x0 = at.x + SIZES[config.size] * 0.9;
-  const recent = levels.slice(-bars);
-  ctx.save();
-  ctx.fillStyle = color();
-  ctx.shadowColor = color();
-  ctx.shadowBlur = 6;
-  for (let i = 0; i < bars; i++) {
-    const v = recent[i] ?? 0;
-    const h = 4 + v * 22 * (0.6 + 0.4 * Math.sin(i * 1.7 + performance.now() / 120));
-    roundRect(x0 + i * (w + gap), at.y - h / 2, w, h, 1.5);
-    ctx.fill();
-  }
-  ctx.restore();
 }
 
 function roundRect(x: number, y: number, w: number, h: number, r: number): void {
@@ -335,7 +369,11 @@ function frame(now: number): void {
       // Spring-like trailing: fast enough to feel attached, soft enough to feel alive.
       const k = 1 - Math.pow(0.001, (dt / 1000) * 6);
       pos = pos ? { x: pos.x + (target.x - pos.x) * k, y: pos.y + (target.y - pos.y) * k } : { ...target };
-      const toPointer = cursor ? Math.atan2(cursor.y - pos.y, cursor.x - pos.x) : angle;
+      const toPointer = anchor
+        ? Math.atan2(anchor.y + anchor.height / 2 - pos.y, anchor.x - pos.x)
+        : cursor
+          ? Math.atan2(cursor.y - pos.y, cursor.x - pos.x)
+          : angle;
       angle = lerpAngle(angle, toPointer, 0.25);
       heading = angle;
     }
@@ -375,19 +413,21 @@ function frame(now: number): void {
   }
 
   // State-specific flourishes.
+  let trace: number | null = null;
   if (state === 'thinking' || state === 'transcribing') {
-    spin += dt * (state === 'thinking' ? 0.012 : 0.007);
-    if (mode.kind === 'follow') heading = angle + spin;
-    scale *= 1 + 0.06 * Math.sin(now / 140);
+    spin += dt * (state === 'thinking' ? 0.0011 : 0.0007);
+    trace = spin % 1;
   } else {
     spin = 0;
   }
+  pulseLevel += (Math.min(1, level * 1.6) - pulseLevel) * Math.min(1, dt / 90);
+  if (state === 'listening') scale *= 1 + 0.08 * pulseLevel;
   if (state === 'speaking' && mode.kind === 'follow') scale *= 1 + 0.05 * Math.sin(now / 180);
 
   drawShapes(now);
   if (visible && pos) {
-    drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1);
-    if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
+    if (state === 'listening' && mode.kind === 'follow') drawPulse(pos, now);
+    drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1, trace);
   }
   if (message && now > message.until) message = null;
   if (message && pos) drawBubble(message.text, pos, message.kind);
@@ -442,7 +482,6 @@ window.clicky.onState((s) => {
   if (s === 'idle' || s === 'cancelled' || s === 'error') idleSince = performance.now();
   else idleSince = 0;
   if (s === 'listening') {
-    levels.fill(0);
     message = null;
     drawings = [];
   }
@@ -451,6 +490,11 @@ window.clicky.onState((s) => {
 
 window.clicky.onPoint((p) => {
   startFlight({ x: p.x, y: p.y }, 'point', p.label);
+  kick();
+});
+
+window.clicky.onAnchor((a) => {
+  anchor = a;
   kick();
 });
 
@@ -466,8 +510,6 @@ window.clicky.onMessage((m: OverlayMessage) => {
 
 window.clicky.onLevel((l) => {
   level = l;
-  levels.push(level);
-  levels.shift();
 });
 
 window.clicky.onConfig((c) => {

@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import {
   CREDENTIAL_IDS,
+  isResting,
   HOLD_KEY_LABELS,
   requiredCredentials,
   type AskResult,
@@ -15,6 +16,7 @@ import { CapturePlanner } from './capture-planner';
 import type { CredentialStore } from './credential-store';
 import { EngineHost } from './engine-host';
 import { InputHost } from './input-host';
+import { PlaybookStore } from './playbook-store';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -53,6 +55,8 @@ export class Controller {
   /** On-device speech model downloads. The models themselves run in the engine. */
   readonly local = { store: new ModelStore() };
   private readonly input: InputHost;
+  readonly playbooks = new PlaybookStore();
+  private anchorTimer: NodeJS.Timeout | null = null;
 
   constructor(
     platform: Platform,
@@ -78,6 +82,7 @@ export class Controller {
     settings.onChange(push);
     credentials.onChange(push);
     history.onChange(push);
+    this.playbooks.onChange(push);
     this.pushConfig();
     this.engine.start();
   }
@@ -95,6 +100,7 @@ export class Controller {
       history: this.history.list(),
       demo: DEMO,
       modelsDir: this.local.store.root,
+      playbooks: this.playbooks.list(),
     };
   }
 
@@ -107,6 +113,10 @@ export class Controller {
       case 'ready':
         return;
       case 'state': {
+        if (isResting(msg.state)) {
+          if (this.anchorTimer) clearTimeout(this.anchorTimer);
+          this.anchorTimer = setTimeout(() => this.overlays.anchor(null), 2500);
+        }
         this.current = { state: msg.state, interactionId: msg.interactionId };
         if (msg.interactionId === null) this.engineLost();
         for (const fn of this.stateListeners) fn(msg.state);
@@ -131,6 +141,7 @@ export class Controller {
       case 'needKeys':
         return this.hooks.needKeys?.();
       case 'listening':
+        this.overlays.anchor(null);
         return this.hooks.beforeListen?.();
       case 'keyTest':
         return this.keyTest?.(msg.down);
@@ -163,6 +174,16 @@ export class Controller {
           (e: unknown) =>
             this.engine.send({ type: 'input.reply', id: msg.id, error: e instanceof Error ? e.message : String(e) }),
         );
+        return;
+      case 'writeContext':
+        void this.input
+          .writeContext()
+          .catch(() => ({ app: null, selection: null }))
+          .then((context) => this.engine.send({ type: 'writeContext.reply', id: msg.id, context }));
+        return;
+      case 'caretAnchor':
+        if (this.anchorTimer) clearTimeout(this.anchorTimer);
+        void this.input.caret().then((c) => this.overlays.anchor(c));
         return;
       case 'holdKey.failed':
         log.error('hold-to-talk hook failed', msg.message);

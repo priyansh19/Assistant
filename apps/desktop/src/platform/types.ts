@@ -40,6 +40,11 @@ export interface InputDriver {
   /** Positive scrolls down. */
   scroll(x: number, y: number, amount: number): Promise<void>;
   type(text: string): Promise<void>;
+  backspace(count: number): Promise<void>;
+  /** The app in front: lower-case process name and window title. */
+  foreground(): Promise<{ process: string; title: string } | null>;
+  /** The text caret in physical screen pixels, when the app exposes it. */
+  caret(): Promise<{ x: number; y: number; height: number } | null>;
   /** Press together and release in reverse, e.g. ['ctrl', 's']. 'mask' is a no-op key. */
   keys(keys: string[]): Promise<void>;
   dispose(): void;

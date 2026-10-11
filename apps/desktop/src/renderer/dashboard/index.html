@@ -19,6 +19,8 @@
       <button class="nav-item active" data-page="home">Home</button>
       <button class="nav-item" data-page="history">History</button>
       <button class="nav-item" data-page="actions">Actions</button>
+      <button class="nav-item" data-page="voice">Writes like me</button>
+      <button class="nav-item" data-page="playbooks">Playbooks</button>
       <div class="nav-sep"></div>
       <button class="nav-item" data-page="general">General</button>
       <button class="nav-item" data-page="cursor">Cursor</button>
@@ -138,6 +140,115 @@
           <div class="key-error" id="action-error" hidden></div>
         </div>
         <div class="card list" id="actions-list"></div>
+      </section>
+
+      <!-- Writes like me -->
+      <section class="page" id="page-voice">
+        <h1>Writes like me</h1>
+        <p class="intro">
+          Hold <b class="dict-key">Right Alt</b> in any text box and say what you want: "reply to this and thank her",
+          "make this more formal" with text selected, or just talk to dictate. Clicky reads the screen and writes as
+          you. What you enter here stays on this PC and goes to your AI provider only with your writing requests.
+        </p>
+        <div class="card">
+          <div class="row">
+            <div class="label"><div class="title">Your name</div></div>
+            <input type="text" id="profileName" maxlength="80" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Email sign-off</div>
+              <div class="desc">Exactly how you end an email, e.g. "Best," then your name.</div>
+            </div>
+            <textarea id="profileSignOff" rows="2" maxlength="200"></textarea>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Your tone</div>
+              <div class="desc">A few words, e.g. "friendly, direct, no jargon".</div>
+            </div>
+            <input type="text" id="profileTone" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Samples of your writing</div>
+              <div class="desc">Paste two or three messages you wrote. Clicky copies the voice, not the content.</div>
+            </div>
+            <textarea id="profileSamples" rows="7" maxlength="4000"></textarea>
+          </div>
+        </div>
+        <h2>Dictation</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Tidy up plain dictation</div>
+              <div class="desc">
+                Fixes punctuation and turns "first… second…" into a list. Without an AI key, words are typed as you said
+                them.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="tidyDictation" /><span></span></label>
+          </div>
+        </div>
+        <h2>Try it</h2>
+        <div class="card tips">
+          <ul>
+            <li><b>Write:</b> "Reply to this email, say thanks and ask what they use it for."</li>
+            <li><b>Rewrite:</b> right after, hold the key again and say "shorter" or "more formal".</li>
+            <li><b>Edit a selection:</b> select a paragraph, then say "fix the grammar" or "translate to Hindi".</li>
+            <li><b>Undo:</b> tap <b class="dict-key">Right Alt</b> once within 30 seconds.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Playbooks -->
+      <section class="page" id="page-playbooks">
+        <h1>Playbooks</h1>
+        <p class="intro">
+          Instructions Clicky follows when it answers, writes or runs a task. <b>Auto</b> playbooks switch on by
+          themselves in the apps you list; <b>Always</b> ones apply everywhere.
+        </p>
+        <div class="toolbar">
+          <button type="button" class="primary small" id="pb-new">New playbook</button>
+          <button type="button" class="secondary small" id="pb-folder">Open folder</button>
+        </div>
+        <div class="card" id="pb-editor" hidden>
+          <div class="row">
+            <div class="label"><div class="title">Name</div></div>
+            <input type="text" id="pb-name" maxlength="80" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">What it's for</div></div>
+            <input type="text" id="pb-desc" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Apps</div>
+              <div class="desc">Comma-separated app or site names, e.g. "outlook, gmail".</div>
+            </div>
+            <input type="text" id="pb-apps" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">When</div></div>
+            <select id="pb-mode">
+              <option value="auto">Auto, in those apps</option>
+              <option value="always">Always</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div class="row column">
+            <div class="label"><div class="title">Instructions</div></div>
+            <textarea id="pb-body" rows="9" maxlength="20000"></textarea>
+          </div>
+          <div class="row">
+            <div class="label"></div>
+            <div class="item-buttons">
+              <button type="button" class="secondary small" id="pb-cancel">Cancel</button>
+              <button type="button" class="primary small" id="pb-save">Save</button>
+            </div>
+          </div>
+        </div>
+        <div class="card list" id="playbook-list"></div>
       </section>
 
       <!-- General -->

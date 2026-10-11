@@ -498,7 +498,7 @@ describe('Orchestrator', () => {
 });
 
 describe('dictation and agent mode', () => {
-  it('dictation types the transcript, takes no screenshot and keeps no history', async () => {
+  it('plain dictation without AI types the transcript as heard and keeps no history', async () => {
     const typed: unknown[] = [];
     const t = setup({
       stt: () => fakeStt('ignored'),
@@ -509,8 +509,7 @@ describe('dictation and agent mode', () => {
     t.advance(MIN_HOLD_MS + 50);
     t.o.keyUp();
     await settle(t.o);
-    expect(typed).toEqual([{ kind: 'type', text: 'Dear team, the report is ready ' }]);
-    expect(t.deps.capture.begin).not.toHaveBeenCalled();
+    expect(typed.map((a) => (a as { text: string }).text).join('')).toBe('Dear team, the report is ready ');
     expect(t.chat.requests).toHaveLength(0);
     await tick();
     expect(t.history).toEqual([]);

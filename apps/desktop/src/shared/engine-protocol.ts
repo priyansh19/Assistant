@@ -12,6 +12,8 @@ import type {
   LatencySummary,
   MappedPoint,
   MappedShape,
+  Playbook,
+  WriteContext,
   Settings,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
@@ -29,6 +31,8 @@ export interface EngineConfig {
   demo: boolean;
   /** Folder of downloaded on-device speech models (main downloads them, the engine runs them). */
   modelsDir: string;
+  /** Playbooks (all of them; the engine picks the ones that apply to the app in front). */
+  playbooks: Playbook[];
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -50,6 +54,7 @@ export type MainToEngine =
   | { type: 'prewarm' }
   | { type: 'capturePlan.reply'; id: number; plan?: CapturePlan; error?: string }
   | { type: 'input.reply'; id: number; error?: string }
+  | { type: 'writeContext.reply'; id: number; context: WriteContext }
   /** The media renderer died; a new port follows once it's back. */
   | { type: 'media.crashed' }
   | { type: 'shutdown' };
@@ -78,4 +83,8 @@ export type EngineToMain =
   | { type: 'capturePlan'; id: number; allDisplays: boolean }
   /** Agent mode or dictation: press keys or use the mouse (main owns screen coordinates). */
   | { type: 'input'; id: number; action: InputAction }
+  /** Write mode, at key-up: the app in front and the selected text. */
+  | { type: 'writeContext'; id: number }
+  /** Dictation started: move the companion to the text caret. */
+  | { type: 'caretAnchor' }
   | { type: 'holdKey.failed'; message: string };

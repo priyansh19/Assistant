@@ -1,5 +1,6 @@
 import {
   HOLD_KEY_LABELS,
+  buildUserContext,
   cloudSpeech,
   contextTurns,
   hedgedSpeech,
@@ -8,6 +9,7 @@ import {
   type CredentialId,
   type HoldKey,
   type InputAction,
+  type WriteContext,
   type SpeechFactory,
   type SttProvider,
   type TtsProvider,
@@ -62,6 +64,7 @@ export class Engine {
   private nextPlanId = 1;
   private readonly plans = new Map<number, { resolve: (p: CapturePlan) => void; reject: (e: Error) => void }>();
   private readonly inputs = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
+  private readonly contexts = new Map<number, (c: WriteContext) => void>();
   /** Until then, an Esc may be one Clicky typed itself. */
   private ownKeysUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
@@ -100,6 +103,21 @@ export class Engine {
         settings().sttProvider === 'model' ? this.localStt() : (this.providers.stt ??= this.createStt()),
       agent: () => ({ enabled: settings().agentEnabled, confirm: settings().agentConfirm }),
       confirm: (text, signal) => this.confirm(text, signal),
+      writeContext: () => this.writeContext(),
+      tidyDictation: () => settings().tidyDictation,
+      undoHint: () => {
+        const k = settings().dictationKey;
+        return k === 'off' ? '' : `Tap ${HOLD_KEY_LABELS[k]} to undo, or hold it and say "shorter" to rewrite.`;
+      },
+      userContext: (app) => {
+        const s = settings();
+        const ctx = buildUserContext(
+          { name: s.profileName, signOff: s.profileSignOff, tone: s.profileTone, samples: s.profileSamples },
+          this.cfg().playbooks,
+          app ?? null,
+        );
+        return ctx || undefined;
+      },
       speed: () => {
         const s = settings();
         return {
@@ -244,6 +262,12 @@ export class Engine {
         else p.resolve();
         return;
       }
+      case 'writeContext.reply': {
+        const done = this.contexts.get(msg.id);
+        this.contexts.delete(msg.id);
+        done?.(msg.context);
+        return;
+      }
       case 'capturePlan.reply': {
         const p = this.plans.get(msg.id);
         if (!p) return;
@@ -324,6 +348,23 @@ export class Engine {
     if (cfg.settings.dictationKey === 'RightAlt')
       void this.input({ kind: 'keys', keys: ['mask'] }, new AbortController().signal).catch(() => undefined);
     this.orchestrator.dictateDown();
+    this.post({ type: 'caretAnchor' });
+  }
+
+  /** Ask main for the app in front and the selection; an empty context if main is slow. */
+  private writeContext(): Promise<WriteContext> {
+    const id = this.nextPlanId++;
+    return new Promise<WriteContext>((resolve) => {
+      const timer = setTimeout(() => {
+        this.contexts.delete(id);
+        resolve({ app: null, selection: null });
+      }, 1500);
+      this.contexts.set(id, (c) => {
+        clearTimeout(timer);
+        resolve(c);
+      });
+      this.post({ type: 'writeContext', id });
+    });
   }
 
   /** Ask main to press keys or use the mouse, and wait until it has. */

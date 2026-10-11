@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { InteractionState } from '@clicky/core';
 import type { IpcChannel } from '../shared/ipc';
 import type {
+  OverlayAnchor,
   OverlayConfig,
   OverlayCursor,
   OverlayDrawing,
@@ -20,6 +21,7 @@ const api = {
   onState: (fn: (s: InteractionState) => void) => on('overlay:state', fn),
   onPoint: (fn: (p: OverlayPoint) => void) => on('overlay:point', fn),
   onDraw: (fn: (d: OverlayDrawing) => void) => on('overlay:draw', fn),
+  onAnchor: (fn: (a: OverlayAnchor) => void) => on('overlay:anchor', fn),
   onMessage: (fn: (m: OverlayMessage) => void) => on('overlay:message', fn),
   onLevel: (fn: (level: number) => void) => on('overlay:level', fn),
   onConfig: (fn: (c: OverlayConfig) => void) => on('overlay:config', fn),

@@ -26,6 +26,19 @@ export function demoChat(): VisionChatProvider {
   return {
     id: 'demo-chat',
     async *stream(req) {
+      if (req.system.startsWith('You are Clicky, writing') || req.system.startsWith('You clean up dictated text')) {
+        // Write mode: stream a reply the way a model would, ending with the spoken line.
+        const tidy = req.system.startsWith('You clean');
+        const parts = tidy
+          ? ['Today I have to ship three things:\n', '1. Skills\n2. Memory\n', '3. The dictation bug']
+          : ['Hi Sam,\n\n', 'Thanks so much for this, ', 'I really appreciate it. ', 'Quick question: what do you mainly use it for?', '\n\nBest,\nPriyansh', '\n[SAY:I wrote a short thank-you reply.]'];
+        for (const p of parts) {
+          await new Promise((r) => setTimeout(r, 150));
+          if (req.signal.aborted) throw new Error('aborted');
+          yield p;
+        }
+        return;
+      }
       if (req.system.startsWith("You are Clicky's agent")) {
         // Agent mode: one harmless step, then finish.
         await new Promise((r) => setTimeout(r, 120));

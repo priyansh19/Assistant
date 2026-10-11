@@ -10,6 +10,7 @@ import {
   type CredentialId,
   type HistoryEntry,
   type SavedAction,
+  type Playbook,
   type Settings,
 } from '@clicky/core';
 import type { DashboardApi } from '../../preload/dashboard';
@@ -210,6 +211,13 @@ function renderControls(s: Settings): void {
     $<HTMLInputElement>(id).checked = v;
   };
   set('holdKey', s.holdKey);
+  set('profileName', s.profileName);
+  set('profileSignOff', s.profileSignOff);
+  set('profileTone', s.profileTone);
+  set('profileSamples', s.profileSamples);
+  check('tidyDictation', s.tidyDictation);
+  const dk = s.dictationKey === 'off' ? 'your dictation key' : HOLD_KEY_LABELS[s.dictationKey];
+  for (const e of document.querySelectorAll('.dict-key')) e.textContent = dk;
   set('dictationKey', s.dictationKey);
   check('agentEnabled', s.agentEnabled);
   set('agentConfirm', s.agentConfirm);
@@ -1101,6 +1109,94 @@ function renderWizard(): void {
   }
 }
 
+// ----------------------------------------------------------------- playbooks
+
+let editingPlaybook: string | null | undefined; // undefined: editor closed; null: new playbook
+
+function openPlaybookEditor(p: Playbook | null): void {
+  editingPlaybook = p ? p.id : null;
+  $<HTMLInputElement>('pb-name').value = p?.name ?? '';
+  $<HTMLInputElement>('pb-desc').value = p?.description ?? '';
+  $<HTMLInputElement>('pb-apps').value = p?.apps.join(', ') ?? '';
+  $<HTMLSelectElement>('pb-mode').value = p?.mode ?? 'auto';
+  $<HTMLTextAreaElement>('pb-body').value = p?.body ?? '';
+  $('pb-editor').hidden = false;
+  $<HTMLInputElement>('pb-name').focus();
+}
+
+function initPlaybooks(): void {
+  $('pb-new').addEventListener('click', () => openPlaybookEditor(null));
+  $('pb-folder').addEventListener('click', () => void api.openPlaybooks());
+  $('pb-cancel').addEventListener('click', () => {
+    editingPlaybook = undefined;
+    $('pb-editor').hidden = true;
+  });
+  $('pb-save').addEventListener('click', async () => {
+    const name = $<HTMLInputElement>('pb-name').value.trim();
+    const body = $<HTMLTextAreaElement>('pb-body').value.trim();
+    if (!name || !body) return toast('Give the playbook a name and some instructions.');
+    snap = await api.savePlaybook({
+      ...(editingPlaybook ? { id: editingPlaybook } : {}),
+      name,
+      description: $<HTMLInputElement>('pb-desc').value.trim(),
+      apps: $<HTMLInputElement>('pb-apps')
+        .value.split(',')
+        .map((a) => a.trim())
+        .filter(Boolean),
+      mode: $<HTMLSelectElement>('pb-mode').value as Playbook['mode'],
+      body,
+    });
+    editingPlaybook = undefined;
+    $('pb-editor').hidden = true;
+    render();
+    toast('Playbook saved');
+  });
+}
+
+const MODE_TEXT: Record<Playbook['mode'], string> = { auto: 'Auto', always: 'Always', off: 'Off' };
+
+function renderPlaybooks(): void {
+  const list = $('playbook-list');
+  if (!snap.playbooks.length) {
+    list.replaceChildren(
+      el('div', { className: 'empty', text: 'No playbooks yet. Create one to shape how Clicky writes.' }),
+    );
+    return;
+  }
+  list.replaceChildren(
+    ...snap.playbooks.map((p) => {
+      const mode = el('select');
+      for (const m of ['auto', 'always', 'off'] as const) mode.add(new Option(MODE_TEXT[m], m));
+      mode.value = p.mode;
+      mode.setAttribute('aria-label', `When "${p.name}" applies`);
+      mode.addEventListener('change', async () => {
+        snap = await api.savePlaybook({ ...p, mode: mode.value as Playbook['mode'] });
+        render();
+      });
+      const meta = el('div', { className: 'item-meta' }, [
+        el('span', { className: 'pill', text: p.mode === 'off' ? 'Off' : p.mode === 'always' ? 'Everywhere' : 'Auto' }),
+        ...(p.apps.length ? [el('span', { text: p.apps.join(', ') })] : []),
+      ]);
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: p.name }),
+          el('div', { className: 'item-a', text: p.description || p.body.split('\n')[0] || '' }),
+          meta,
+        ]),
+        el('div', { className: 'item-buttons' }, [
+          mode,
+          button('Edit', 'secondary small', () => openPlaybookEditor(p)),
+          button('Delete', 'secondary small', async () => {
+            if (!window.confirm(`Delete the "${p.name}" playbook?`)) return;
+            snap = await api.removePlaybook(p.id);
+            render();
+          }),
+        ]),
+      ]);
+    }),
+  );
+}
+
 // ----------------------------------------------------------------- render all
 
 function render(): void {
@@ -1108,6 +1204,7 @@ function render(): void {
   renderHome();
   renderHistory();
   renderActions();
+  renderPlaybooks();
   if (!typingKey()) renderKeys();
   renderMissing();
   $('version').textContent = `Version ${snap.appVersion}`;
@@ -1151,6 +1248,12 @@ async function init(): Promise<void> {
   });
 
   bindSelect('holdKey');
+  bindText('profileName');
+  bindText('profileSignOff');
+  bindText('profileTone');
+  bindText('profileSamples');
+  bindToggle('tidyDictation');
+  initPlaybooks();
   bindSelect('dictationKey');
   bindToggle('agentEnabled');
   bindSelect('agentConfirm');

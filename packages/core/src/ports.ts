@@ -45,6 +45,8 @@ export type InputAction =
   | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2 }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
   | { kind: 'type'; text: string }
+  /** Delete this many characters before the text cursor (undo of a write). */
+  | { kind: 'backspace'; count: number }
   /** A key or shortcut, e.g. ['ctrl', 's'] or ['enter']. */
   | { kind: 'keys'; keys: string[] };
 

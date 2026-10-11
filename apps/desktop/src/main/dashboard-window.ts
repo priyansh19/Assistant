@@ -208,6 +208,28 @@ export class DashboardWindow {
       if (typeof id === 'string') this.controller.local.store.remove(id);
     });
     handle(IPC.dashOpenLogs, () => void shell.openPath(join(app.getPath('userData'), 'logs')));
+    handle(IPC.dashPlaybookSave, (p) => {
+      const o = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {};
+      const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
+      const mode = o['mode'] === 'auto' || o['mode'] === 'always' ? o['mode'] : 'off';
+      this.controller.playbooks.save({
+        ...(typeof o['id'] === 'string' ? { id: o['id'] } : {}),
+        name: str(o['name'], 80).trim() || 'Untitled playbook',
+        description: str(o['description'], 200),
+        apps: Array.isArray(o['apps']) ? o['apps'].filter((a): a is string => typeof a === 'string').slice(0, 20) : [],
+        mode,
+        body: str(o['body'], 20000),
+      });
+      return this.snapshot();
+    });
+    handle(IPC.dashPlaybookRemove, (id) => {
+      if (typeof id === 'string') this.controller.playbooks.remove(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashPlaybooksOpen, () => {
+      void shell.openPath(this.controller.playbooks.dir);
+      this.controller.playbooks.reload();
+    });
     handle(IPC.dashHistoryRemove, (id) => {
       if (typeof id === 'string') this.history.remove(id);
       return this.snapshot();
@@ -251,6 +273,7 @@ export class DashboardWindow {
     this.credentials.onChange(push);
     // Download progress: throttled by the store (4/s).
     this.controller.local.store.onChange(push);
+    this.controller.playbooks.onChange(push);
     this.controller.onState(push);
   }
 
@@ -427,6 +450,7 @@ export class DashboardWindow {
       stats: this.history.stats(),
       history: this.history.list().slice(0, 200),
       actions: this.history.listActions(),
+      playbooks: this.controller.playbooks.list(),
     };
   }
 

@@ -213,7 +213,38 @@ input[type='password'] {
   outline: none;
 }
 
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--input);
+  border: 1px solid var(--input-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 6px 10px;
+  min-width: 260px;
+  outline: none;
+  resize: vertical;
+}
+
+.row.column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.row.column textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tips ul {
+  margin: 0;
+  padding: 12px 16px 12px 32px;
+  line-height: 1.8;
+}
+
 select:focus,
+textarea:focus,
 input:focus {
   border-bottom-color: var(--accent);
 }

@@ -21,6 +21,15 @@ public static class ClickyInput {
   [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO { public int cbSize; public int flags; public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret; public RECT rcCaret; }
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint tid, ref GUITHREADINFO info);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder sb, int max);
+  [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object obj);
   const uint KEYUP = 2, UNICODE = 4, EXTENDED = 1;
   static void Aware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
   static void Send(INPUT[] a) {
@@ -42,12 +51,62 @@ public static class ClickyInput {
     Move(x, y); Thread.Sleep(30);
     Send(new[] { Mouse(0x0800, unchecked((uint)(-notches * 120))) });
   }
+  // Line breaks are Shift+Enter: a new line in chat apps and editors instead of "send".
   public static void Text(string s) {
+    var batch = new System.Collections.Generic.List<INPUT>();
     foreach (char ch in s) {
       if (ch == '\r') continue;
-      if (ch == '\n') { Send(new[] { Key(0x0D, 0, 0), Key(0x0D, 0, KEYUP) }); continue; }
-      Send(new[] { Key(0, ch, UNICODE), Key(0, ch, UNICODE | KEYUP) });
+      if (ch == '\n') {
+        batch.Add(Key(0x10, 0, 0)); batch.Add(Key(0x0D, 0, 0)); batch.Add(Key(0x0D, 0, KEYUP)); batch.Add(Key(0x10, 0, KEYUP));
+      } else { batch.Add(Key(0, ch, UNICODE)); batch.Add(Key(0, ch, UNICODE | KEYUP)); }
+      if (batch.Count >= 120) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(2); }
     }
+    if (batch.Count > 0) Send(batch.ToArray());
+  }
+  public static void Backspace(int n) {
+    var batch = new System.Collections.Generic.List<INPUT>();
+    for (int i = 0; i < n; i++) {
+      batch.Add(Key(0x08, 0, 0)); batch.Add(Key(0x08, 0, KEYUP));
+      if (batch.Count >= 120) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(2); }
+    }
+    if (batch.Count > 0) Send(batch.ToArray());
+  }
+  static string B64(string s) { return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s)); }
+  // "<process> <title>", each base64 (the title can contain anything).
+  public static string Foreground() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    string name = "";
+    try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { }
+    var sb = new System.Text.StringBuilder(512); GetWindowText(h, sb, 512);
+    return B64(name) + " " + B64(sb.ToString());
+  }
+  // The text caret in physical screen pixels: "x y height", or "" when the app doesn't expose one.
+  public static string Caret() {
+    Aware();
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    uint pid; uint tid = GetWindowThreadProcessId(h, out pid);
+    var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+    if (!GetGUIThreadInfo(tid, ref gi)) return "";
+    if (gi.hwndCaret != IntPtr.Zero && gi.rcCaret.Bottom > gi.rcCaret.Top) {
+      var pt = new POINT(); pt.X = gi.rcCaret.Left; pt.Y = gi.rcCaret.Top;
+      ClientToScreen(gi.hwndCaret, ref pt);
+      return pt.X + " " + pt.Y + " " + (gi.rcCaret.Bottom - gi.rcCaret.Top);
+    }
+    // Browsers and Electron apps expose the caret through accessibility instead.
+    IntPtr target = gi.hwndFocus != IntPtr.Zero ? gi.hwndFocus : h;
+    try {
+      Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+      object o;
+      if (AccessibleObjectFromWindow(target, 0xFFFFFFF8, ref iid, out o) == 0 && o != null) {
+        var acc = (Accessibility.IAccessible)o;
+        int l, t, w, hh; acc.accLocation(out l, out t, out w, out hh, 0);
+        if (hh > 0 && (l != 0 || t != 0)) return l + " " + t + " " + hh;
+      }
+    } catch { }
+    return "";
   }
   public static void Keys(int[] vks, bool[] ext) {
     var down = new INPUT[vks.Length]; var up = new INPUT[vks.Length];
@@ -60,7 +119,7 @@ public static class ClickyInput {
   }
 }`;
 
-// One command per line: "<id> <verb> <args…>"; the reply is "<id> ok" or "<id> err <message>".
+// One command per line: "<id> <verb> <args…>"; the reply is "<id> ok [data]" or "<id> err <message>".
 const LOOP = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::Out.WriteLine('ready'); [Console]::Out.Flush()
@@ -69,15 +128,19 @@ while ($true) {
   if ($line -eq $null) { break }
   $p = $line.Split(' ')
   $id = $p[0]
+  $out = ''
   try {
     switch ($p[1]) {
       'click'  { [ClickyInput]::Click([int]$p[2], [int]$p[3], $p[4] -eq 'right', [int]$p[5]) }
       'scroll' { [ClickyInput]::Scroll([int]$p[2], [int]$p[3], [int]$p[4]) }
       'text'   { [ClickyInput]::Text([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       'keys'   { [ClickyInput]::Keys([int[]]($p[2].Split(',')), [bool[]]($p[3].Split(',') | ForEach-Object { $_ -eq '1' })) }
+      'back'   { [ClickyInput]::Backspace([int]$p[2]) }
+      'fg'     { $out = [ClickyInput]::Foreground() }
+      'caret'  { $out = [ClickyInput]::Caret() }
       default  { throw "unknown command $($p[1])" }
     }
-    [Console]::Out.WriteLine("$id ok")
+    [Console]::Out.WriteLine("$id ok $out")
   } catch {
     $ex = $_.Exception
     while ($ex.InnerException) { $ex = $ex.InnerException }  # PowerShell wraps the C# exception
@@ -124,11 +187,14 @@ export function createWin32InputDriver(): InputDriver {
   let proc: ChildProcessWithoutNullStreams | null = null;
   let ready: Promise<void> | null = null;
   let nextId = 1;
-  const pending = new Map<number, { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+  const pending = new Map<
+    number,
+    { resolve: (data: string) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+  >();
 
   function start(): Promise<void> {
     if (ready) return ready;
-    const script = `Add-Type -TypeDefinition @'\n${CSHARP}\n'@\n${LOOP}`;
+    const script = `Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @'\n${CSHARP}\n'@\n${LOOP}`;
     const child = spawn(
       'powershell.exe',
       [
@@ -163,7 +229,7 @@ export function createWin32InputDriver(): InputDriver {
           if (!m || !p) continue;
           pending.delete(Number(m[1]));
           clearTimeout(p.timer);
-          if (m[2] === 'ok') p.resolve();
+          if (m[2] === 'ok') p.resolve((m[3] ?? '').trim());
           else p.reject(new Error(m[3] ?? 'input failed'));
         }
       });
@@ -186,12 +252,12 @@ export function createWin32InputDriver(): InputDriver {
     return ready;
   }
 
-  async function send(cmd: string): Promise<void> {
+  async function send(cmd: string): Promise<string> {
     await start();
     const child = proc;
     if (!child) throw new Error('the input helper is not running');
     const id = nextId++;
-    await new Promise<void>((resolve, reject) => {
+    return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error('the input helper timed out'));
@@ -200,16 +266,30 @@ export function createWin32InputDriver(): InputDriver {
       child.stdin.write(`${id} ${cmd}\n`);
     });
   }
+  const done = (p: Promise<string>): Promise<void> => p.then(() => undefined);
+  const b64 = (s: string): string => Buffer.from(s, 'base64').toString('utf8');
 
   const int = (n: number): number => Math.round(n);
   return {
     warm: () => void start().catch(() => undefined),
-    click: (x, y, button, count) => send(`click ${int(x)} ${int(y)} ${button} ${count}`),
-    scroll: (x, y, amount) => send(`scroll ${int(x)} ${int(y)} ${int(amount)}`),
-    type: (text) => send(`text ${Buffer.from(text, 'utf8').toString('base64')}`),
+    click: (x, y, button, count) => done(send(`click ${int(x)} ${int(y)} ${button} ${count}`)),
+    scroll: (x, y, amount) => done(send(`scroll ${int(x)} ${int(y)} ${int(amount)}`)),
+    type: (text) => done(send(`text ${Buffer.from(text, 'utf8').toString('base64')}`)),
+    backspace: (count) => done(send(`back ${Math.max(0, Math.min(20000, int(count)))}`)),
+    foreground: async () => {
+      const r = await send('fg');
+      const [a, b] = r.split(' ');
+      return a === undefined || a === '' ? null : { process: b64(a), title: b64(b ?? '') };
+    },
+    caret: async () => {
+      const [x, y, h] = (await send('caret')).split(' ').map(Number);
+      return x === undefined || y === undefined || h === undefined || !Number.isFinite(x + y + h)
+        ? null
+        : { x, y, height: h };
+    },
     keys: (keys) => {
       const vks = keys.map(vkOf);
-      return send(`keys ${vks.map((k) => k[0]).join(',')} ${vks.map((k) => (k[1] ? '1' : '0')).join(',')}`);
+      return done(send(`keys ${vks.map((k) => k[0]).join(',')} ${vks.map((k) => (k[1] ? '1' : '0')).join(',')}`));
     },
     dispose: () => {
       proc?.kill();
