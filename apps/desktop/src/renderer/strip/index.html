@@ -23,24 +23,45 @@
         user-select: none;
         overflow: hidden;
       }
-      .strip {
+      /* A notch hanging from the top edge of the screen: square top, round bottom corners. */
+      .notch {
         box-sizing: border-box;
         height: 100%;
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 8px 0 12px;
-        background: rgba(14, 15, 18, 0.94);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 10px;
+        padding: 0 10px 2px 14px;
+        background: #0e0f12;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-top: none;
+        border-radius: 0 0 20px 20px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        animation: drop 220ms ease-out;
       }
-      .strip.asking {
+      @keyframes drop {
+        from {
+          transform: translateY(-100%);
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+      .notch.asking {
         border-color: var(--amber);
       }
       .mark {
         flex: none;
         width: 14px;
         height: 14px;
+        animation: spin 1.4s linear infinite;
+      }
+      .paused .mark {
+        animation: none;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
       .mark path {
         fill: var(--accent);
@@ -51,28 +72,29 @@
       .text {
         flex: 1;
         min-width: 0;
-        line-height: 1.3;
+        line-height: 1.25;
       }
-      .goal {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        font-weight: 600;
-      }
+      .goal,
       .now {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        color: rgba(250, 250, 250, 0.7);
+      }
+      .goal {
+        font-weight: 600;
+      }
+      .now {
+        color: rgba(250, 250, 250, 0.68);
         font-size: 12px;
       }
       button {
         font: inherit;
+        font-size: 12px;
         color: #fafafa;
         background: rgba(255, 255, 255, 0.08);
         border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 6px;
-        padding: 5px 10px;
+        border-radius: 999px;
+        padding: 4px 11px;
         cursor: pointer;
       }
       button:hover {
@@ -85,7 +107,7 @@
         font-weight: 600;
       }
       button.stop {
-        border-color: rgba(255, 120, 100, 0.6);
+        border-color: rgba(255, 120, 100, 0.55);
       }
       [hidden] {
         display: none !important;
@@ -93,7 +115,7 @@
     </style>
   </head>
   <body>
-    <div class="strip" id="strip">
+    <div class="notch" id="strip">
       <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12 L6 20.7 L6 3.3 Z" /></svg>
       <div class="text">
         <div class="goal" id="goal">Working…</div>

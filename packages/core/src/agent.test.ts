@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { actionGoal, agentGoal, parseAgentAction, parseKeys, runAgent, type AgentDeps } from './agent.js';
+import {
+  actionGoal,
+  agentGoal,
+  lessonFrom,
+  lessonHints,
+  parseAgentAction,
+  parseStepCheck,
+  parseKeys,
+  runAgent,
+  type AgentDeps,
+} from './agent.js';
 import type { CapturePort, InputAction, OverlayPort, ScreenCapture } from './ports.js';
 import type { VisionChatProvider } from './providers.js';
 
@@ -168,5 +178,32 @@ describe('actionGoal (asked first, no "Agent" prefix needed)', () => {
     expect(actionGoal('open')).toBeNull();
     expect(agentGoal('can you open linkedin')).toBeNull();
     expect(actionGoal('Click the save button')).toBe('Click the save button');
+  });
+});
+
+describe('learning from runs', () => {
+  it('keeps what worked and offers it for similar tasks', () => {
+    const lesson = lessonFrom(
+      'open the search menu in Claude',
+      {
+        outcome: 'done',
+        summary: 'ok',
+        steps: ['click on "Search" at 30,20', 'pressed esc'],
+        checked: [
+          { step: 'click on "Search" at 30,20', ok: true },
+          { step: 'pressed esc', ok: false },
+        ],
+      },
+      1,
+    );
+    expect(lesson?.steps).toEqual(['click on "Search" at 30,20']);
+    expect(lessonHints('open search menu in claude', lesson ? [lesson] : [])).toContain('1. click on "Search"');
+    expect(lessonHints('play music on spotify', lesson ? [lesson] : [])).toBeUndefined();
+    expect(lessonFrom('x', { outcome: 'stopped', summary: '', steps: [] }, 1)).toBeNull();
+  });
+
+  it('reads the per-step check', () => {
+    expect(parseStepCheck('{"action":"key","keys":"enter","check":"failed"}')).toBe('failed');
+    expect(parseStepCheck('{"action":"done","say":"ok"}')).toBeNull();
   });
 });

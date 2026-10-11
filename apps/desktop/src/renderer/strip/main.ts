@@ -15,15 +15,18 @@ let paused = false;
 
 function render(s: StripState): void {
   document.documentElement.style.setProperty('--accent', s.color);
-  $('goal').textContent = s.goal ? `Doing: ${s.goal}` : 'Working…';
+  $('goal').textContent = s.goal ? s.goal.charAt(0).toUpperCase() + s.goal.slice(1) : 'Working…';
   $('now').textContent = s.ask
     ? s.ask
     : s.paused
-      ? 'Paused. Press Resume to carry on.'
+      ? s.pausedForUser
+        ? 'Paused while you use the mouse. I carry on when you stop.'
+        : 'Paused. Press Resume to carry on.'
       : s.step
-        ? `Step ${s.step} of up to ${s.max}: ${s.say}`
+        ? `Step ${s.step}: ${s.say}`
         : s.say;
   $('strip').classList.toggle('asking', !!s.ask);
+  $('strip').classList.toggle('paused', s.paused);
   $('allow').hidden = !s.ask;
   paused = s.paused;
   $('pause').textContent = paused ? 'Resume' : 'Pause';

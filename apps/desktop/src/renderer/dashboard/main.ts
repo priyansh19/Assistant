@@ -1317,6 +1317,24 @@ function renderLearned(): void {
   );
 }
 
+function renderNotes(): void {
+  const list = $('notes-list');
+  list.dataset['empty'] = 'Nothing yet.';
+  list.replaceChildren(
+    ...snap.notes.map((n, i) =>
+      el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [el('div', { className: 'item-q', text: n })]),
+        el('div', { className: 'item-buttons' }, [
+          button('Forget', 'secondary small', async () => {
+            snap = await api.removeNote(i);
+            render();
+          }),
+        ]),
+      ]),
+    ),
+  );
+}
+
 // ----------------------------------------------------------------- agent setup (consent)
 
 function openAgentSetup(): void {
@@ -1576,6 +1594,7 @@ function render(): void {
   renderHistory();
   renderActions();
   renderPlaybooks();
+  renderNotes();
   if (!typingKey()) renderKeys();
   renderMissing();
   $('version').textContent = `Version ${snap.appVersion}`;

@@ -234,6 +234,10 @@ export class DashboardWindow {
       if (sound === 'soft' || sound === 'bubble' || sound === 'glass') this.controller.playCue(sound);
     });
     handle(IPC.dashModels, () => openRouterModels());
+    handle(IPC.dashNoteRemove, (i) => {
+      if (typeof i === 'number') this.controller.lessons.forget(i);
+      return this.snapshot();
+    });
     handle(IPC.dashTaskAdd, (goal) => {
       if (typeof goal === 'string') this.controller.tasks.add(goal);
       return this.snapshot();
@@ -313,6 +317,7 @@ export class DashboardWindow {
     this.controller.playbooks.onChange(push);
     this.controller.style.onChange(push);
     this.controller.tasks.onChange(push);
+    this.controller.lessons.onChange(push);
     this.controller.onState(push);
   }
 
@@ -492,6 +497,7 @@ export class DashboardWindow {
       playbooks: this.controller.playbooks.list(),
       style: this.controller.style.get(),
       tasks: this.controller.tasks.list(),
+      notes: this.controller.lessons.notes(),
     };
   }
 

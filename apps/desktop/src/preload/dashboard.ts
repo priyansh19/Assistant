@@ -48,6 +48,7 @@ const api = {
     invoke<DashboardSnapshot>('dash:style-remove', ctx, kind, index),
   clearStyle: () => invoke<DashboardSnapshot>('dash:style-clear'),
   models: () => invoke<ModelOption[]>('dash:models'),
+  removeNote: (index: number) => invoke<DashboardSnapshot>('dash:note-remove', index),
   onHoldKey(fn: (down: boolean, key: 'talk' | 'dictate') => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean, key: 'talk' | 'dictate') => fn(down, key));

@@ -67,6 +67,8 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   modelsDir: '/nonexistent/models',
   playbooks: [],
   style: {},
+  lessons: [],
+  notes: [],
   ...over,
 });
 

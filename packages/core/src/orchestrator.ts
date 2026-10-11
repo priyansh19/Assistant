@@ -14,6 +14,7 @@
 
 import { actionGoal, agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
+import { memoryNote } from './memory.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
@@ -28,7 +29,9 @@ import type { AgentConfirmMode } from './settings.js';
 import type { SpeechFactory } from './speech.js';
 import {
   backspaceCount,
+  faithfulTidy,
   isTerminal,
+  needsTidy,
   planDictation,
   SayTagSplitter,
   TypingQueue,
@@ -93,6 +96,14 @@ export interface OrchestratorDeps {
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
   /** Write mode: the app in front and any selected text, read at key-up. */
   writeContext?(signal: AbortSignal): Promise<WriteContext>;
+  /** The model for agent steps, when it differs from chat() (agents need precise click positions). */
+  agentChat?(): VisionChatProvider;
+  /** Save something the user asked Clicky to remember (a correction, a preference). */
+  remember?(note: string): void;
+  /** Hints from earlier successful runs of a similar task (continuous learning). */
+  agentHints?(goal: string): string | undefined;
+  /** A run finished: its steps and their checks, for the run log and learning. */
+  agentRunFinished?(goal: string, result: AgentResult): void;
   /** Move the companion to the text caret (agent typing steps). */
   atCaret?(): void;
   /** Write mode: tidy plain dictation with the AI before typing it. */
@@ -568,6 +579,15 @@ export class Orchestrator {
     if (chat.model) run.latency.setMeta('model', chat.model);
     if (speech.id) run.latency.setMeta('voice', speech.id);
 
+    // "Comet is on my taskbar", "remember…": keep it for next time instead of answering.
+    const note = audio || !this.deps.remember ? null : memoryNote(question);
+    if (note) {
+      spec?.discard();
+      this.deps.remember?.(note);
+      this.deps.log?.(`remembered: ${note}`);
+      await this.sayOnly(run, speech, "Got it, I'll remember that.");
+      return;
+    }
     const agent = audio ? null : this.agentRequest(question);
     if (agent?.setup) {
       spec?.discard();
@@ -697,7 +717,9 @@ export class Orchestrator {
     };
 
     let chat: VisionChatProvider | null = null;
-    const wantsAi = plan.kind !== 'plain' || (this.deps.tidyDictation?.() ?? false);
+    const wantsAi = plan.kind !== 'plain' || ((this.deps.tidyDictation?.() ?? false) && needsTidy(text));
+    /** Tidied text is checked against what was said before it's typed, so it's collected first. */
+    let tidied = '';
     if (wantsAi) {
       try {
         chat = this.deps.chat();
@@ -758,13 +780,20 @@ export class Orchestrator {
               const r = await withTimeout(it.next(), left, 'answer', 'the writing', signal);
               if (r.done) break;
               if (first) run.latency.mark('firstToken');
-              typeNow(splitter.push(r.value));
+              const piece = splitter.push(r.value);
+              if (tidyOnly) tidied += piece;
+              else typeNow(piece);
             }
           } finally {
             void it.return?.().catch(() => undefined);
           }
           const tail = splitter.end();
-          typeNow(tail.text);
+          if (tidyOnly) {
+            tidied += tail.text;
+            const ok = faithfulTidy(text, tidied);
+            if (!ok) this.deps.log?.(`dictation tidy discarded (not the user's words): ${tidied.slice(0, 80)}`);
+            typeNow(ok ? tidied : text);
+          } else typeNow(tail.text);
           say = tail.say;
         } catch (e) {
           if (signal.aborted) return;
@@ -861,8 +890,10 @@ export class Orchestrator {
     const userContext = this.deps.userContext?.();
     let result: AgentResult;
     try {
+      const hints = this.deps.agentHints?.(goal);
       result = await runAgent(goal, {
-        chat,
+        ...(hints ? { hints } : {}),
+        chat: this.deps.agentChat?.() ?? chat,
         capture: this.deps.capture,
         input,
         overlay: this.deps.overlay,
@@ -881,6 +912,7 @@ export class Orchestrator {
     }
     if (signal.aborted) return;
     this.deps.log?.(`agent ${result.outcome} after ${result.steps.length} steps`);
+    this.deps.agentRunFinished?.(goal, result);
     run.answer = result.summary;
     const out = speech.create(signal);
     out.onFirstAudio(() => {

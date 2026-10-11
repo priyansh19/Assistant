@@ -21,6 +21,7 @@ import { PlaybookStore } from './playbook-store';
 import { TaskStrip } from './task-strip';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
+import { LessonStore } from './lesson-store';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -63,6 +64,7 @@ export class Controller {
   private readonly input: InputHost;
   readonly playbooks = new PlaybookStore();
   readonly style = new StyleStore();
+  readonly lessons = new LessonStore();
   /** Background tasks: run one at a time while the user is away from the mouse. */
   readonly tasks = new TaskQueue({
     settings: () => this.settings.get(),
@@ -102,6 +104,7 @@ export class Controller {
     history.onChange(push);
     this.playbooks.onChange(push);
     this.style.onChange(push);
+    this.lessons.onChange(push);
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
@@ -122,6 +125,8 @@ export class Controller {
       modelsDir: this.local.store.root,
       playbooks: this.playbooks.list(),
       style: this.style.get(),
+      lessons: this.lessons.list(),
+      notes: this.lessons.notes(),
     };
   }
 
@@ -185,6 +190,8 @@ export class Controller {
         return;
       }
       case 'capturePlan':
+        // Keep Clicky's own notch out of the screenshot the model sees.
+        this.strip.hideForCapture();
         this.planner.plan(msg.allDisplays).then(
           (plan) => this.engine.send({ type: 'capturePlan.reply', id: msg.id, plan }),
           (e: unknown) =>
@@ -211,6 +218,12 @@ export class Controller {
       case 'foreground':
         void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
         return;
+      case 'remember':
+        this.lessons.remember(msg.note);
+        return;
+      case 'agentLesson':
+        this.lessons.add(msg.lesson);
+        return;
       case 'styleLearned':
         this.style.learn(msg.context, { notes: msg.notes, examples: msg.examples });
         return;
@@ -231,7 +244,7 @@ export class Controller {
         if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
         return;
       case 'agentPaused':
-        this.strip.update({ paused: msg.on });
+        this.strip.update({ paused: msg.on, pausedForUser: msg.on && msg.reason === 'user' });
         return;
       case 'caretAnchor':
         if (this.anchorTimer) clearTimeout(this.anchorTimer);

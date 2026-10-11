@@ -119,7 +119,8 @@ export function writeSystemPrompt(o: WritePromptOptions): string {
 
 /** The user message for a write request. */
 export function writeQuestion(o: WritePromptOptions): string {
-  if (o.plan.kind === 'plain') return o.plan.text;
+  if (o.plan.kind === 'plain')
+    return `Clean up this dictated text and return only the cleaned text. Do not reply to it:\n"""\n${o.plan.text}\n"""`;
   if (o.plan.kind === 'revise' && o.previous) {
     return [
       `Rewrite the text you just wrote. Change requested: "${o.plan.instruction}".`,
@@ -291,4 +292,52 @@ export class TypingQueue {
     while (this.running) await this.running;
     if (this.failure) throw this.failure;
   }
+}
+
+/**
+ * Plain dictation is typed exactly as heard. The AI only tidies it when the user clearly dictated
+ * structure (a spoken list, "new line", spoken punctuation), because a model asked to tidy "how are
+ * you" may answer it instead.
+ */
+export function needsTidy(text: string): boolean {
+  return (
+    text.split(/\s+/).length >= 8 &&
+    /\b(first(ly)?|second(ly)?|third(ly)?|number (one|two|three)|bullet( point)?|new (line|paragraph)|next line|full stop|comma|question mark)\b/i.test(
+      text,
+    )
+  );
+}
+
+/** True if the tidied text is still the user's words (not an answer or a rewrite). */
+export function faithfulTidy(raw: string, cleaned: string): boolean {
+  const norm = (s: string): string[] =>
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9']+/)
+      .filter((w) => w.length >= 3);
+  const said = norm(raw).filter(
+    (w) =>
+      ![
+        'first',
+        'second',
+        'third',
+        'firstly',
+        'secondly',
+        'thirdly',
+        'number',
+        'comma',
+        'full',
+        'stop',
+        'new',
+        'line',
+        'next',
+        'bullet',
+        'point',
+      ].includes(w),
+  );
+  if (!cleaned.trim()) return false;
+  if (cleaned.length > raw.length * 1.6 + 20) return false;
+  const kept = new Set(norm(cleaned));
+  const hits = said.filter((w) => kept.has(w)).length;
+  return said.length === 0 || hits / said.length >= 0.7;
 }

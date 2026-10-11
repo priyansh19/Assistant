@@ -28,6 +28,9 @@ export type AgentAction =
   | { type: 'wait'; ms: number; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
 
+/** The model's verdict on its previous step, judged from the new screenshot. */
+export type StepCheck = 'worked' | 'failed' | null;
+
 /** Asking how or where is a question, even if an action verb follows ("how do I open…"). */
 const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|does|do|did|should|explain|tell me)\b/i;
 /**
@@ -116,6 +119,11 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 const str = (v: unknown, max = 200): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /** Parse the model's reply (one JSON object, possibly wrapped in prose or a code fence). */
+export function parseStepCheck(reply: string): StepCheck {
+  const m = /"check"\s*:\s*"(worked|failed)"/i.exec(reply);
+  return m?.[1] ? (m[1].toLowerCase() as StepCheck) : null;
+}
+
 export function parseAgentAction(reply: string): { ok: true; action: AgentAction } | { ok: false; error: string } {
   const start = reply.indexOf('{');
   const end = reply.lastIndexOf('}');
@@ -176,9 +184,11 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
 const AGENT_PROMPT = `You are Clicky's agent. You operate the user's Windows PC with the mouse and keyboard to complete
 the task they asked for. Every turn you get fresh screenshots and the list of steps taken so far.
 
-Reply with ONLY one JSON object, no other text, describing the single next action. Examples:
+Reply with ONLY one JSON object, no other text, describing the single next action. From the second
+step on, include "check": "worked" or "failed" saying whether your previous step had the effect you
+wanted, judged from the new screenshot. Examples:
 {"action":"click","x":412,"y":88,"target":"Save button","say":"Clicking Save"}
-{"action":"type","text":"quarterly report","say":"Typing the file name"}
+{"action":"type","text":"quarterly report","say":"Typing the file name","check":"worked"}
 {"action":"key","keys":"ctrl+s","say":"Saving"}
 
 Actions:
@@ -198,10 +208,19 @@ Rules:
 - Never type passwords, card numbers, one-time codes or other secrets. Use fail and ask the user to
   do that part themselves.
 - Look at the new screenshot to check that the previous step worked before going on. If it didn't,
-  try a different way instead of repeating it.
-- Prefer reliable keyboard shortcuts. To open an app, use key "win+r", type its name (chrome,
-  msedge, notepad, explorer, outlook, excel…) and press "enter". To open a website, focus the
-  browser, press "ctrl+l", type the address and press "enter". Avoid the Start menu.
+  try a different way instead of repeating it. Never click the same thing twice in a row.
+- Stop as soon as the task is done: if the last step achieved it (the menu is open, the box is
+  focused, the page is showing), reply done right away. Most tasks take one to three steps.
+- If the task was to open or focus something the user will type into (a search box, a message
+  field) and they didn't say what to type, reply done with a question as "say", e.g. "The search
+  box is open. What would you like to search for?"
+- Ignore Clicky's own bar at the top of the screen and its triangle; they are not part of the app.
+- Use what's on screen first. To open an app, click its icon if it's visible (taskbar, desktop,
+  an open window). Open exactly the app named: Comet is not Chrome, Edge is not Chrome.
+- Only if the app isn't visible anywhere: key "win+r", type its program name and press "enter".
+  To open a website, focus the browser, press "ctrl+l", type the address and press "enter".
+- Follow "Things the user told you" and "What worked before" when they apply; they come from the
+  user's own corrections and earlier runs.
 - "say" is a few words for the user, like "Opening the File menu".`;
 
 function agentSystemPrompt(screens: ScreenCapture, userContext?: string): string {
@@ -242,6 +261,10 @@ export interface AgentDeps {
   whilePaused?(signal: AbortSignal): Promise<void>;
   /** True if the user used the mouse or keyboard themselves since the last step. */
   userInterrupted?(): boolean;
+  /** The user took over: wait (shown on the task bar) until they stop or press Resume. */
+  waitForUser?(signal: AbortSignal): Promise<void>;
+  /** Lessons from earlier successful runs of similar tasks, shown to the model as hints. */
+  hints?: string;
   /** Progress for the step strip. */
   onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
 }
@@ -251,9 +274,17 @@ export interface AgentResult {
   /** What to say to the user at the end. */
   summary: string;
   steps: string[];
+  /** Each step with the model's check of whether it worked (for the run log and learning). */
+  checked?: { step: string; ok: boolean | null }[];
 }
 
-export const AGENT_MAX_STEPS = 25;
+/**
+ * Only a safety ceiling for runaway loops, never shown: real tasks can take many steps. The guardrails
+ * that matter are the per-step check, the repeat and stall guards, risky-step approval and Esc.
+ */
+export const AGENT_MAX_STEPS = 200;
+/** Steps in a row that the model reports didn't work before Clicky gives up. */
+const MAX_FAILED_CHECKS = 4;
 const STEP_FIRST_TOKEN_MS = 20_000;
 const STEP_TOTAL_MS = 45_000;
 /** Consecutive unparseable replies before giving up. */
@@ -284,6 +315,22 @@ async function ask(deps: AgentDeps, system: string, question: string, screens: S
   return text;
 }
 
+/** Same kind of step on the same target (clicks within ~40 px count as the same spot). */
+function actionSignature(a: AgentAction): string | null {
+  switch (a.type) {
+    case 'click':
+    case 'double_click':
+    case 'right_click':
+      return `${a.type}:${a.target.toLowerCase() || `${Math.round(a.x / 40)},${Math.round(a.y / 40)}`}`;
+    case 'key':
+      return `key:${a.keys.join('+')}`;
+    case 'type':
+      return `type:${a.text}`;
+    default:
+      return null;
+  }
+}
+
 function describe(a: AgentAction): string {
   switch (a.type) {
     case 'click':
@@ -309,6 +356,10 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   const max = deps.maxSteps ?? AGENT_MAX_STEPS;
   let note = '';
   let bad = 0;
+  let lastSig: string | null = null;
+  let repeats = 0;
+  let failedChecks = 0;
+  const checked: { step: string; ok: boolean | null }[] = [];
   const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
   for (let i = 0; i < max;) {
     if (deps.signal.aborted) return stopped();
@@ -316,9 +367,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (deps.signal.aborted) return stopped();
     // The user took over the mouse or keyboard: wait for them before doing anything else.
     if (deps.userInterrupted?.()) {
-      deps.log?.('agent paused: the user used the mouse or keyboard');
-      const go = await deps.confirm('You used the mouse, so I paused. Continue', deps.signal);
-      if (!go || deps.signal.aborted) return stopped();
+      deps.log?.('agent paused: the user is using the mouse or keyboard');
+      await deps.waitForUser?.(deps.signal);
+      if (deps.signal.aborted) return stopped();
     }
     const blocked = await deps.blockedApp?.();
     if (blocked) {
@@ -329,6 +380,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (deps.signal.aborted) return stopped();
     const question = [
       `Task: ${goal}`,
+      deps.hints ? `What worked before for similar tasks (use it if it fits):\n${deps.hints}` : '',
       steps.length ? `Steps so far:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}` : 'No steps taken yet.',
       note,
       'What is the next action?',
@@ -350,13 +402,45 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     bad = 0;
     note = '';
     const a = parsed.action;
+    // The per-step check: did the previous step do what it should have?
+    const check = parseStepCheck(reply);
+    const prev = checked[checked.length - 1];
+    if (prev && prev.ok === null && check) {
+      prev.ok = check === 'worked';
+      deps.log?.(`agent check: "${prev.step}" ${check}`);
+      failedChecks = check === 'failed' ? failedChecks + 1 : 0;
+      if (failedChecks >= MAX_FAILED_CHECKS) {
+        deps.log?.('agent stopped: several steps in a row did not work');
+        return {
+          outcome: 'failed',
+          summary:
+            "Several steps in a row didn't work, so I stopped. Tell me what to do differently and I'll try again.",
+          steps,
+          checked,
+        };
+      }
+    }
+    const sig = actionSignature(a);
+    repeats = sig !== null && sig === lastSig ? repeats + 1 : 0;
+    lastSig = sig;
+    if (repeats >= 2) {
+      deps.log?.(`agent stopped: the same step three times (${describe(a)})`);
+      return {
+        outcome: 'failed',
+        summary: 'I kept trying the same step without it working, so I stopped. Try telling me exactly what to click.',
+        steps,
+      };
+    }
+    if (repeats === 1)
+      note =
+        'You just did this same step and it did not change anything. If the task is done, reply done; otherwise try a different way, such as a keyboard shortcut.';
     if (a.type === 'done') {
       deps.log?.(`agent done after ${steps.length} steps: ${a.say}`);
-      return { outcome: 'done', summary: a.say, steps };
+      return { outcome: 'done', summary: a.say, steps, checked };
     }
     if (a.type === 'fail') {
       deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
-      return { outcome: 'failed', summary: a.say, steps };
+      return { outcome: 'failed', summary: a.say, steps, checked };
     }
     i++;
 
@@ -406,11 +490,62 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (a.type === 'wait') await delay(a.ms);
     else if (input) await deps.input.run(input, deps.signal);
     steps.push(describe(a));
+    checked.push({ step: describe(a), ok: null });
     await delay(deps.settleMs ?? 700);
   }
   return {
     outcome: 'failed',
-    summary: `I stopped after ${max} steps without finishing. You can ask me to continue.`,
+    summary: `That took more than ${max} steps, so I stopped to be safe. You can ask me to continue.`,
     steps,
   };
+}
+
+/** A finished run that worked, kept so similar tasks go faster next time (text only, on this PC). */
+export interface AgentLesson {
+  goal: string;
+  /** The steps that worked, in order. */
+  steps: string[];
+  at: number;
+}
+
+const words = (s: string): Set<string> =>
+  new Set(
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2 && !['the', 'and', 'can', 'you', 'please', 'open', 'for', 'with'].includes(w)),
+  );
+
+/** Up to two earlier runs whose goal shares most of its words with this one, as prompt hints. */
+export function lessonHints(goal: string, lessons: readonly AgentLesson[]): string | undefined {
+  const g = words(goal);
+  if (!g.size) return undefined;
+  const scored = lessons
+    .map((l) => {
+      const w = words(l.goal);
+      const shared = [...g].filter((x) => w.has(x)).length;
+      return { l, score: shared / Math.max(g.size, w.size) };
+    })
+    .filter((x) => x.score >= 0.5 && x.l.steps.length)
+    .sort((a, b) => b.score - a.score || b.l.at - a.l.at)
+    .slice(0, 2);
+  if (!scored.length) return undefined;
+  return scored
+    .map(
+      ({ l }) =>
+        `Task "${l.goal}": ${l.steps
+          .slice(0, 12)
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('; ')}`,
+    )
+    .join('\n');
+}
+
+/** The lesson to keep from a run, or null if it didn't finish. Steps the model said failed are left out. */
+export function lessonFrom(goal: string, result: AgentResult, now: number): AgentLesson | null {
+  if (result.outcome !== 'done') return null;
+  const steps = (result.checked ?? result.steps.map((s) => ({ step: s, ok: null })))
+    .filter((c) => c.ok !== false)
+    .map((c) => c.step);
+  return steps.length ? { goal: goal.slice(0, 200), steps: steps.slice(0, 30), at: now } : null;
 }

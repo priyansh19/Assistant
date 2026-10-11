@@ -10,6 +10,8 @@ export interface StripState {
   /** A risky step waiting for the user's OK. */
   ask: string | null;
   paused: boolean;
+  /** Paused because the user is using the mouse (resumes by itself). */
+  pausedForUser?: boolean;
   /** The user's cursor colour, as the accent. */
   color: string;
 }

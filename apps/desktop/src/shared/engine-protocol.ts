@@ -13,6 +13,7 @@ import type {
   MappedPoint,
   MappedShape,
   Playbook,
+  AgentLesson,
   LearnedStyle,
   StyleContext,
   WriteContext,
@@ -38,6 +39,10 @@ export interface EngineConfig {
   playbooks: Playbook[];
   /** How the user writes, learned from their own writing. */
   style: LearnedStyle;
+  /** Agent runs that worked, for hints on similar tasks. */
+  lessons: AgentLesson[];
+  /** Things the user asked Clicky to remember. */
+  notes: string[];
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -103,7 +108,10 @@ export type EngineToMain =
   /** Step strip: progress, a question waiting for Allow, or the end of the run. */
   | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
   | { type: 'agentAsk'; text: string | null }
-  | { type: 'agentPaused'; on: boolean }
+  | { type: 'agentPaused'; on: boolean; reason?: 'user' }
   /** Something learned about how the user writes (main stores it). */
   | { type: 'styleLearned'; context: StyleContext; notes: string[]; examples: string[] }
+  /** An agent run finished well: remember what worked. */
+  | { type: 'agentLesson'; lesson: AgentLesson }
+  | { type: 'remember'; note: string }
   | { type: 'holdKey.failed'; message: string };

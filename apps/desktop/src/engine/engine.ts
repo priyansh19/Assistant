@@ -2,6 +2,8 @@ import {
   HOLD_KEY_LABELS,
   agentReady,
   buildUserContext,
+  lessonFrom,
+  lessonHints,
   contextOf,
   learningAllowed,
   parseStyleReply,
@@ -43,12 +45,18 @@ export interface EngineOptions {
 
 /** How long main may take to answer a capture plan request before the question fails. */
 const PLAN_TIMEOUT_MS = 3000;
+/** OpenRouter model for agent steps when the defaults are in use (accurate clicks, still cheap). */
+const AGENT_MODEL = 'anthropic/claude-haiku-5.5';
 /** A mouse or keyboard request main hasn't answered in this long has failed. */
 const INPUT_TIMEOUT_MS = 25_000;
 /** How long agent mode waits for the user to allow a risky step. */
 const CONFIRM_TIMEOUT_MS = 30_000;
 /** Esc presses this soon after Clicky itself typed are its own keys, not the user cancelling. */
 const OWN_KEYS_MS = 300;
+/** Mouse movement smaller than this (physical px, within 1.5 s) doesn't pause a task. */
+const TAKEOVER_PX = 60;
+/** After the user takes over, carry on once they've left the mouse and keyboard alone this long. */
+const RESUME_IDLE_MS = 3000;
 
 /**
  * The data plane (architecture §4): hold-to-talk hook, orchestrator and providers. It runs in
@@ -81,6 +89,8 @@ export class Engine {
   /** When the current agent step started, to tell if the user acted since. */
   private stepStartedAt = 0;
   private agentPaused = false;
+  /** Where a burst of mouse movement started, to ignore jitter. */
+  private moveAnchor: { x: number; y: number; at: number } | null = null;
   /** Last style lesson per context, so learning runs at most every couple of minutes. */
   private readonly learnedAt = new Map<StyleContext, number>();
   /** Until then, an Esc may be one Clicky typed itself. */
@@ -125,6 +135,13 @@ export class Engine {
         ready: agentReady(settings()),
       }),
       agentNotReady: () => this.post({ type: 'agentSetup' }),
+      agentChat: () => this.agentChat(),
+      agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
+      remember: (note) => this.post({ type: 'remember', note }),
+      agentRunFinished: (goal, result) => {
+        const lesson = lessonFrom(goal, result, Date.now());
+        if (lesson) this.post({ type: 'agentLesson', lesson });
+      },
       learnFromScreen: (screens, app) => void this.learnFromScreen(screens, app),
       learnFromDictation: (text, app) => {
         const s = settings();
@@ -140,6 +157,18 @@ export class Engine {
           const took = this.stepStartedAt > 0 && this.lastUserInputAt > this.stepStartedAt;
           this.stepStartedAt = Date.now();
           return took;
+        },
+        waitForUser: async (signal: AbortSignal) => {
+          this.agentPaused = true;
+          this.post({ type: 'agentPaused', on: true, reason: 'user' });
+          // Carry on once they stop (or press Resume on the bar).
+          while (this.agentPaused && !signal.aborted && Date.now() - this.lastUserInputAt < RESUME_IDLE_MS)
+            await new Promise((r) => setTimeout(r, 150));
+          if (this.agentPaused) {
+            this.agentPaused = false;
+            this.post({ type: 'agentPaused', on: false });
+          }
+          this.stepStartedAt = Date.now();
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
       }),
@@ -158,6 +187,7 @@ export class Engine {
           this.cfg().playbooks,
           app ?? null,
           this.cfg().style,
+          this.cfg().notes,
         );
         return ctx || undefined;
       },
@@ -364,9 +394,18 @@ export class Engine {
           this.orchestrator.cancel('escape');
         },
         onDictateDown: () => this.dictateDown(),
-        onUserInput: () => {
+        onUserInput: (e) => {
           const now = Date.now();
           if (now < this.ownKeysUntil || now < this.ownMouseUntil) return;
+          if (e.kind === 'move') {
+            // A small nudge or the pointer settling isn't taking over: only real movement counts.
+            const a = this.moveAnchor;
+            if (!a || now - a.at > 1500) {
+              this.moveAnchor = { x: e.x ?? 0, y: e.y ?? 0, at: now };
+              return;
+            }
+            if (Math.abs((e.x ?? 0) - a.x) + Math.abs((e.y ?? 0) - a.y) < TAKEOVER_PX) return;
+          }
           this.lastUserInputAt = now;
         },
         onDictateUp: () => {
@@ -453,6 +492,23 @@ export class Engine {
     }
   }
 
+  private agentChatCache: { key: string; chat: VisionChatProvider } | null = null;
+
+  /**
+   * Agent steps need precise click positions, which the cheapest models are poor at. With the
+   * OpenRouter defaults, steps use a model that's good at it and still cheap; a model the user
+   * picked is used as is.
+   */
+  private agentChat(): VisionChatProvider {
+    const s = this.cfg().settings;
+    if (this.cfg().demo || s.chatProvider !== 'openrouter' || s.chatModel)
+      return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(s, this.key));
+    const key = `${this.key('openrouter') ?? ''}`;
+    if (this.agentChatCache?.key !== key)
+      this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };
+    return this.agentChatCache.chat;
+  }
+
   /** The app in front if it's on the never-touch list. */
   private async blockedApp(): Promise<string | null> {
     const list = this.cfg()
@@ -506,12 +562,14 @@ export class Engine {
     if (action.kind === 'keys' || action.kind === 'type' || action.kind === 'backspace')
       this.ownKeysUntil = Date.now() + 60_000;
     if (action.kind === 'click' || action.kind === 'scroll') this.ownMouseUntil = Date.now() + 60_000;
+    this.moveAnchor = null;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {
         clearTimeout(timer);
         this.inputs.delete(id);
         this.ownKeysUntil = Math.min(this.ownKeysUntil, Date.now() + OWN_KEYS_MS);
-        this.ownMouseUntil = Math.min(this.ownMouseUntil, Date.now() + OWN_KEYS_MS);
+        // The pointer and windows settle for a moment after a click.
+        this.ownMouseUntil = Math.min(this.ownMouseUntil, Date.now() + 800);
       };
       const timer = setTimeout(() => {
         done();

@@ -3,8 +3,8 @@ import { BrowserWindow, ipcMain, screen } from 'electron';
 import type { StripState } from '../preload/strip';
 import { IPC } from '../shared/ipc';
 
-const WIDTH = 560;
-const HEIGHT = 52;
+const WIDTH = 540;
+const HEIGHT = 48;
 
 /**
  * A slim bar at the top of the screen while Clicky does a task: the goal, the current step, and
@@ -44,14 +44,25 @@ export class TaskStrip {
     }, 1500);
   }
 
+  /** Hide for a moment while a screenshot is taken, so the model never mistakes the notch for the app. */
+  hideForCapture(): void {
+    const win = this.win;
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+    win.setOpacity(0);
+    setTimeout(() => {
+      if (!win.isDestroyed() && process.env['CLICKY_HIDE_OVERLAY'] !== '1') win.setOpacity(1);
+    }, 700);
+  }
+
   get visible(): boolean {
     return !!this.win && !this.win.isDestroyed() && this.win.isVisible();
   }
 
   private place(win: BrowserWindow): void {
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    const { x, y, width } = d.workArea;
-    win.setBounds({ x: Math.round(x + (width - WIDTH) / 2), y: y + 10, width: WIDTH, height: HEIGHT });
+    // A notch: flush with the top edge of the screen the user is on, centred.
+    const { x, y, width } = d.bounds;
+    win.setBounds({ x: Math.round(x + (width - WIDTH) / 2), y, width: WIDTH, height: HEIGHT });
   }
 
   private ensure(): BrowserWindow {

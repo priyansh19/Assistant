@@ -14,7 +14,7 @@ export interface HoldKeyHook {
     onDictateDown?: () => void;
     onDictateUp?: () => void;
     /** Any mouse movement, click or other key press (agent mode pauses when the user takes over). */
-    onUserInput?: () => void;
+    onUserInput?: (e: { kind: 'key' | 'move' | 'click'; x?: number; y?: number }) => void;
   }): void;
   stop(): void;
 }

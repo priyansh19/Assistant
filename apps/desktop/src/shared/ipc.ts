@@ -61,6 +61,7 @@ export const IPC = {
   dashStyleRemove: 'dash:style-remove',
   dashStyleClear: 'dash:style-clear',
   dashModels: 'dash:models',
+  dashNoteRemove: 'dash:note-remove',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -94,6 +95,8 @@ export interface DashboardSnapshot {
   /** What Clicky learned about how the user writes. */
   style: LearnedStyle;
   tasks: TaskView[];
+  /** Things the user asked Clicky to remember. */
+  notes: string[];
 }
 
 /** One OpenRouter model for the picker. */

@@ -1,5 +1,11 @@
 import type { HoldKey } from '@clicky/core';
-import { uIOhook, UiohookKey, type UiohookKeyboardEvent } from 'uiohook-napi';
+import {
+  uIOhook,
+  UiohookKey,
+  type UiohookKeyboardEvent,
+  type UiohookMouseEvent,
+  type UiohookWheelEvent,
+} from 'uiohook-napi';
 import { execFile } from 'node:child_process';
 import type { HoldKeyHook, Platform } from '../types';
 import { createWin32InputDriver } from './input';
@@ -21,11 +27,13 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
   let dictDown = false;
   let onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null;
   let onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null;
-  let onMouse: (() => void) | null = null;
+  let onMouse: ((e: UiohookMouseEvent | UiohookWheelEvent) => void) | null = null;
+  let onMove: ((e: UiohookMouseEvent) => void) | null = null;
   return {
     start({ onDown, onUp, onCancel, onDictateDown, onDictateUp, onUserInput }) {
       onKeyDown = (e) => {
-        if (e.keycode !== keycode && e.keycode !== dictCode) onUserInput?.();
+        if (e.keycode !== keycode && e.keycode !== dictCode && e.keycode !== UiohookKey.Escape)
+          onUserInput?.({ kind: 'key' });
         if (e.keycode === UiohookKey.Escape) {
           onCancel?.();
           return;
@@ -53,8 +61,9 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
       uIOhook.on('keydown', onKeyDown);
       uIOhook.on('keyup', onKeyUp);
       if (onUserInput) {
-        onMouse = () => onUserInput();
-        uIOhook.on('mousemove', onMouse);
+        onMove = (e) => onUserInput({ kind: 'move', x: e.x, y: e.y });
+        onMouse = (e) => onUserInput({ kind: 'click', x: e.x, y: e.y });
+        uIOhook.on('mousemove', onMove);
         uIOhook.on('mousedown', onMouse);
         uIOhook.on('wheel', onMouse);
       }
@@ -64,11 +73,12 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
       if (onKeyDown) uIOhook.off('keydown', onKeyDown);
       if (onKeyUp) uIOhook.off('keyup', onKeyUp);
       if (onMouse) {
-        uIOhook.off('mousemove', onMouse);
         uIOhook.off('mousedown', onMouse);
         uIOhook.off('wheel', onMouse);
       }
+      if (onMove) uIOhook.off('mousemove', onMove);
       onMouse = null;
+      onMove = null;
       onKeyDown = onKeyUp = null;
       uIOhook.stop();
     },

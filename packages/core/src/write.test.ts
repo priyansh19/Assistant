@@ -133,3 +133,18 @@ describe('playbooks and profile', () => {
     expect(buildUserContext({ name: '', signOff: '', tone: '', samples: '' }, [], null)).toBe('');
   });
 });
+
+describe("plain dictation stays the user's words", () => {
+  it('only tidies dictated structure', async () => {
+    const { needsTidy, faithfulTidy } = await import('./write.js');
+    expect(needsTidy('how are you')).toBe(false);
+    expect(needsTidy('today I need three things first milk second bread third eggs')).toBe(true);
+    expect(faithfulTidy('how are you', "I'm doing well, thank you! How can I help you today?")).toBe(false);
+    expect(
+      faithfulTidy(
+        'today I need three things first milk second bread third eggs',
+        'Today I need three things:\n1. Milk\n2. Bread\n3. Eggs',
+      ),
+    ).toBe(true);
+  });
+});

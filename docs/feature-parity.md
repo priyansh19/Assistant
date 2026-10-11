@@ -31,7 +31,7 @@ Legend: ✅ done · 🟡 partial · ❌ missing
 |---|---|---|---|
 | Teaches any tool / walks you through being stuck | ✅ | ✅ | The same mechanism: conversational answers plus pointing. Neither app has structured lessons. |
 | Memory ("basic text summaries" for context) | ✅ | ✅ | Text-only history; recent turns are fed back as context. Both can be turned off, and screenshots are never stored. |
-| **Agents**: "heyclicky agent" does tasks for you | ✅ | ✅ | Start a question with "Agent". Clicky clicks, types, presses shortcuts and scrolls, flying the cursor to each target first. Sending, buying, deleting and similar steps wait for your hold key (or every step, if you choose). Esc stops it, it never types passwords, and it stops after 25 steps. |
+| **Agents**: "heyclicky agent" does tasks for you | ✅ | ✅ | Start a question with "Agent". Clicky clicks, types, presses shortcuts and scrolls, flying the cursor to each target first. Sending, buying, deleting and similar steps wait for your hold key (or every step, if you choose). Esc or Stop in the notch ends it, it never types passwords, and it checks every step worked. |
 | **Dictation** into any app | ✅ | ✅ | Hold the dictation key (Right Alt by default) and talk; the words are typed where the text cursor is. It uses the on-device speech model when available and is never saved to history. |
 | Draws on your screen | ✅ | ✅ | Besides the pointer, answers can draw up to three arrows, boxes and circles with labels. They draw themselves in and fade after about 14 seconds. |
 | Wake word ("heyclicky agent") | ✅ | 🟡 | Saying "agent" starts agent mode, but only while the hold key is down. There's no always-listening wake word. |

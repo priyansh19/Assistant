@@ -4,6 +4,7 @@
  * the AI provider as part of the prompt, nowhere else.
  */
 
+import { notesText } from './memory.js';
 import { learnedStyleText, type LearnedStyle } from './style.js';
 import type { AppInfo } from './write.js';
 
@@ -61,8 +62,11 @@ export function buildUserContext(
   playbooks: readonly Playbook[],
   app: AppInfo | null,
   learned: LearnedStyle = {},
+  notes: readonly string[] = [],
 ): string {
   const lines: string[] = [];
+  const told = notesText(notes);
+  if (told) lines.push(told);
   if (profile.name.trim()) lines.push(`Name: ${profile.name.trim().slice(0, 80)}`);
   if (profile.signOff.trim()) lines.push(`Signs emails as:\n${profile.signOff.trim().slice(0, 200)}`);
   if (profile.tone.trim()) lines.push(`Their tone: ${profile.tone.trim().slice(0, 200)}`);
