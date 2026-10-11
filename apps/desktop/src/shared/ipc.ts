@@ -2,6 +2,7 @@ import type {
   CredentialId,
   HistoryEntry,
   InteractionState,
+  LearnedStyle,
   Playbook,
   SavedAction,
   Settings,
@@ -54,6 +55,11 @@ export const IPC = {
   dashPlaybookRemove: 'dash:playbook-remove',
   dashPlaybooksOpen: 'dash:playbooks-open',
   dashPlayCue: 'dash:play-cue',
+  dashTaskAdd: 'dash:task-add',
+  dashTaskRemove: 'dash:task-remove',
+  dashTaskRun: 'dash:task-run',
+  dashStyleRemove: 'dash:style-remove',
+  dashStyleClear: 'dash:style-clear',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -84,6 +90,18 @@ export interface DashboardSnapshot {
   keyHints: Partial<Record<CredentialId, string>>;
   local: LocalSpeechView;
   playbooks: Playbook[];
+  /** What Clicky learned about how the user writes. */
+  style: LearnedStyle;
+  tasks: TaskView[];
+}
+
+export interface TaskView {
+  id: string;
+  goal: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+  addedAt: number;
+  endedAt?: number;
+  summary?: string;
 }
 
 export interface LocalModelView {

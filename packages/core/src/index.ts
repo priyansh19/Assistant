@@ -16,3 +16,4 @@ export * from './shapes.js';
 export * from './agent.js';
 export * from './write.js';
 export * from './profile.js';
+export * from './style.js';

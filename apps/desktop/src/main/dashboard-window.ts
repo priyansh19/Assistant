@@ -1,6 +1,13 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron';
-import { CREDENTIAL_IDS, isResting, STAGE_METRICS, type CredentialId } from '@clicky/core';
+import {
+  STYLE_CONTEXTS,
+  type StyleContext,
+  CREDENTIAL_IDS,
+  isResting,
+  STAGE_METRICS,
+  type CredentialId,
+} from '@clicky/core';
 import { checkKey, defaultChatModel } from '@clicky/providers';
 import {
   IPC,
@@ -225,6 +232,31 @@ export class DashboardWindow {
     handle(IPC.dashPlayCue, (sound) => {
       if (sound === 'soft' || sound === 'bubble' || sound === 'glass') this.controller.playCue(sound);
     });
+    handle(IPC.dashTaskAdd, (goal) => {
+      if (typeof goal === 'string') this.controller.tasks.add(goal);
+      return this.snapshot();
+    });
+    handle(IPC.dashTaskRemove, (id) => {
+      if (typeof id === 'string') this.controller.tasks.remove(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashTaskRun, (id) => {
+      if (typeof id === 'string') this.controller.tasks.runNow(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashStyleRemove, (ctx, kind, index) => {
+      if (
+        (STYLE_CONTEXTS as readonly string[]).includes(String(ctx)) &&
+        (kind === 'notes' || kind === 'examples') &&
+        typeof index === 'number'
+      )
+        this.controller.style.remove(ctx as StyleContext, kind, index);
+      return this.snapshot();
+    });
+    handle(IPC.dashStyleClear, () => {
+      this.controller.style.clear();
+      return this.snapshot();
+    });
     handle(IPC.dashPlaybookRemove, (id) => {
       if (typeof id === 'string') this.controller.playbooks.remove(id);
       return this.snapshot();
@@ -277,6 +309,8 @@ export class DashboardWindow {
     // Download progress: throttled by the store (4/s).
     this.controller.local.store.onChange(push);
     this.controller.playbooks.onChange(push);
+    this.controller.style.onChange(push);
+    this.controller.tasks.onChange(push);
     this.controller.onState(push);
   }
 
@@ -454,6 +488,8 @@ export class DashboardWindow {
       history: this.history.list().slice(0, 200),
       actions: this.history.listActions(),
       playbooks: this.controller.playbooks.list(),
+      style: this.controller.style.get(),
+      tasks: this.controller.tasks.list(),
     };
   }
 

@@ -40,6 +40,12 @@ const api = {
   removePlaybook: (id: string) => invoke<DashboardSnapshot>('dash:playbook-remove', id),
   openPlaybooks: () => invoke<undefined>('dash:playbooks-open'),
   playCue: (sound: 'soft' | 'bubble' | 'glass') => invoke<undefined>('dash:play-cue', sound),
+  addTask: (goal: string) => invoke<DashboardSnapshot>('dash:task-add', goal),
+  removeTask: (id: string) => invoke<DashboardSnapshot>('dash:task-remove', id),
+  runTask: (id: string) => invoke<DashboardSnapshot>('dash:task-run', id),
+  removeStyle: (ctx: string, kind: 'notes' | 'examples', index: number) =>
+    invoke<DashboardSnapshot>('dash:style-remove', ctx, kind, index),
+  clearStyle: () => invoke<DashboardSnapshot>('dash:style-clear'),
   onHoldKey(fn: (down: boolean, key: 'talk' | 'dictate') => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean, key: 'talk' | 'dictate') => fn(down, key));

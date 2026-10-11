@@ -12,6 +12,8 @@ import {
   type SavedAction,
   AGENT_RULES_VERSION,
   agentReady,
+  STYLE_CONTEXT_NAMES,
+  STYLE_CONTEXTS,
   type Playbook,
   type Settings,
 } from '@clicky/core';
@@ -218,6 +220,9 @@ function renderControls(s: Settings): void {
   set('profileTone', s.profileTone);
   set('profileSamples', s.profileSamples);
   check('tidyDictation', s.tidyDictation);
+  check('styleLearning', s.styleLearning);
+  set('styleExcludeApps', s.styleExcludeApps);
+  renderLearned();
   set('cueSound', s.cueSound);
   renderVoicePicker(s);
   const dk = s.dictationKey === 'off' ? 'your dictation key' : HOLD_KEY_LABELS[s.dictationKey];
@@ -418,6 +423,10 @@ function renderHome(): void {
     };
   }
 
+  const hour = new Date().getHours();
+  const part = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  $('today-greeting').textContent = s.profileName ? `${part}, ${s.profileName.split(' ')[0]}` : part;
+  renderTasks();
   $<HTMLButtonElement>('ask-btn').disabled = snap.missing.length > 0 || isBusy();
   $('stat-count').textContent = String(snap.stats.count);
   $('stat-last').textContent = seconds(snap.stats.lastMs);
@@ -1113,6 +1122,76 @@ function renderWizard(): void {
   }
 }
 
+// ----------------------------------------------------------------- tasks and learned style
+
+const TASK_STATUS: Record<string, string> = {
+  queued: 'Waiting for you to step away',
+  running: 'Running now',
+  done: 'Done',
+  failed: "Didn't finish",
+  stopped: 'Stopped',
+};
+
+function renderTasks(): void {
+  const list = $('task-list');
+  list.dataset['empty'] = 'No tasks yet.';
+  list.replaceChildren(
+    ...snap.tasks.slice(0, 12).map((t) => {
+      const buttons = el('div', { className: 'item-buttons' });
+      if (t.status !== 'running') {
+        if (t.status !== 'done')
+          buttons.append(button('Run now', 'secondary small', async () => void (snap = await api.runTask(t.id))));
+        buttons.append(
+          button('Remove', 'secondary small', async () => {
+            snap = await api.removeTask(t.id);
+            render();
+          }),
+        );
+      }
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: t.goal }),
+          ...(t.summary ? [el('div', { className: 'item-a', text: t.summary })] : []),
+          el('div', { className: `task-status ${t.status}`, text: TASK_STATUS[t.status] ?? t.status }),
+        ]),
+        buttons,
+      ]);
+    }),
+  );
+}
+
+function renderLearned(): void {
+  const box = $('style-learned');
+  const parts = STYLE_CONTEXTS.flatMap((ctx) => {
+    const p = snap.style[ctx];
+    if (!p || (!p.notes.length && !p.examples.length)) return [];
+    const chip = (text: string, kind: 'notes' | 'examples', i: number): HTMLElement => {
+      const x = el('button', { text: '×', title: 'Forget this' });
+      x.type = 'button';
+      x.setAttribute('aria-label', `Forget "${text}"`);
+      x.addEventListener('click', async () => {
+        snap = await api.removeStyle(ctx, kind, i);
+        render();
+      });
+      return el('span', { className: 'chip' }, [kind === 'examples' ? `“${text}”` : text, x]);
+    };
+    return [
+      el('div', { className: 'learned' }, [
+        el('h3', { text: STYLE_CONTEXT_NAMES[ctx] }),
+        el('div', {}, [
+          ...p.notes.map((n, i) => chip(n, 'notes', i)),
+          ...p.examples.map((e, i) => chip(e, 'examples', i)),
+        ]),
+      ]),
+    ];
+  });
+  box.replaceChildren(
+    ...(parts.length
+      ? parts
+      : [el('div', { className: 'learned desc', text: 'Nothing learned yet. It fills in as you write with Clicky.' })]),
+  );
+}
+
 // ----------------------------------------------------------------- agent setup (consent)
 
 function openAgentSetup(): void {
@@ -1361,6 +1440,23 @@ async function init(): Promise<void> {
   bindText('profileTone');
   bindText('profileSamples');
   bindToggle('tidyDictation');
+  bindToggle('styleLearning');
+  bindText('styleExcludeApps');
+  $('style-clear').addEventListener('click', async () => {
+    if (!window.confirm('Forget everything Clicky has learned about how you write?')) return;
+    snap = await api.clearStyle();
+    render();
+  });
+  $('task-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $<HTMLInputElement>('task-input');
+    const goal = input.value.trim();
+    if (goal.length < 3) return;
+    snap = await api.addTask(goal);
+    input.value = '';
+    render();
+    toast(agentReady(snap.settings) ? 'Task added' : 'Task added. Turn on agent mode in General so it can run.');
+  });
   bindSelect('cueSound');
   $('cue-test').addEventListener('click', () => {
     const s = $<HTMLSelectElement>('cueSound').value;

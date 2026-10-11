@@ -2,6 +2,12 @@ import {
   HOLD_KEY_LABELS,
   agentReady,
   buildUserContext,
+  contextOf,
+  learningAllowed,
+  parseStyleReply,
+  STYLE_PROMPT,
+  type ScreenCapture,
+  type StyleContext,
   cloudSpeech,
   contextTurns,
   hedgedSpeech,
@@ -75,6 +81,8 @@ export class Engine {
   /** When the current agent step started, to tell if the user acted since. */
   private stepStartedAt = 0;
   private agentPaused = false;
+  /** Last style lesson per context, so learning runs at most every couple of minutes. */
+  private readonly learnedAt = new Map<StyleContext, number>();
   /** Until then, an Esc may be one Clicky typed itself. */
   private ownKeysUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
@@ -117,6 +125,12 @@ export class Engine {
         ready: agentReady(settings()),
       }),
       agentNotReady: () => this.post({ type: 'agentSetup' }),
+      learnFromScreen: (screens, app) => void this.learnFromScreen(screens, app),
+      learnFromDictation: (text, app) => {
+        const s = settings();
+        if (!s.styleLearning || !learningAllowed(app, s.styleExcludeApps)) return;
+        this.post({ type: 'styleLearned', context: contextOf(app), notes: [], examples: [text.slice(0, 200)] });
+      },
       agentHooks: () => ({
         blockedApp: () => this.blockedApp(),
         whilePaused: async (signal) => {
@@ -143,6 +157,7 @@ export class Engine {
           { name: s.profileName, signOff: s.profileSignOff, tone: s.profileTone, samples: s.profileSamples },
           this.cfg().playbooks,
           app ?? null,
+          this.cfg().style,
         );
         return ctx || undefined;
       },
@@ -399,6 +414,43 @@ export class Engine {
       void this.input({ kind: 'keys', keys: ['mask'] }, new AbortController().signal).catch(() => undefined);
     this.orchestrator.dictateDown();
     this.post({ type: 'caretAnchor' });
+  }
+
+  /**
+   * Background, after a write: ask the model what the user's own visible writing says about their
+   * style. At most every two minutes per kind of app, never in excluded apps, never blocking anything.
+   */
+  private async learnFromScreen(screens: ScreenCapture, app: AppInfo | null): Promise<void> {
+    const s = this.cfg().settings;
+    if (!s.styleLearning || this.cfg().demo || !learningAllowed(app, s.styleExcludeApps)) return;
+    const ctx = contextOf(app);
+    if (ctx === 'other' || Date.now() - (this.learnedAt.get(ctx) ?? 0) < 120_000) return;
+    this.learnedAt.set(ctx, Date.now());
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    try {
+      const chat = (this.providers.chat ??= createChat(s, this.key));
+      let reply = '';
+      for await (const t of chat.stream({
+        system: STYLE_PROMPT,
+        history: [],
+        question: "Study the user's own writing in this screenshot.",
+        images: screens.images,
+        maxTokens: 300,
+        signal: ac.signal,
+      }))
+        reply += t;
+      const obs = parseStyleReply(reply);
+      if (obs) this.post({ type: 'styleLearned', context: ctx, ...obs });
+    } catch (e) {
+      this.post({
+        type: 'log',
+        level: 'warn',
+        message: `style learning skipped: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** The app in front if it's on the never-touch list. */

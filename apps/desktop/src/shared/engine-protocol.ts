@@ -13,6 +13,8 @@ import type {
   MappedPoint,
   MappedShape,
   Playbook,
+  LearnedStyle,
+  StyleContext,
   WriteContext,
   AppInfo,
   Settings,
@@ -34,6 +36,8 @@ export interface EngineConfig {
   modelsDir: string;
   /** Playbooks (all of them; the engine picks the ones that apply to the app in front). */
   playbooks: Playbook[];
+  /** How the user writes, learned from their own writing. */
+  style: LearnedStyle;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -100,4 +104,6 @@ export type EngineToMain =
   | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
   | { type: 'agentAsk'; text: string | null }
   | { type: 'agentPaused'; on: boolean }
+  /** Something learned about how the user writes (main stores it). */
+  | { type: 'styleLearned'; context: StyleContext; notes: string[]; examples: string[] }
   | { type: 'holdKey.failed'; message: string };

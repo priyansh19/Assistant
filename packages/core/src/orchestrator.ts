@@ -90,6 +90,10 @@ export interface OrchestratorDeps {
   tidyDictation?(): boolean;
   /** Write mode: the hint shown after an insert, e.g. "Tap Right Alt to undo". */
   undoHint?(): string;
+  /** Learn the user's writing style from a write-mode screenshot (runs in the background). */
+  learnFromScreen?(screens: ScreenCapture, app: AppInfo | null): void;
+  /** Learn from the user's own dictated words. */
+  learnFromDictation?(text: string, app: AppInfo | null): void;
 }
 
 export interface SpeedOptions {
@@ -690,6 +694,7 @@ export class Orchestrator {
 
     let say: string | null = null;
     let typed: string;
+    let learnFrom: ScreenCapture | null = null;
     try {
       if (plan.kind === 'revise' && last) {
         await input.run({ kind: 'backspace', count: backspaceCount(last.text) }, signal);
@@ -700,6 +705,7 @@ export class Orchestrator {
         const tidyOnly = plan.kind === 'plain';
         const screens = tidyOnly ? null : await this.deps.capture.take(signal);
         if (signal.aborted) return;
+        if (screens) learnFrom = screens;
         const opts = {
           plan,
           context,
@@ -775,6 +781,8 @@ export class Orchestrator {
     }
     this.rememberInsert(typed, context, plan, text);
     run.answer = typed;
+    if (learnFrom) this.deps.learnFromScreen?.(learnFrom, context.app);
+    else if (plan.kind === 'plain' && typed.trim()) this.deps.learnFromDictation?.(typed.trim(), context.app);
     if (plan.kind !== 'plain') {
       const hint = this.deps.undoHint?.();
       if (hint) this.deps.overlay.message(hint, 'info');

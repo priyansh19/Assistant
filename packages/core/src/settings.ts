@@ -97,6 +97,10 @@ export interface Settings {
   profileSignOff: string;
   profileTone: string;
   profileSamples: string;
+  /** Learn how the user writes from write-mode screenshots and their dictation (stored on this PC). */
+  styleLearning: boolean;
+  /** Apps Clicky never learns from (comma-separated). */
+  styleExcludeApps: string;
   /** Long edge of the screenshot sent to the model, in pixels. */
   captureMaxEdge: number;
   captureAllDisplays: boolean;
@@ -159,6 +163,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   profileSignOff: '',
   profileTone: '',
   profileSamples: '',
+  styleLearning: true,
+  styleExcludeApps: '1password, bitwarden, keepass, lastpass, dashlane, keeper, bank',
   captureMaxEdge: 1280,
   captureAllDisplays: false,
   launchAtLogin: false,
@@ -249,6 +255,8 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     profileSignOff: shortString(o['profileSignOff'], base.profileSignOff, 200),
     profileTone: shortString(o['profileTone'], base.profileTone, 200),
     profileSamples: shortString(o['profileSamples'], base.profileSamples, 4000),
+    styleLearning: bool(o['styleLearning'], base.styleLearning),
+    styleExcludeApps: shortString(o['styleExcludeApps'], base.styleExcludeApps, 600),
     captureMaxEdge: Math.round(Math.min(Math.max(edge, CAPTURE_EDGE_RANGE.min), CAPTURE_EDGE_RANGE.max)),
     captureAllDisplays:
       typeof o['captureAllDisplays'] === 'boolean' ? o['captureAllDisplays'] : base.captureAllDisplays,

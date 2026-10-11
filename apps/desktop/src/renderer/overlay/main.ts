@@ -38,14 +38,13 @@ let config: OverlayConfig = { color: 'blue', size: 'medium', showLabels: true, p
 let state: InteractionState = 'idle';
 let cursor: { x: number; y: number } | null = null;
 let level = 0;
+const levels: number[] = new Array(24).fill(0);
 /** While dictating, the companion sits beside the text caret instead of the pointer. */
 let anchor: OverlayAnchor = null;
 /** Another display shows the companion right now: this one stays empty. */
 let owner: number | null = null;
 /** Rotation while working, like the original Clicky; the tracing light rides on top. */
 let spinAngle = 0;
-/** Smoothed mic level for the pulse. */
-let pulseLevel = 0;
 
 type Mode =
   | { kind: 'follow' }
@@ -193,20 +192,22 @@ function drawTriangle(at: Pt, heading: number, scale: number, alpha: number, tra
   ctx.restore();
 }
 
-/** Listening: soft rings breathe out from the triangle, stronger the louder the user speaks. */
-function drawPulse(at: Pt, now: number): void {
-  const base = SIZES[config.size] * 0.7;
+/** Listening: the original sound bars beside the triangle, moving with the voice. */
+function drawWaveform(at: Pt): void {
+  const bars = 7;
+  const w = 3;
+  const gap = 3;
+  const x0 = at.x + SIZES[config.size] * 0.9;
+  const recent = levels.slice(-bars);
   ctx.save();
-  ctx.strokeStyle = color();
+  ctx.fillStyle = color();
   ctx.shadowColor = color();
-  ctx.shadowBlur = 8;
-  for (let i = 0; i < 3; i++) {
-    const t = (((now / 900 + i / 3) % 1) + 1) % 1;
-    ctx.globalAlpha = (1 - t) * (0.25 + pulseLevel * 0.75);
-    ctx.lineWidth = 2 - t;
-    ctx.beginPath();
-    ctx.arc(at.x, at.y, base + t * (10 + pulseLevel * 26), 0, Math.PI * 2);
-    ctx.stroke();
+  ctx.shadowBlur = 6;
+  for (let i = 0; i < bars; i++) {
+    const v = recent[i] ?? 0;
+    const h = 4 + v * 22 * (0.6 + 0.4 * Math.sin(i * 1.7 + performance.now() / 120));
+    roundRect(x0 + i * (w + gap), at.y - h / 2, w, h, 1.5);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -428,8 +429,6 @@ function frame(now: number): void {
     spin = 0;
     spinAngle = 0;
   }
-  pulseLevel += (Math.min(1, level * 1.6) - pulseLevel) * Math.min(1, dt / 90);
-  if (state === 'listening') scale *= 1 + 0.08 * pulseLevel;
   if (state === 'speaking' && mode.kind === 'follow') scale *= 1 + 0.05 * Math.sin(now / 180);
 
   drawShapes(now);
@@ -439,8 +438,8 @@ function frame(now: number): void {
     pos = null;
   }
   if (visible && pos) {
-    if (state === 'listening' && mode.kind === 'follow') drawPulse(pos, now);
     drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1, trace);
+    if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
   }
   if (message && now > message.until) message = null;
   if (message && pos) drawBubble(message.text, pos, message.kind);
@@ -495,6 +494,7 @@ window.clicky.onState((s) => {
   if (s === 'idle' || s === 'cancelled' || s === 'error') idleSince = performance.now();
   else idleSince = 0;
   if (s === 'listening') {
+    levels.fill(0);
     message = null;
     drawings = [];
   }
@@ -528,6 +528,8 @@ window.clicky.onMessage((m: OverlayMessage) => {
 
 window.clicky.onLevel((l) => {
   level = l;
+  levels.push(level);
+  levels.shift();
 });
 
 window.clicky.onConfig((c) => {

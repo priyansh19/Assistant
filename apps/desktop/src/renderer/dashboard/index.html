@@ -16,7 +16,7 @@
           <path d="M4 3 L20 10.5 L12.2 12.2 L10.5 20 Z" /></svg
         >Clicky
       </div>
-      <button class="nav-item active" data-page="home">Home</button>
+      <button class="nav-item active" data-page="home">Today</button>
       <button class="nav-item" data-page="history">History</button>
       <button class="nav-item" data-page="actions">Actions</button>
       <button class="nav-item" data-page="voice">Writes like me</button>
@@ -37,7 +37,7 @@
 
       <!-- Home -->
       <section class="page active" id="page-home">
-        <h1>Home</h1>
+        <h1 id="today-greeting">Today</h1>
         <div class="banner error" id="last-error" hidden>
           <span id="last-error-text"></span>
           <button class="secondary small" id="last-error-fix" hidden></button>
@@ -95,6 +95,27 @@
         </details>
 
         <div class="section-head">
+          <h2>Tasks</h2>
+        </div>
+        <div class="card">
+          <form id="task-form" class="row">
+            <input
+              type="text"
+              id="task-input"
+              placeholder="Something for Clicky to do when you step away, e.g. tidy my Downloads folder by date"
+              maxlength="300"
+              autocomplete="off"
+            />
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <div class="desc ask-hint" id="task-hint">
+            Tasks run one at a time when you leave the mouse alone for a few seconds. You get a notification when one
+            starts, needs your OK, or finishes. Esc stops it.
+          </div>
+        </div>
+        <div class="card list" id="task-list"></div>
+
+        <div class="section-head">
           <h2>Recent</h2>
           <button class="link" data-goto="history">See all</button>
         </div>
@@ -150,6 +171,33 @@
           "make this more formal" with text selected, or just talk to dictate. Clicky reads the screen and writes as
           you. What you enter here stays on this PC and goes to your AI provider only with your writing requests.
         </p>
+        <h2>What Clicky has learned</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Learn how I write</div>
+              <div class="desc">
+                When you write with Clicky, it notices how you write in emails, chats and posts on your screen, and how
+                you talk when you dictate. Stored on this PC only.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="styleLearning" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Never learn in these apps</div>
+              <div class="desc">Comma-separated app or site names.</div>
+            </div>
+            <input type="text" id="styleExcludeApps" autocomplete="off" />
+          </div>
+          <div id="style-learned"></div>
+          <div class="row">
+            <div class="label"><div class="desc">Forget everything Clicky has learned about your writing.</div></div>
+            <button type="button" class="secondary small" id="style-clear">Clear</button>
+          </div>
+        </div>
+        <h2>Your details (optional)</h2>
+        <p class="intro">These always win over what Clicky learned.</p>
         <div class="card">
           <div class="row">
             <div class="label"><div class="title">Your name</div></div>

@@ -4,6 +4,7 @@
  * the AI provider as part of the prompt, nowhere else.
  */
 
+import { learnedStyleText, type LearnedStyle } from './style.js';
 import type { AppInfo } from './write.js';
 
 export interface VoiceProfile {
@@ -55,7 +56,12 @@ export function activePlaybooks(list: readonly Playbook[], app: AppInfo | null):
 }
 
 /** The "About the user" block for prompts. Empty when there's nothing to say. */
-export function buildUserContext(profile: VoiceProfile, playbooks: readonly Playbook[], app: AppInfo | null): string {
+export function buildUserContext(
+  profile: VoiceProfile,
+  playbooks: readonly Playbook[],
+  app: AppInfo | null,
+  learned: LearnedStyle = {},
+): string {
   const lines: string[] = [];
   if (profile.name.trim()) lines.push(`Name: ${profile.name.trim().slice(0, 80)}`);
   if (profile.signOff.trim()) lines.push(`Signs emails as:\n${profile.signOff.trim().slice(0, 200)}`);
@@ -64,6 +70,9 @@ export function buildUserContext(profile: VoiceProfile, playbooks: readonly Play
     lines.push(
       `Examples of how they write (match this voice):\n"""\n${profile.samples.trim().slice(0, MAX_SAMPLES)}\n"""`,
     );
+  // What Clicky learned from their own writing; the fields above override it where they differ.
+  const style = learnedStyleText(learned, app);
+  if (style) lines.push(style);
   let budget = MAX_PLAYBOOKS_CHARS;
   for (const p of activePlaybooks(playbooks, app)) {
     const body = p.body.trim().slice(0, budget);

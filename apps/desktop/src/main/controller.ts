@@ -19,6 +19,8 @@ import { EngineHost } from './engine-host';
 import { InputHost } from './input-host';
 import { PlaybookStore } from './playbook-store';
 import { TaskStrip } from './task-strip';
+import { StyleStore } from './style-store';
+import { TaskQueue } from './task-queue';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -60,6 +62,13 @@ export class Controller {
   readonly local = { store: new ModelStore() };
   private readonly input: InputHost;
   readonly playbooks = new PlaybookStore();
+  readonly style = new StyleStore();
+  /** Background tasks: run one at a time while the user is away from the mouse. */
+  readonly tasks = new TaskQueue({
+    settings: () => this.settings.get(),
+    state: () => this.current.state,
+    ask: (q) => this.ask(q, 'action'),
+  });
   private anchorTimer: NodeJS.Timeout | null = null;
   private readonly strip = new TaskStrip({
     pause: (on) => this.engine.send({ type: 'agent.pause', on }),
@@ -92,8 +101,10 @@ export class Controller {
     credentials.onChange(push);
     history.onChange(push);
     this.playbooks.onChange(push);
+    this.style.onChange(push);
     this.pushConfig();
     this.engine.start();
+    this.tasks.start();
   }
 
   private config(): EngineConfig {
@@ -110,6 +121,7 @@ export class Controller {
       demo: DEMO,
       modelsDir: this.local.store.root,
       playbooks: this.playbooks.list(),
+      style: this.style.get(),
     };
   }
 
@@ -195,6 +207,9 @@ export class Controller {
       case 'foreground':
         void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
         return;
+      case 'styleLearned':
+        this.style.learn(msg.context, { notes: msg.notes, examples: msg.examples });
+        return;
       case 'agentSetup':
         this.hooks.needAgentSetup?.();
         return;
@@ -208,6 +223,7 @@ export class Controller {
         });
         return;
       case 'agentAsk':
+        if (msg.text) this.tasks.needsApproval(msg.text);
         if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
         return;
       case 'agentPaused':
@@ -349,6 +365,7 @@ export class Controller {
 
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
+    this.tasks.stop();
     this.engine.stop();
     this.strip.destroy();
     this.input.dispose();
