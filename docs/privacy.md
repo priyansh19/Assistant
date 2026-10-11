@@ -20,6 +20,14 @@ Clicky is a personal tool that calls AI providers directly with your own API key
 
 **Agent mode** (a question starting with "Agent") sends the answer model a new screenshot before each step, with the task and the steps taken so far, for up to 25 steps while the task runs. Clicky then clicks and types on this PC itself; nothing about those actions goes to any other service. **Dictation** sends your voice only to the speech-to-text service (or keeps it on the PC with on-device speech). The words are typed where your text cursor is, and nothing goes to the answer model or into history.
 
+**Write mode** (an instruction spoken with the dictation key, such as "reply to this") sends the answer model a screenshot, your instruction and any text you had selected. Clicky reads the selection by pressing Ctrl+C and then puts your clipboard back exactly as it was (it skips this in terminals). Clicky only types the result where your cursor is; it never sends or submits anything.
+
+**Writes like me** (style learning) learns how you write from text you wrote that is visible in write-mode screenshots, summarised by the answer model as part of those same requests, and from your plain dictation, kept as short examples. It is never collected in excluded apps (password managers by default), and you can view, edit or clear it in the dashboard.
+
+**Playbooks** you write are added to the prompt sent to the answer model, so it receives their text with each question.
+
+**OpenRouter** uses free models (names ending in `:free`) by default, and falls back to another free model in the list if one is busy. Free models on OpenRouter may be run by providers that log or train on prompts, including screenshots; pick a paid model in Settings if that matters for what is on your screen.
+
 Key checks in the dashboard call each provider's key or model endpoint; they send no screenshots or audio.
 
 ## What is stored on this PC
@@ -32,6 +40,8 @@ All under `%APPDATA%\Clicky\`:
 | `settings.json` | Your settings. No secrets. |
 | `history.json` | Text-only history: question, answer, what was pointed at, timing. Turn off with *Remember history*; clear from the History page. |
 | `actions.json` | Saved actions (name + question). |
+| `style.json` | What *Writes like me* has learned about your writing: a short text summary and a few example sentences. Clear it from the dashboard. |
+| `playbooks\` | Your playbooks, one text file each. |
 | `logs/clicky.log`, `logs/latency.jsonl` | Diagnostics and per-question timing per stage, plus which provider and model answered and, on failure, which stage and provider failed. Strings that look like API keys are masked. No audio, images, questions or answers are logged. |
 
 Screenshots and audio are never written to disk.
