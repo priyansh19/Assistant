@@ -63,7 +63,7 @@ export interface InputDriver {
   /** The window in front, as a handle for maximizeNew. */
   foregroundHandle(): Promise<string>;
   /** Wait up to `ms` for a different window to come to the front, then maximise it. */
-  maximizeNew(before: string, ms: number): Promise<void>;
+  maximizeNew(before: string, ms: number, procs?: string): Promise<void>;
   /** Ask a window to close, as its X button would (the app may ask to save first). */
   closeWindow(handle: string): Promise<void>;
   /** True if the keyboard layout types characters with AltGr (Right Alt). */

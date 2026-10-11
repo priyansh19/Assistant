@@ -353,3 +353,11 @@ describe('recovering within the run', () => {
     expect(f.questions[0]).toContain('Open windows (front first):\n- Untitled - Notepad — notepad');
   });
 });
+
+describe('apps are launched, not hunted for on the taskbar', () => {
+  it('turns a taskbar click on an installed app into an open', async () => {
+    const f = fakes(['{"action":"click","x":300,"y":980,"target":"Notepad icon on the taskbar"}']);
+    await runAgent('open notepad', { ...f.deps, inventory: { apps: ['Notepad', 'Note'], folders: [] } });
+    expect(f.inputs[0]).toEqual({ kind: 'open', app: 'Notepad' });
+  });
+});

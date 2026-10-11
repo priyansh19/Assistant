@@ -48,6 +48,9 @@ export function splitWake(text: string): { woke: boolean; rest: string } {
   let used = 0;
   if ((next === 'here' || next === 'y' || next === 'e') && soundsLikeName(one + next)) used = 2;
   else if (soundsLikeName(one)) used = 1;
+  // "Clicking. Open Calculator" / "Click, open…": the verb is the name when a pause follows it
+  // and a request comes after.
+  else if (/^click(?:ing|s)?$/i.test(letters(one)) && /[.,!:]$/.test(one) && tokens.length > i + 2) used = 1;
   if (!used) return { woke: false, rest: text.trim() };
   // The rest exactly as said: hyphens and spacing matter in file names and searches
   // ("clicky-shopping.txt", "lo-fi"). Found by the stress suite.

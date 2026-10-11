@@ -521,6 +521,28 @@ async function verify(
   }
 }
 
+/**
+ * Clicking an installed app on the taskbar or in the Start menu is slow and often misses (icons
+ * shift): launch it directly instead. Found by the live suite (D01: 28 steps of taskbar clicks).
+ */
+function viaOpen(a: AgentAction, apps: readonly string[] | undefined): AgentAction {
+  if ((a.type !== 'click' && a.type !== 'double_click') || !apps?.length) return a;
+  const t = a.target.toLowerCase();
+  if (!/taskbar|start menu|desktop icon|shortcut/.test(t)) return a;
+  const app = [...apps]
+    .sort((x, y) => y.length - x.length)
+    .find((n) => {
+      const name = n.toLowerCase();
+      if (name.length < 3) return false;
+      const at = t.indexOf(name);
+      if (at === -1) return false;
+      const before = t.charAt(at - 1);
+      const after = t.charAt(at + name.length);
+      return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
+    });
+  return app ? { type: 'open', app, url: '', path: '', say: a.say || `Opening ${app}`, risky: a.risky } : a;
+}
+
 /** Run the task to completion, failure, cancellation or the step limit. Throws StageError on provider failure. */
 export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResult> {
   const steps: string[] = [];
@@ -653,7 +675,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     }
     bad = 0;
     note = '';
-    const a = parsed.action;
+    const a = viaOpen(parsed.action, deps.inventory?.apps);
     // The per-step check: did the previous step do what it should have?
     const check = parseStepCheck(reply);
     const prev = checked[checked.length - 1];
@@ -802,7 +824,23 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (deps.signal.aborted) return stopped();
     scrolls = a.type === 'scroll' ? scrolls + 1 : scrolls;
     if (a.type === 'wait') await delay(a.ms);
-    else if (input) await deps.input.run(input, deps.signal);
+    else if (input) {
+      try {
+        await deps.input.run(input, deps.signal);
+      } catch (e) {
+        if (deps.signal.aborted) return stopped();
+        // Tell the model what went wrong and let it try another way.
+        const why = e instanceof Error ? e.message : String(e);
+        deps.log?.(`agent step failed: ${describe(a)}: ${why}`);
+        note = `That step failed: ${why}. Try a different way (check the exact name or path in the lists above).`;
+        steps.push(`(failed: ${describe(a)}: ${why.slice(0, 120)})`);
+        checked.push({ step: describe(a), ok: false });
+        failedChecks++;
+        if (failedChecks >= MAX_FAILED_CHECKS && !(await recover(`${failedChecks} steps in a row failed`)))
+          return { outcome: 'failed', summary: `I couldn't do that: ${why}`, steps, checked };
+        continue;
+      }
+    }
     steps.push(describe(a));
     checked.push({ step: describe(a), ok: null });
     await delay(deps.settleMs ?? 700);

@@ -4,6 +4,9 @@ import type { InputDriver } from '../platform/types';
 import { statSync } from 'node:fs';
 import { opensWithAnApp } from '../platform';
 
+/** Browser processes, to bring forward after opening a website in one. */
+const BROWSERS = 'comet,chrome,msedge,firefox,brave,opera,vivaldi,arc';
+
 const isFolder = (path: string): boolean => {
   try {
     return statSync(path).isDirectory();
@@ -64,7 +67,7 @@ export class InputHost {
       case 'open': {
         // Whatever opens is maximised once its window comes to the front (folders and files too).
         const before = await d.foregroundHandle().catch(() => '0');
-        const maximize = (): void => void d.maximizeNew(before, 2500).catch(() => undefined);
+        const maximize = (procs = ''): void => void d.maximizeNew(before, 3000, procs).catch(() => undefined);
         if (action.app) {
           const a = this.findApp(action.app);
           if (a) {
@@ -76,7 +79,8 @@ export class InputHost {
         // Websites open in the user's default browser (whatever Windows has set, e.g. Comet).
         if (action.url) {
           await shell.openExternal(action.url);
-          return maximize();
+          // A new tab in a browser that's already open: bring the browser to the front.
+          return maximize(BROWSERS);
         }
         if (action.path) {
           // A file no app opens (an .xlsx on a PC without Excel) would only bring up Windows'

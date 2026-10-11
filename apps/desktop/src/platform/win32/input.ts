@@ -143,19 +143,47 @@ public static class ClickyInput {
   }
   // After Clicky opens something: wait for a new window to come to the front, then maximise it so
   // the app fills the screen like the user expects (and the screenshots show all of it).
-  public static string MaximizeNew(long before, int ms) {
-    var end = DateTime.Now.AddMilliseconds(ms);
+  // Windows that were open before Clicky opened something (taken with the foreground handle).
+  static System.Collections.Generic.HashSet<long> before = new System.Collections.Generic.HashSet<long>();
+  static string ProcOf(IntPtr h) {
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    try { return System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { return ""; }
+  }
+  static bool Real(IntPtr h) {
+    if (!IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero || GetWindowTextLength(h) == 0) return false;
+    int c; if (DwmGetWindowAttribute(h, 14, out c, 4) == 0 && c != 0) return false;
+    return ProcOf(h) != "clicky";
+  }
+  // After Clicky opens something, make sure it ends up in front and fills the screen: the window
+  // that came to the front, or else a window that wasn't there before (Windows often opens new
+  // apps behind the one in front), or else, for a website, the browser window.
+  public static string MaximizeNew(long fg, int ms, string procs) {
+    var want = procs.Split(',');
+    var started = DateTime.Now;
+    var end = started.AddMilliseconds(ms);
     while (DateTime.Now < end) {
       IntPtr h = GetForegroundWindow();
-      if (h != IntPtr.Zero && h.ToInt64() != before) {
-        uint pid; GetWindowThreadProcessId(h, out pid);
-        string name = "";
-        try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { }
-        if (name != "clicky" && name != "explorer" || GetWindowTextLength(h) > 0) {
-          if (name == "clicky") { Thread.Sleep(100); continue; }
-          ShowWindow(h, 3);
-          return name;
-        }
+      if (h != IntPtr.Zero && h.ToInt64() != fg && Real(h)) { ShowWindow(h, 3); return ProcOf(h); }
+      double waited = (DateTime.Now - started).TotalMilliseconds;
+      IntPtr pick = IntPtr.Zero;
+      if (waited > 600) {
+        EnumWindows((w, l) => {
+          if (Real(w) && !before.Contains(w.ToInt64())) { pick = w; return false; }
+          return true;
+        }, IntPtr.Zero);
+      }
+      if (pick == IntPtr.Zero && waited > 1500 && procs.Length > 0) {
+        EnumWindows((w, l) => {
+          if (Real(w) && Array.IndexOf(want, ProcOf(w)) >= 0) { pick = w; return false; }
+          return true;
+        }, IntPtr.Zero);
+      }
+      if (pick != IntPtr.Zero) {
+        Grant();
+        ShowWindow(pick, IsIconic(pick) ? 9 : 5);
+        SetForegroundWindow(pick);
+        ShowWindow(pick, 3);
+        return ProcOf(pick);
       }
       Thread.Sleep(100);
     }
@@ -173,7 +201,11 @@ public static class ClickyInput {
     }
     return false;
   }
-  public static long ForegroundHandle() { return GetForegroundWindow().ToInt64(); }
+  public static long ForegroundHandle() {
+    before.Clear();
+    EnumWindows((w, l) => { before.Add(w.ToInt64()); return true; }, IntPtr.Zero);
+    return GetForegroundWindow().ToInt64();
+  }
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   public static void CloseWindow(long h) { PostMessage(new IntPtr(h), 0x0010, IntPtr.Zero, IntPtr.Zero); }
   public static string Foreground() {
@@ -325,7 +357,7 @@ while ($true) {
       'windows' { $out = [ClickyInput]::Windows() }
       'altgr'   { $out = [ClickyInput]::UsesAltGr() }
       'fgh'     { $out = [ClickyInput]::ForegroundHandle() }
-      'maxnew'  { $out = [ClickyInput]::MaximizeNew([long]$p[2], [int]$p[3]) }
+      'maxnew'  { $out = [ClickyInput]::MaximizeNew([long]$p[2], [int]$p[3], $(if ($p.Length -gt 4) { $p[4] } else { '' })) }
       'closewin' { [ClickyInput]::CloseWindow([long]$p[2]) }
       'folder' {
         $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))
@@ -508,8 +540,10 @@ export function createWin32InputDriver(): InputDriver {
         });
     },
     foregroundHandle: async () => (await send('fgh')).trim(),
-    maximizeNew: async (before, ms) =>
-      void (await send(`maxnew ${/^\d+$/.test(before) ? before : '0'} ${Math.max(200, Math.min(8000, int(ms)))}`)),
+    maximizeNew: async (before, ms, procs = '') =>
+      void (await send(
+        `maxnew ${/^\d+$/.test(before) ? before : '0'} ${Math.max(200, Math.min(8000, int(ms)))} ${procs.replace(/[^a-z0-9,]/gi, '')}`,
+      )),
     usesAltGr: async () => (await send('altgr')).trim().toLowerCase() === 'true',
     closeWindow: (handle) => done(send(`closewin ${/^\d+$/.test(handle) ? handle : '0'}`)),
     openFolder: (path) => done(send(`folder ${Buffer.from(path, 'utf8').toString('base64')}`)),

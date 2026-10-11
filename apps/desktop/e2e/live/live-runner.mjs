@@ -80,6 +80,16 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
   let answered = 0;
   const limit = (t.maxMinutes ?? 3) * 60_000;
   while (Date.now() - t0 < limit) {
+    if (!entry) {
+      // Out of time: stop the run with Esc so the next task starts clean, and keep its record.
+      say('timed out; pressing Esc');
+      ps('Invoke-Tap 0x1B');
+      for (let i = 0; i < 20 && !entry; i++) {
+        await wait(1000);
+        const h = history()[0];
+        if (h && h.id !== before && h.at >= t0 - 1000) entry = { ...h, outcome: 'timeout' };
+      }
+    }
     await wait(1500);
     const log = logFrom(offset);
     const asks = log.match(/asking to allow: .*/g) ?? [];
@@ -94,7 +104,7 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
       }
     }
     const h = history()[0];
-    if (h && h.id !== before && Date.now() - t0 > 3000) {
+    if (h && h.id !== before && h.at >= t0 - 1000) {
       entry = h;
       break;
     }
@@ -125,7 +135,7 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     seconds: Math.round((Date.now() - t0) / 1000),
   };
   r.checkOut = ps(t.check);
-  r.pass = !!entry && t.pass(r.checkOut, r);
+  r.pass = !!entry && entry.outcome !== 'timeout' && t.pass(r.checkOut, r);
   say(
     `${r.pass ? 'PASS' : 'FAIL'} ${t.id} in ${r.seconds}s | heard: ${r.heard} | said: ${r.answer.slice(0, 160)} | check: ${r.checkOut.slice(0, 120)}`,
   );
