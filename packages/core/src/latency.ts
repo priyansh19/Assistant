@@ -134,11 +134,13 @@ export class LatencyRecorder {
   summary(): LatencySummary {
     // A request sent before key-up (speculation) counts as 0 ms after key-up.
     const keyUpToRequest = this.span('keyUp', 'requestSent');
+    // Likewise a first token that arrived before the final transcript (speculation hit).
+    const firstToken = this.span('transcriptFinal', 'firstToken');
     return {
       interactionId: this.interactionId,
       recordingStartMs: this.span('keyDown', 'recordingStarted'),
       transcriptMs: this.span('keyUp', 'transcriptFinal'),
-      firstTokenMs: this.span('transcriptFinal', 'firstToken'),
+      firstTokenMs: firstToken === null ? null : Math.max(0, firstToken),
       tokenToAudioMs: this.span('firstToken', 'firstAudio'),
       keyUpToFirstAudioMs: this.span('keyUp', 'firstAudio'),
       keyUpToPointMs: this.span('keyUp', 'firstPoint'),

@@ -22,6 +22,7 @@ export interface ListenStageOptions {
   onSttReady?(): void;
   /** Interim transcript, for speculation and captions. */
   onPartial?(text: string): void;
+  now?(): number;
 }
 
 export class ListenStage {
@@ -32,6 +33,8 @@ export class ListenStage {
   readonly session: Promise<SttSession> | null;
   /** The latest interim transcript (empty until the STT service sends one). */
   partial = '';
+  /** When `partial` last changed. */
+  partialAt = 0;
 
   constructor(private readonly opts: ListenStageOptions) {
     const { signal } = opts;
@@ -60,6 +63,7 @@ export class ListenStage {
         for (const f of this.frames.splice(0)) session.pushAudio(f);
         this.ready = session;
         session.onPartial?.((text) => {
+          if (text !== this.partial) this.partialAt = (opts.now ?? (() => performance.now()))();
           this.partial = text;
           opts.onPartial?.(text);
         });

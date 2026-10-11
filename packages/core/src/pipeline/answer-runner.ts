@@ -12,7 +12,6 @@
 import { mapPointToDisplay } from '../coordinates.js';
 import type { MappedPoint } from '../coordinates.js';
 import { classifyFailure, StageError, type Stage } from '../errors.js';
-import type { LatencyRecorder } from '../latency.js';
 import type { PointTarget } from '../point-parser.js';
 import type { ScreenCapture } from '../ports.js';
 import { buildSystemPrompt } from '../prompt.js';
@@ -21,6 +20,8 @@ import type { SpeechFactory } from '../speech.js';
 import { answerEvents } from './answer-stage.js';
 import { withTimeout } from './budget.js';
 import { SpeechStage } from './speech-stage.js';
+import type { AnswerTrace } from './speculation.js';
+import { SentenceChunker } from '../sentence-chunker.js';
 
 /** Upper bound on playing one answer, so a stuck audio device can't hang the loop. */
 export const SPEAKING_TIMEOUT_MS = 120_000;
@@ -43,8 +44,34 @@ export interface AnswerRunInput {
   timeouts: AnswerRunTimeouts;
   signal: AbortSignal;
   now: () => number;
-  trace: LatencyRecorder;
+  trace: AnswerTrace;
   hooks: AnswerRunHooks;
+  /** Start speaking at the first clause (SentenceChunker eagerFirst). */
+  eagerFirstClause?: boolean;
+  /**
+   * Speculative run: the request goes out at once, but nothing is spoken or shown until this
+   * resolves true. On false the caller aborts `signal` and the run returns quietly.
+   */
+  confirm?: Promise<boolean>;
+  /** The prompt prefix was sent ahead with warmCache: mark it cacheable so this request reads it. */
+  cache?: boolean;
+}
+
+/**
+ * The system prompt for these screenshots. Shared with the cache warm-up, which must send a
+ * byte-identical prefix for the real request to hit the cache.
+ */
+export function answerSystemPrompt(screens: ScreenCapture, opts: { userContext?: string; audio?: unknown }): string {
+  return buildSystemPrompt({
+    screens: screens.images.map((img, i) => ({
+      index: i + 1,
+      imageWidth: img.width,
+      imageHeight: img.height,
+      hasCursor: i + 1 === screens.cursorScreen,
+    })),
+    ...(opts.userContext ? { userContext: opts.userContext } : {}),
+    ...(opts.audio ? { audioQuestion: true } : {}),
+  });
 }
 
 export interface AnswerRunHooks {
@@ -88,25 +115,25 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
     if (firstImage) trace.setMeta('imageEdge', Math.max(firstImage.width, firstImage.height));
 
     stage = 'answer';
-    const system = buildSystemPrompt({
-      screens: screens.images.map((img, i) => ({
-        index: i + 1,
-        imageWidth: img.width,
-        imageHeight: img.height,
-        hasCursor: i + 1 === screens.cursorScreen,
-      })),
-      ...(input.userContext ? { userContext: input.userContext } : {}),
-      ...(input.audio ? { audioQuestion: true } : {}),
-    });
+    const system = answerSystemPrompt(screens, input);
 
     const output = input.speech.create(signal);
-    const voice = new SpeechStage(output, { onFirstSpeech: () => trace.mark('firstSpeech') });
+    const voice = new SpeechStage(
+      output,
+      { onFirstSpeech: () => trace.mark('firstSpeech') },
+      new SentenceChunker({ eagerFirst: input.eagerFirstClause ?? false }),
+    );
     speech = voice;
     // Cancel must silence the voice at once, whatever the output implementation does with the signal.
     signal.addEventListener('abort', () => voice.stop(), { once: true });
     // A voice failure on the first sentence should surface now, not after the whole answer streams.
     output.done.catch((e: unknown) => {
       if (!signal.aborted) input.hooks.speechFailed(classifyFailure(e, 'speech'));
+    });
+    output.onSwitch?.((reason) => {
+      trace.setMeta('voiceFallback', true);
+      trace.event('speech', 'backup-voice', { reason });
+      input.hooks.log?.(`switched to the backup voice: ${reason}`);
     });
     output.onFirstAudio(() => {
       if (signal.aborted) return;
@@ -125,13 +152,27 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         ...(input.audio ? { audio: input.audio } : {}),
         maxTokens: input.maxTokens,
         signal,
+        ...(input.cache ? { cache: true } : {}),
       },
       firstTokenMs: input.timeouts.firstTokenMs,
       answerMs: input.timeouts.answerMs,
       now: input.now,
       onFirstToken: () => trace.mark('firstToken'),
     });
-    for await (const ev of events) {
+    const iterator = events[Symbol.asyncIterator]();
+    // The request goes out on the first pull; a speculative run then waits for the verdict while
+    // the answer streams in behind it.
+    let next = iterator.next();
+    if (input.confirm) {
+      next.catch(() => undefined);
+      const confirmed = await input.confirm;
+      if (!confirmed || signal.aborted) {
+        void iterator.return(undefined).catch(() => undefined);
+        return result;
+      }
+    }
+    for (let r = await next; !r.done; r = await (next = iterator.next())) {
+      const ev = r.value;
       if (signal.aborted) return result;
       if (ev.type === 'text') {
         result.answer += ev.text;

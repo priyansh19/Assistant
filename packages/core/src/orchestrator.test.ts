@@ -3,7 +3,14 @@ import type { DisplayGeometry } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import type { InteractionState } from './interaction.js';
 import { ConfigError } from './errors.js';
-import { MIC_TAIL_MS, MIN_HOLD_MS, Orchestrator, type OrchestratorDeps } from './orchestrator.js';
+import type { LatencySummary } from './latency.js';
+import {
+  MIC_TAIL_MS,
+  MIN_HOLD_MS,
+  Orchestrator,
+  WARM_CAPTURE_DELAY_MS,
+  type OrchestratorDeps,
+} from './orchestrator.js';
 import type { ScreenCapture } from './ports.js';
 import type { SttProvider, SttSession, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { SpeechFactory, SpeechOutput } from './speech.js';
@@ -320,5 +327,172 @@ describe('Orchestrator', () => {
     expect(t.speech.said.join(' ')).toBe('It is in File.');
     await tick();
     expect(t.history[0]).toMatchObject({ question: 'where is export?', outcome: 'answered' });
+  });
+
+  describe('speed features', () => {
+    /** STT whose interim transcript arrives as soon as the session opens; the final one takes a moment. */
+    function partialStt(partial: string, final: string): SttProvider {
+      return {
+        id: 'fake-stt',
+        async start() {
+          return {
+            pushAudio: () => undefined,
+            finish: () => new Promise<string>((r) => setTimeout(() => r(final), 20)),
+            onPartial: (fn) => fn(partial),
+            close: () => undefined,
+          };
+        },
+      };
+    }
+
+    function speedSetup(
+      partial: string,
+      final: string,
+      speed: NonNullable<OrchestratorDeps['speed']>,
+      chat = fakeChat(['It is in File. ']),
+    ) {
+      const latency: LatencySummary[] = [];
+      const t = setup({
+        stt: () => partialStt(partial, final),
+        chat: () => chat,
+        speed,
+        onLatency: (s) => latency.push(s),
+      });
+      return { ...t, chat, latency };
+    }
+
+    it('answers the interim transcript at key-up when the final one matches', async () => {
+      const t = speedSetup('where is the export button', 'Where is the export button?', () => ({ speculate: true }));
+      t.o.keyDown();
+      await tick();
+      t.advance(400);
+      t.o.keyUp();
+      expect(t.chat.requests).toHaveLength(0);
+      await tick();
+      // Sent before the final transcript arrived.
+      expect(t.chat.requests).toHaveLength(1);
+      expect(t.o.state).toBe('transcribing');
+      expect(t.speech.said).toEqual([]);
+      await settle(t.o);
+      expect(t.o.state).toBe('idle');
+      expect(t.chat.requests).toHaveLength(1);
+      expect(t.chat.requests[0]?.question).toBe('where is the export button');
+      expect(t.speech.said).toEqual(['It is in File.']);
+      await tick();
+      expect(t.latency[0]?.meta?.['speculation']).toBe('hit');
+      expect(t.history[0]).toMatchObject({ question: 'Where is the export button?', outcome: 'answered' });
+    });
+
+    it('discards the guess and asks again when the final transcript differs', async () => {
+      const t = speedSetup('where is the export', 'Where is the export menu?', () => ({ speculate: true }));
+      t.o.keyDown();
+      await tick();
+      t.advance(400);
+      t.o.keyUp();
+      await settle(t.o);
+      expect(t.o.state).toBe('idle');
+      expect(t.chat.requests.map((r) => r.question)).toEqual(['where is the export', 'Where is the export menu?']);
+      expect(t.chat.requests[0]?.signal.aborted).toBe(true);
+      expect(t.speech.said).toEqual(['It is in File.']);
+      await tick();
+      expect(t.latency[0]?.meta?.['speculation']).toBe('miss');
+    });
+
+    it('does not guess on an interim transcript that was still changing', async () => {
+      let emit: (text: string) => void = () => undefined;
+      const chat = fakeChat(['It is in File. ']);
+      const t = setup({
+        chat: () => chat,
+        speed: () => ({ speculate: true }),
+        stt: () => ({
+          id: 'fake-stt',
+          async start() {
+            return {
+              pushAudio: () => undefined,
+              finish: () => new Promise<string>((r) => setTimeout(() => r('Where is the export button?'), 20)),
+              onPartial: (fn: (text: string) => void) => {
+                emit = fn;
+                fn('where is the');
+              },
+              close: () => undefined,
+            };
+          },
+        }),
+      });
+      t.o.keyDown();
+      await tick();
+      t.advance(400);
+      emit('where is the export button'); // still talking right up to key-up
+      t.advance(50);
+      t.o.keyUp();
+      await tick();
+      expect(chat.requests).toHaveLength(0);
+      await settle(t.o);
+      expect(chat.requests).toHaveLength(1);
+    });
+
+    it('does nothing speculative when the setting is off', async () => {
+      const t = speedSetup('where is the export', 'Where is the export menu?', () => ({}));
+      t.o.keyDown();
+      await tick();
+      t.advance(400);
+      t.o.keyUp();
+      await tick();
+      expect(t.chat.requests).toHaveLength(0);
+      await settle(t.o);
+      expect(t.chat.requests).toHaveLength(1);
+    });
+
+    it('sends the screenshot ahead and answers with the same one, marked cacheable', async () => {
+      const chat = Object.assign(fakeChat(['It is in File. ']), {
+        warmed: [] as Array<{ system: string; images: number }>,
+        async warmCache(p: { system: string; images: readonly unknown[] }) {
+          chat.warmed.push({ system: p.system, images: p.images.length });
+        },
+      });
+      let takes = 0;
+      const t = setup({
+        chat: () => chat,
+        speed: () => ({ warmCache: true }),
+        capture: {
+          begin: () => undefined,
+          take: async () => {
+            takes++;
+            return screens;
+          },
+        },
+      });
+      t.o.keyDown();
+      await new Promise((r) => setTimeout(r, WARM_CAPTURE_DELAY_MS + 30));
+      expect(chat.warmed).toHaveLength(1);
+      t.advance(1000);
+      t.o.keyUp();
+      await settle(t.o);
+      expect(t.o.state).toBe('idle');
+      expect(takes).toBe(1);
+      expect(chat.requests[0]?.cache).toBe(true);
+      expect(chat.requests[0]?.system).toBe(chat.warmed[0]?.system);
+    });
+
+    it('never warms the cache on a quick tap', async () => {
+      const warm = vi.fn(async () => undefined);
+      const chat = Object.assign(fakeChat(['x']), { warmCache: warm });
+      const t = setup({ chat: () => chat, speed: () => ({ warmCache: true }) });
+      t.o.keyDown();
+      t.advance(100);
+      t.o.keyUp();
+      await new Promise((r) => setTimeout(r, WARM_CAPTURE_DELAY_MS + 30));
+      expect(warm).not.toHaveBeenCalled();
+    });
+
+    it('starts speaking at the first clause when asked to', async () => {
+      const chat = fakeChat(['Open the File menu, then ', 'click Export. ']);
+      const t = setup({ chat: () => chat, speed: () => ({ eagerFirstClause: true }) });
+      t.o.keyDown();
+      t.advance(1000);
+      t.o.keyUp();
+      await settle(t.o);
+      expect(t.speech.said).toEqual(['Open the File menu,', 'then click Export.']);
+    });
   });
 });

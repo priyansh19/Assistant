@@ -17,9 +17,10 @@ import { classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
 import { LatencyRecorder, type LatencySummary } from './latency.js';
-import { runAnswer, type AnswerRunResult } from './pipeline/answer-runner.js';
+import { answerSystemPrompt, runAnswer, type AnswerRunInput, type AnswerRunResult } from './pipeline/answer-runner.js';
 import { delay } from './pipeline/budget.js';
 import { ListenStage } from './pipeline/listen-stage.js';
+import { HeldTrace, sameQuestion, worthSpeculating, type AnswerTrace } from './pipeline/speculation.js';
 import type { CapturePort, MicPort, OverlayPort, ScreenCapture } from './ports.js';
 import type { ChatTurn, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { SpeechFactory } from './speech.js';
@@ -51,6 +52,17 @@ export interface OrchestratorDeps {
   maxTokens?: number;
   userContext?(): string | undefined;
   timeouts?: Partial<Timeouts>;
+  /** Speed features to use for the next question (architecture §7). All off when absent. */
+  speed?(): SpeedOptions;
+}
+
+export interface SpeedOptions {
+  /** Start speaking at the first clause. */
+  eagerFirstClause?: boolean;
+  /** Send the question at key-up on the interim transcript. */
+  speculate?: boolean;
+  /** Send the screenshot ahead while the key is held (providers with warmCache only). */
+  warmCache?: boolean;
 }
 
 export interface Timeouts {
@@ -76,7 +88,22 @@ const MIN_AUDIO_S = 0.3;
 /** Hold shorter than this is treated as an accidental tap. */
 export const MIN_HOLD_MS = 250;
 
+/**
+ * With cache warm-up, the screenshot is taken this long after key-down (after the tap threshold,
+ * so a tap never sends anything, and after the Clicky window has moved out of the shot).
+ */
+export const WARM_CAPTURE_DELAY_MS = 300;
+
 const NO_SPEECH = "I didn't catch that. Hold the key and try again.";
+
+/** An answer started on the interim transcript, waiting for the final one. */
+interface Speculation {
+  chat: VisionChatProvider;
+  speech: SpeechFactory;
+  result: Promise<AnswerRunResult>;
+  confirm(): void;
+  discard(): void;
+}
 
 interface Run {
   interaction: Interaction;
@@ -89,6 +116,13 @@ interface Run {
   listen: ListenStage | null;
   keyDownAt: number;
   finished: boolean;
+  /** Turns sent as context, fixed at key-down so a cache warm-up and the request match. */
+  history: ChatTurn[];
+  speed: SpeedOptions;
+  /** The screenshot taken during the press for the cache warm-up; used for the answer too. */
+  earlyScreens?: Promise<ScreenCapture>;
+  /** A warm-up request went out for this press. */
+  cacheWarmed: boolean;
   listenTimer?: ReturnType<typeof setTimeout>;
   result?: AskResult;
 }
@@ -131,6 +165,9 @@ export class Orchestrator {
       listen: null,
       keyDownAt: this.now(),
       finished: false,
+      history: this.deps.recentTurns(),
+      speed: this.deps.speed?.() ?? {},
+      cacheWarmed: false,
     };
     this.run = run;
     return run;
@@ -174,6 +211,7 @@ export class Orchestrator {
       },
       onRecording: () => run.latency.mark('recordingStarted'),
       onSttReady: () => run.latency.mark('sttReady'),
+      now: this.now,
     });
     try {
       this.deps.capture.begin(signal);
@@ -189,6 +227,48 @@ export class Orchestrator {
     } catch {
       // Missing config surfaces when the answer starts; don't fail while the user is talking.
     }
+    if (run.speed.warmCache && !run.listen.direct) this.warmCache(run);
+  }
+
+  /**
+   * Take the screenshot early and send it, with the system prompt and context, to the model's
+   * prompt cache while the user is still talking. The answer then uses the same screenshot, so
+   * its prefix matches byte for byte and the model skips re-reading the image.
+   */
+  private warmCache(run: Run): void {
+    let chat: VisionChatProvider;
+    try {
+      chat = this.deps.chat();
+    } catch {
+      return;
+    }
+    const warm = chat.warmCache?.bind(chat);
+    if (!warm) return;
+    const { signal } = run.interaction;
+    const screens = delay(WARM_CAPTURE_DELAY_MS).then(() => {
+      if (signal.aborted) throw new Error('cancelled');
+      return this.deps.capture.take(signal);
+    });
+    run.earlyScreens = screens;
+    screens.then(
+      (s) => {
+        if (signal.aborted || this.machine.state !== 'listening') return;
+        run.cacheWarmed = true;
+        run.latency.event('answer', 'cache-warm-sent');
+        const userContext = this.deps.userContext?.();
+        warm({
+          system: answerSystemPrompt(s, userContext ? { userContext } : {}),
+          history: run.history,
+          images: s.images,
+          signal,
+        })
+          .then(() => run.latency.event('answer', 'cache-warm-done'))
+          .catch((e: unknown) => {
+            if (!signal.aborted) this.deps.log?.(`cache warm-up failed: ${String(e)}`);
+          });
+      },
+      () => undefined,
+    );
   }
 
   /** Hold-to-talk key released. */
@@ -236,8 +316,17 @@ export class Orchestrator {
     const { signal } = run.interaction;
     const listen = run.listen;
     if (!listen) return;
-    const screens = this.deps.capture.take(signal);
+    // With a warm-up, the answer uses that screenshot (if taking it failed, take one now).
+    const screens = run.earlyScreens
+      ? run.earlyScreens.catch(() => this.deps.capture.take(signal))
+      : this.deps.capture.take(signal);
     screens.catch(() => undefined); // handled in answer()
+    // The interim transcript often already holds the whole question: start answering it now.
+    const partial = listen.partial;
+    const spec =
+      run.speed.speculate && !listen.direct && worthSpeculating(partial, this.now() - listen.partialAt)
+        ? this.speculate(run, screens, partial)
+        : null;
     // Let the last few frames through before stopping the mic and finalising the transcript.
     await delay(MIC_TAIL_MS);
     if (this.run === run) listen.stopMic();
@@ -257,12 +346,111 @@ export class Orchestrator {
     try {
       transcript = await listen.transcript(this.timeouts.transcriptMs);
     } catch (e) {
+      spec?.discard();
       if (!signal.aborted) this.fail(run, e, 'stt');
       return;
     }
-    if (signal.aborted) return;
+    if (signal.aborted) return spec?.discard();
     run.question = transcript.trim();
+    if (spec) {
+      const hit = sameQuestion(partial, transcript);
+      run.latency.setMeta('speculation', hit ? 'hit' : 'miss');
+      run.latency.event('answer', hit ? 'speculation-hit' : 'speculation-miss');
+      if (hit) return this.answer(run, screens, transcript, undefined, spec);
+      spec.discard();
+    }
     await this.answer(run, screens, transcript);
+  }
+
+  /**
+   * Start the answer on the interim transcript. Nothing is shown, spoken or traced until
+   * confirm(); discard() aborts the request.
+   */
+  private speculate(run: Run, screens: Promise<ScreenCapture>, question: string): Speculation | null {
+    let chat: VisionChatProvider;
+    let speech: SpeechFactory;
+    try {
+      chat = this.deps.chat();
+      speech = this.deps.speech();
+    } catch {
+      return null; // the real path reports the config problem
+    }
+    const { signal } = run.interaction;
+    const ac = new AbortController();
+    const follow = (): void => ac.abort();
+    signal.addEventListener('abort', follow, { once: true });
+    let verdict!: (ok: boolean) => void;
+    const confirm = new Promise<boolean>((resolve) => (verdict = resolve));
+    const trace = new HeldTrace(this.now);
+    const result = runAnswer(
+      this.answerInput(run, { chat, speech, screens, question, signal: ac.signal, trace, confirm }),
+    );
+    result.catch(() => undefined); // awaited in answer() on a hit
+    return {
+      chat,
+      speech,
+      result,
+      confirm: () => {
+        trace.commit(run.latency);
+        verdict(true);
+      },
+      discard: () => {
+        trace.drop();
+        signal.removeEventListener('abort', follow);
+        ac.abort();
+        verdict(false);
+      },
+    };
+  }
+
+  private answerInput(
+    run: Run,
+    p: {
+      chat: VisionChatProvider;
+      speech: SpeechFactory;
+      screens: Promise<ScreenCapture>;
+      question: string;
+      signal: AbortSignal;
+      trace: AnswerTrace;
+      audio?: VisionChatRequest['audio'];
+      confirm?: Promise<boolean>;
+    },
+  ): AnswerRunInput {
+    const userContext = this.deps.userContext?.();
+    return {
+      chat: p.chat,
+      speech: p.speech,
+      screens: p.screens,
+      question: p.question,
+      ...(p.audio ? { audio: p.audio } : {}),
+      history: run.history,
+      ...(userContext ? { userContext } : {}),
+      maxTokens: this.deps.maxTokens ?? 1500,
+      timeouts: this.timeouts,
+      signal: p.signal,
+      now: this.now,
+      trace: p.trace,
+      ...(run.speed.eagerFirstClause ? { eagerFirstClause: true } : {}),
+      ...(p.confirm ? { confirm: p.confirm } : {}),
+      ...(run.cacheWarmed ? { cache: true } : {}),
+      hooks: {
+        point: (target, label) => this.deps.overlay.point(target, label),
+        caption: (text) => {
+          run.answer = text;
+          this.deps.overlay.caption?.(text);
+        },
+        heard: (q) => {
+          if (!run.question) run.question = q;
+        },
+        firstAudio: () => {
+          if (this.run === run) this.machine.dispatch({ type: 'firstAudio' });
+        },
+        speechFailed: (e) => {
+          if (!run.finished) this.fail(run, e, 'speech');
+        },
+        ...(this.deps.log ? { log: this.deps.log } : {}),
+      },
+    };
   }
 
   private async answer(
@@ -270,27 +458,33 @@ export class Orchestrator {
     screens: Promise<ScreenCapture>,
     question: string,
     audio?: VisionChatRequest['audio'],
+    spec?: Speculation,
   ): Promise<void> {
     const { signal } = run.interaction;
-    if (signal.aborted) return;
+    if (signal.aborted) return spec?.discard();
     run.latency.mark('transcriptFinal');
     // With audio the question text comes back from the model ([HEARD:...]); the machine only needs non-empty.
     const t = this.machine.dispatch({ type: 'transcriptFinal', text: audio ? '(voice)' : question });
     if (!t || t.to !== 'thinking') {
       // Empty transcript → the machine cancelled. Tell the user why instead of silently resetting.
       if (t?.to === 'cancelled') this.deps.overlay.message(NO_SPEECH, 'info');
+      spec?.discard();
       this.finish(run, 'cancelled', 'no speech detected');
       return;
     }
 
     let chat: VisionChatProvider;
     let speech: SpeechFactory;
-    try {
-      chat = this.deps.chat();
-      speech = this.deps.speech();
-    } catch (e) {
-      this.fail(run, e, 'config');
-      return;
+    if (spec) {
+      ({ chat, speech } = spec);
+    } else {
+      try {
+        chat = this.deps.chat();
+        speech = this.deps.speech();
+      } catch (e) {
+        this.fail(run, e, 'config');
+        return;
+      }
     }
     run.latency.setMeta('chat', chat.id);
     if (chat.model) run.latency.setMeta('model', chat.model);
@@ -298,38 +492,22 @@ export class Orchestrator {
 
     let result: AnswerRunResult;
     try {
-      const userContext = this.deps.userContext?.();
-      result = await runAnswer({
-        chat,
-        speech,
-        screens,
-        question,
-        ...(audio ? { audio } : {}),
-        history: this.deps.recentTurns(),
-        ...(userContext ? { userContext } : {}),
-        maxTokens: this.deps.maxTokens ?? 1500,
-        timeouts: this.timeouts,
-        signal,
-        now: this.now,
-        trace: run.latency,
-        hooks: {
-          point: (target, label) => this.deps.overlay.point(target, label),
-          caption: (text) => {
-            run.answer = text;
-            this.deps.overlay.caption?.(text);
-          },
-          heard: (q) => {
-            if (!run.question) run.question = q;
-          },
-          firstAudio: () => {
-            if (this.run === run) this.machine.dispatch({ type: 'firstAudio' });
-          },
-          speechFailed: (e) => {
-            if (!run.finished) this.fail(run, e, 'speech');
-          },
-          ...(this.deps.log ? { log: this.deps.log } : {}),
-        },
-      });
+      if (spec) {
+        spec.confirm();
+        result = await spec.result;
+      } else {
+        result = await runAnswer(
+          this.answerInput(run, {
+            chat,
+            speech,
+            screens,
+            question,
+            signal,
+            trace: run.latency,
+            ...(audio ? { audio } : {}),
+          }),
+        );
+      }
     } catch (e) {
       // Anything unexpected must end in a visible error, never a stuck "thinking".
       if (!signal.aborted) this.fail(run, e, 'answer');

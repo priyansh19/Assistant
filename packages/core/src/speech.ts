@@ -17,6 +17,8 @@ export interface SpeechOutput {
   onFirstAudio(fn: () => void): void;
   /** Stop immediately (cancel). `done` then resolves. */
   stop(): void;
+  /** Called if the output gave up on its main voice and switched to a backup (see hedgedSpeech). */
+  onSwitch?(fn: (reason: string) => void): void;
 }
 
 export interface SpeechFactory {
@@ -114,4 +116,127 @@ export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): Speech
       };
     },
   };
+}
+
+/** How long the main voice gets to start playing after the first sentence, before the backup takes over. */
+export const BACKUP_VOICE_AFTER_MS = 1200;
+
+/**
+ * A voice with a backup (architecture §7). Sentences go to `primary`; if it hasn't started playing
+ * within `afterMs` of the first sentence, or fails before it starts, it is stopped and everything
+ * said so far goes to `backup` instead. Once the primary has started playing it is never switched,
+ * so the user never hears a sentence twice.
+ */
+export function hedgedSpeech(
+  primary: SpeechFactory,
+  backup: SpeechFactory,
+  afterMs = BACKUP_VOICE_AFTER_MS,
+): SpeechFactory {
+  return {
+    ...(primary.id ? { id: primary.id } : {}),
+    prewarm(signal) {
+      primary.prewarm?.(signal);
+      backup.prewarm?.(signal);
+    },
+    create(signal) {
+      const primaryAc = new AbortController();
+      const stopPrimary = (): void => primaryAc.abort();
+      signal.addEventListener('abort', stopPrimary, { once: true });
+      let active = primary.create(primaryAc.signal);
+      let switched = false;
+      let started = false;
+      let stopped = false;
+      let ended = false;
+      const said: string[] = [];
+      const firstAudio: Array<() => void> = [];
+      const switchListeners: Array<(reason: string) => void> = [];
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      let settle!: { resolve: () => void; reject: (e: unknown) => void };
+      const done = new Promise<void>((resolve, reject) => (settle = { resolve, reject }));
+
+      const audioStarted = (): void => {
+        if (started) return;
+        started = true;
+        clearTimeout(timer);
+        for (const fn of firstAudio.splice(0)) fn();
+      };
+
+      const follow = (out: SpeechOutput, isBackup: boolean): void => {
+        out.onFirstAudio(() => {
+          if (isBackup === switched && !stopped) audioStarted();
+        });
+        out.done.then(
+          () => {
+            if (isBackup === switched) settle.resolve();
+          },
+          (e: unknown) => {
+            if (isBackup !== switched) return;
+            if (!isBackup && !started && !stopped && !signal.aborted) useBackup(`main voice failed: ${errorText(e)}`);
+            else settle.reject(e);
+          },
+        );
+      };
+
+      const useBackup = (reason: string): void => {
+        if (switched || started || stopped || signal.aborted) return;
+        switched = true;
+        clearTimeout(timer);
+        signal.removeEventListener('abort', stopPrimary);
+        active.stop();
+        primaryAc.abort();
+        for (const fn of switchListeners) fn(reason);
+        active = backup.create(signal);
+        follow(active, true);
+        for (const s of said) active.say(s);
+        if (ended) active.end();
+      };
+
+      follow(active, false);
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer);
+          settle.resolve();
+        },
+        { once: true },
+      );
+
+      return {
+        say(sentence) {
+          if (stopped || ended || !sentence.trim()) return;
+          said.push(sentence);
+          if (said.length === 1 && !switched) {
+            timer = setTimeout(() => useBackup(`main voice silent after ${afterMs} ms`), afterMs);
+          }
+          active.say(sentence);
+        },
+        end() {
+          if (ended) return;
+          ended = true;
+          active.end();
+        },
+        done,
+        onFirstAudio(fn) {
+          if (started) fn();
+          else firstAudio.push(fn);
+        },
+        stop() {
+          if (stopped) return;
+          stopped = true;
+          clearTimeout(timer);
+          active.stop();
+          primaryAc.abort();
+          settle.resolve();
+        },
+        onSwitch(fn) {
+          switchListeners.push(fn);
+        },
+      };
+    },
+  };
+}
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }

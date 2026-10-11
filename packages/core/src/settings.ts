@@ -86,6 +86,19 @@ export interface Settings {
   cursorSize: CursorSize;
   /** Show the label bubble when Clicky points at something. */
   showPointLabels: boolean;
+  /**
+   * Speed features (architecture §7). Each can be turned off to compare its effect in the trace.
+   * Start speaking at the first clause instead of the first full sentence.
+   */
+  eagerFirstClause: boolean;
+  /** Send the question at key-up from the interim transcript; discarded if the final one differs. */
+  speculativeAnswer: boolean;
+  /** Upload the screenshot while the key is held so the model has it cached at key-up (Anthropic). */
+  warmImageCache: boolean;
+  /** Keep one streaming connection to the voice service for the whole answer (ElevenLabs). */
+  streamingVoice: boolean;
+  /** Switch to the Windows voice if the cloud voice has not started after a moment. */
+  backupVoice: boolean;
   /** Hold-to-talk is ignored while paused (tray toggle). */
   paused: boolean;
   /** The first-run setup wizard has been completed or skipped. */
@@ -112,6 +125,11 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   cursorColor: 'blue',
   cursorSize: 'medium',
   showPointLabels: true,
+  eagerFirstClause: true,
+  speculativeAnswer: true,
+  warmImageCache: true,
+  streamingVoice: true,
+  backupVoice: true,
   paused: false,
   onboardingDone: false,
 });
@@ -170,6 +188,11 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     cursorColor: oneOf(CURSOR_COLORS, o['cursorColor'], base.cursorColor),
     cursorSize: oneOf(CURSOR_SIZES, o['cursorSize'], base.cursorSize),
     showPointLabels: bool(o['showPointLabels'], base.showPointLabels),
+    eagerFirstClause: bool(o['eagerFirstClause'], base.eagerFirstClause),
+    speculativeAnswer: bool(o['speculativeAnswer'], base.speculativeAnswer),
+    warmImageCache: bool(o['warmImageCache'], base.warmImageCache),
+    streamingVoice: bool(o['streamingVoice'], base.streamingVoice),
+    backupVoice: bool(o['backupVoice'], base.backupVoice),
     paused: bool(o['paused'], base.paused),
     onboardingDone: bool(o['onboardingDone'], base.onboardingDone),
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SentenceChunker } from './sentence-chunker.js';
+import { eagerCut, SentenceChunker } from './sentence-chunker.js';
 
 function chunk(parts: string[]): string[] {
   const c = new SentenceChunker();
@@ -46,5 +46,56 @@ describe('SentenceChunker', () => {
 
   it('returns nothing for empty input', () => {
     expect(chunk(['', '   '])).toEqual([]);
+  });
+
+  describe('eagerFirst', () => {
+    const eager = (parts: string[]): string[] => {
+      const c = new SentenceChunker({ eagerFirst: true });
+      return parts.flatMap((p) => c.push(p)).concat(c.end());
+    };
+
+    it('ends the first chunk at a clause break once it has a few words', () => {
+      const c = new SentenceChunker({ eagerFirst: true });
+      expect(c.push('Open the File menu,')).toEqual([]);
+      expect(c.push(' then')).toEqual(['Open the File menu,']);
+    });
+
+    it('does not cut a clause that is too short', () => {
+      expect(eager(['So, open the File menu and choose Export. '])).toEqual([
+        'So, open the File menu and choose Export.',
+      ]);
+    });
+
+    it('cuts after a few words when there is no break yet', () => {
+      const c = new SentenceChunker({ eagerFirst: true });
+      expect(c.push('Click the blue button in the top right corner of')).toEqual([
+        'Click the blue button in the top right',
+      ]);
+    });
+
+    it('lets a sentence end that comes first win', () => {
+      expect(eager(['Yes. That is the Export button, on the right.'])).toEqual([
+        'Yes.',
+        'That is the Export button, on the right.',
+      ]);
+    });
+
+    it('only applies to the first chunk', () => {
+      expect(
+        eager(['Open the File menu, then choose Export. After that, pick the PDF format, and press the Save button. ']),
+      ).toEqual([
+        'Open the File menu,',
+        'then choose Export. After that, pick the PDF format, and press the Save button.',
+      ]);
+    });
+
+    it('does not cut inside numbers or hyphenated words', () => {
+      expect(eagerCut('It costs 3,000 euros')).toBe(0);
+      expect(eagerCut('A well-known fact')).toBe(0);
+    });
+
+    it('handles a break split across stream pieces', () => {
+      expect(eager(['Open the File', ' menu', ',', ' then Export.'])).toEqual(['Open the File menu,', 'then Export.']);
+    });
   });
 });
