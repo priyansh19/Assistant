@@ -506,3 +506,49 @@ describe('pcmToWav', () => {
     expect(wav.length).toBe(48);
   });
 });
+
+describe('OpenRouter free defaults', () => {
+  const capture = () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    };
+    return { bodies, fetchImpl };
+  };
+  const req = (audio = false) => ({
+    system: 's',
+    history: [],
+    question: 'q',
+    images: [],
+    maxTokens: 10,
+    signal: new AbortController().signal,
+    ...(audio ? { audio: { data: new Uint8Array([1]), format: 'wav' as const } } : {}),
+  });
+  const drain = async (it: AsyncIterable<string>) => {
+    for await (const _ of it) void _;
+  };
+
+  it('sends at most three free models, primary first, and none when a model is chosen', async () => {
+    const c = capture();
+    const free = createChat({ ...DEFAULT_SETTINGS, chatProvider: 'openrouter' }, () => 'sk-or-test', c.fetchImpl);
+    await drain(free.stream(req()));
+    await drain(free.stream(req(true)));
+    const [vision, listen] = c.bodies;
+    expect((vision?.['models'] as string[]).length).toBeLessThanOrEqual(3);
+    expect(vision?.['model']).toBe((vision?.['models'] as string[])[0]);
+    expect((vision?.['models'] as string[]).every((m) => m.endsWith(':free'))).toBe(true);
+    expect((listen?.['models'] as string[]).length).toBeLessThanOrEqual(3);
+    const paid = createChat(
+      { ...DEFAULT_SETTINGS, chatProvider: 'openrouter', chatModel: 'anthropic/claude-sonnet' },
+      () => 'sk-or-test',
+      c.fetchImpl,
+    );
+    await drain(paid.stream(req()));
+    expect(c.bodies[2]?.['models']).toBeUndefined();
+    expect(c.bodies[2]?.['model']).toBe('anthropic/claude-sonnet');
+  });
+});

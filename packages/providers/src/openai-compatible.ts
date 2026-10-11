@@ -19,6 +19,8 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-4.1-mini';
  * when the user types one into the model setting.
  */
 export const OPENROUTER_DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free';
+/** OpenRouter rejects a fallback list longer than this. */
+export const OPENROUTER_MAX_MODELS = 3;
 export const OPENROUTER_FREE_FALLBACKS = [
   'google/gemma-4-31b-it:free',
   'thinkingmachines/inkling-small:free',
@@ -69,9 +71,11 @@ export class OpenAICompatibleChat implements VisionChatProvider {
         ? OPENROUTER_FREE_LISTEN_MODELS
         : [OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FREE_FALLBACKS]
       : null;
+    // OpenRouter accepts at most three models in a fallback list.
+    const models = free?.slice(0, OPENROUTER_MAX_MODELS);
     const body = {
-      model: free?.[0] ?? this.model,
-      ...(free ? { models: free } : {}),
+      model: models?.[0] ?? this.model,
+      ...(models ? { models } : {}),
       stream: true,
       // OpenAI's newer models only accept max_completion_tokens; OpenRouter uses max_tokens.
       ...(this.id === 'openai' ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
