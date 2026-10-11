@@ -17,6 +17,8 @@ import type { CredentialStore } from './credential-store';
 import type { HistoryStore } from './history-store';
 import { log, redact } from './log';
 import type { SettingsStore } from './settings-store';
+import { STT_MODELS, VOICES } from './local-speech/catalog';
+import { openWhisprRunning } from './local-speech/providers';
 import type { WorkerHost } from './worker-host';
 
 /** Sites the dashboard may open in the browser (API key pages). */
@@ -192,6 +194,19 @@ export class DashboardWindow {
       );
     });
     handle(IPC.dashDiagnostics, () => this.diagnostics());
+    handle(IPC.dashLocalDownload, async (id): Promise<TestResult> => {
+      if (typeof id !== 'string') return { ok: false, message: 'Unknown model.' };
+      try {
+        await this.controller.local.store.download(id);
+        this.controller.prewarm();
+        return { ok: true, message: 'Downloaded.' };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    });
+    handle(IPC.dashLocalRemove, (id) => {
+      if (typeof id === 'string') this.controller.local.store.remove(id);
+    });
     handle(IPC.dashOpenLogs, () => void shell.openPath(join(app.getPath('userData'), 'logs')));
     handle(IPC.dashHistoryRemove, (id) => {
       if (typeof id === 'string') this.history.remove(id);
@@ -234,6 +249,8 @@ export class DashboardWindow {
     this.history.onChange(push);
     this.settings.onChange(push);
     this.credentials.onChange(push);
+    // Download progress: throttled by the store (4/s).
+    this.controller.local.store.onChange(push);
     this.controller.onState(push);
   }
 
@@ -388,6 +405,22 @@ export class DashboardWindow {
       encryptionAvailable: this.credentials.encryptionAvailable,
       appVersion: app.getVersion(),
       defaultModel: defaultChatModel(s.chatProvider),
+      local: {
+        models: [...STT_MODELS, ...VOICES].map((m) => {
+          const st = this.controller.local.store.state(m.id);
+          return {
+            id: m.id,
+            kind: m.kind,
+            name: m.name,
+            desc: m.desc,
+            sizeMb: m.sizeMb,
+            installed: this.controller.local.store.isInstalled(m),
+            ...(st && !st.error ? { progress: st.progress } : {}),
+            ...(st?.error ? { error: st.error } : {}),
+          };
+        }),
+        openWhispr: openWhisprRunning(),
+      },
       state: this.controller.orchestrator.state,
       missing: this.controller.missingKeys(s),
       stats: this.history.stats(),

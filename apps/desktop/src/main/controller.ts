@@ -20,6 +20,9 @@ import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './ports';
 import type { SettingsStore } from './settings-store';
+import { LocalSpeechEngine } from './local-speech/engine';
+import { localStt, localTts } from './local-speech/providers';
+import { ModelStore } from './local-speech/store';
 import type { WorkerHost } from './worker-host';
 
 type StateListener = (state: InteractionState) => void;
@@ -40,6 +43,11 @@ export class Controller {
   /** While set (setup wizard "press your key"), key presses are reported here instead of asking. */
   private keyTest: ((down: boolean) => void) | null = null;
   hooks: ControllerHooks = {};
+  /** On-device speech models (download store + engine). */
+  readonly local = (() => {
+    const store = new ModelStore();
+    return { store, engine: new LocalSpeechEngine(store) };
+  })();
 
   constructor(
     private readonly platform: Platform,
@@ -51,12 +59,25 @@ export class Controller {
   ) {
     const getKey = (id: CredentialId): string | null => this.credentials.get(id);
     this.speechFactory = (): SpeechFactory => {
-      const tts = DEMO ? null : createTts(this.settings.get(), getKey);
+      const s = this.settings.get();
+      if (s.ttsProvider === 'local') {
+        return cloudSpeech(
+          localTts(this.local.engine, this.local.store, () => this.settings.get()),
+          () => createAudioSink(this.worker),
+        );
+      }
+      const tts = DEMO ? null : createTts(s, getKey);
       return tts ? cloudSpeech(tts, () => createAudioSink(this.worker)) : systemSpeech(this.worker);
     };
     this.orchestrator = new Orchestrator({
       chat: () => (DEMO ? demoChat() : createChat(this.settings.get(), getKey)),
-      stt: () => (DEMO ? demoStt() : createStt(this.settings.get(), getKey)),
+      // Demo mode swaps out cloud services only; on-device speech is real either way.
+      stt: () =>
+        this.settings.get().sttProvider === 'local'
+          ? localStt(this.local.engine, () => this.settings.get().localSttModel)
+          : DEMO
+            ? demoStt()
+            : createStt(this.settings.get(), getKey),
       speech: () => this.speechFactory(),
       capture: createCapturePort(this.worker, () => this.settings.get()),
       mic: createMicPort(
@@ -96,7 +117,12 @@ export class Controller {
 
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   prewarm(): void {
-    if (DEMO || this.missingKeys().length) return;
+    const s = this.settings.get();
+    // On-device models need no key: warm them even before keys are entered.
+    if (s.sttProvider === 'local') localStt(this.local.engine, () => s.localSttModel).prewarm?.();
+    if (s.ttsProvider === 'local')
+      void localTts(this.local.engine, this.local.store, () => s).prewarm?.(new AbortController().signal);
+    if (DEMO || this.missingKeys().length || s.sttProvider === 'local' || s.sttProvider === 'model') return;
     try {
       createStt(this.settings.get(), (id) => this.credentials.get(id)).prewarm?.();
     } catch {

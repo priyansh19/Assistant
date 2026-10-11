@@ -12,6 +12,8 @@ files:
   - package.json
 asarUnpack:
   - '**/*.node'
+  # The local speech engine loads its DLLs from its own folder.
+  - '**/node_modules/sherpa-onnx-win-x64/**'
 win:
   target: nsis
   icon: resources/icon.png
