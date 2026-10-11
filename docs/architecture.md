@@ -176,7 +176,7 @@ Every event carries the interaction id, stage, a monotonic timestamp from the en
 Each step is one PR, keeps the app working, and is measured with the trace from step 1.
 
 1. **Trace and typed errors** (landed). Event log, `StageError`, provider error classifiers, latency table in the dashboard. No behaviour change; this produces the real "before" numbers.
-2. **Pipeline stages.** Split the orchestrator into stages and a runner in `core`, with the existing behaviour and tests carried over. Still in main.
+2. **Pipeline stages** (landed). Split the orchestrator into stages and a runner in `core`, with the existing behaviour and tests carried over. Still in main.
 3. **Engine process and direct ports.** Move the runner, providers and hold-key hook into a `utilityProcess`; wire media and overlay ports. Needs laptop verification of the hook.
 4. **Speed features.** Persistent TTS socket, eager first clause, image cache warm-up, speculative answer start, hedged fallback. Each behind a setting so its effect shows up in the trace on its own.
 

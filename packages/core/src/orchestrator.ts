@@ -1,64 +1,28 @@
 /**
- * The interaction loop (plan §3.3), written against ports so it runs the same in the app and in
- * tests with fakes:
+ * The interaction loop (plan §3.3, architecture §6), written against ports so it runs the same
+ * in the app and in tests with fakes. The work itself happens in pipeline stages; this class
+ * maps key presses and commands onto the state machine and starts or cancels those stages:
  *
- *   key down  → listening: start capture stream, open STT, start mic, pre-warm chat + TTS
- *   key up    → transcribing: stop mic, grab the frame, force-finalise the transcript
- *   transcript→ thinking: stream the answer; POINT tag moves the cursor, sentences go to TTS
+ *   key down  → listening: ListenStage (mic + STT), capture begins, chat + voice pre-warm
+ *   key up    → transcribing: stop the mic, grab the frame, force-finalise the transcript
+ *   transcript→ thinking: runAnswer (POINT moves the cursor, text streams into the voice)
  *   first audio → speaking … playback done → idle
  *
- * Every step is tied to the interaction's AbortSignal, so cancel/interrupt stops everything and
+ * Every stage is tied to the interaction's AbortSignal, so cancel/interrupt stops everything and
  * nothing late from an old interaction can touch the new one.
  */
 
-import { HeardTagFilter, joinFrames, pcmToWav } from './audio.js';
-import { classifyFailure, StageError, StageTimeoutError, userMessage, type Stage } from './errors.js';
-import { mapPointToDisplay, type CaptureGeometry, type MappedPoint } from './coordinates.js';
+import { pcmToWav } from './audio.js';
+import { classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
 import { LatencyRecorder, type LatencySummary } from './latency.js';
-import { PointStreamParser, type PointTarget } from './point-parser.js';
-import { buildSystemPrompt } from './prompt.js';
-import type {
-  ChatTurn,
-  ImageInput,
-  SttProvider,
-  SttSession,
-  VisionChatProvider,
-  VisionChatRequest,
-} from './providers.js';
-import { SentenceChunker } from './sentence-chunker.js';
-import type { SpeechFactory, SpeechOutput } from './speech.js';
-
-export interface ScreenCapture {
-  /** images[i] is screen i+1 in the prompt. */
-  images: ImageInput[];
-  geometry: CaptureGeometry[];
-  /** 1-based index of the screen with the cursor. */
-  cursorScreen: number;
-}
-
-export interface CapturePort {
-  /** Key down: start capturing (open the stream) so a frame is ready at key up. */
-  begin(signal: AbortSignal): void;
-  /** Return the latest frame(s). Must work even if `begin` wasn't called (typed questions). */
-  take(signal: AbortSignal): Promise<ScreenCapture>;
-}
-
-export interface MicPort {
-  /** Start the microphone; frames are 16 kHz mono PCM16. Resolves once recording has started. */
-  start(onFrame: (frame: Int16Array) => void, signal: AbortSignal, onError?: (e: Error) => void): Promise<void>;
-  stop(): void;
-}
-
-export interface OverlayPort {
-  state(state: InteractionState): void;
-  point(target: MappedPoint, label: string): void;
-  /** A short message near the cursor, e.g. an error the user can act on. */
-  message(text: string, kind: 'error' | 'info'): void;
-  /** Live caption of the answer as it streams (optional UI). */
-  caption?(text: string): void;
-}
+import { runAnswer, type AnswerRunResult } from './pipeline/answer-runner.js';
+import { delay } from './pipeline/budget.js';
+import { ListenStage } from './pipeline/listen-stage.js';
+import type { CapturePort, MicPort, OverlayPort, ScreenCapture } from './ports.js';
+import type { ChatTurn, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
+import type { SpeechFactory } from './speech.js';
 
 /** How a typed question or action ended, for UI that waits on it. */
 export interface AskResult {
@@ -100,9 +64,6 @@ export interface Timeouts {
 
 const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, answerMs: 90000 };
 
-/** Upper bound on playing one answer, so a stuck audio device can't hang the loop. */
-const SPEAKING_TIMEOUT_MS = 120_000;
-
 /** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
 export const MIC_TAIL_MS = 80;
 
@@ -115,29 +76,7 @@ const MIN_AUDIO_S = 0.3;
 /** Hold shorter than this is treated as an accidental tap. */
 export const MIN_HOLD_MS = 250;
 
-function withTimeout<T>(p: Promise<T>, ms: number, stage: Stage, what: string, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new StageTimeoutError(stage, what)), ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
-    };
-    if (signal.aborted) return onAbort();
-    signal.addEventListener('abort', onAbort, { once: true });
-    p.then(
-      (v) => {
-        clearTimeout(t);
-        signal.removeEventListener('abort', onAbort);
-        resolve(v);
-      },
-      (e: unknown) => {
-        clearTimeout(t);
-        signal.removeEventListener('abort', onAbort);
-        reject(e);
-      },
-    );
-  });
-}
+const NO_SPEECH = "I didn't catch that. Hold the key and try again.";
 
 interface Run {
   interaction: Interaction;
@@ -146,15 +85,12 @@ interface Run {
   question: string;
   answer: string;
   pointLabel: string | null;
-  sttSession: Promise<SttSession> | null;
-  micFrames: Int16Array[];
-  speech: SpeechOutput | null;
+  /** Voice questions only. */
+  listen: ListenStage | null;
   keyDownAt: number;
   finished: boolean;
   listenTimer?: ReturnType<typeof setTimeout>;
   result?: AskResult;
-  /** Only runs that started the mic may stop it (typed questions never touch it). */
-  usedMic: boolean;
 }
 
 export class Orchestrator {
@@ -181,29 +117,32 @@ export class Orchestrator {
     return this.machine.state;
   }
 
+  private newRun(interaction: Interaction, source: HistoryEntry['source'], question: string): Run {
+    const latency = new LatencyRecorder(interaction.id, this.now);
+    latency.mark('keyDown');
+    latency.setMeta('source', source);
+    const run: Run = {
+      interaction,
+      latency,
+      source,
+      question,
+      answer: '',
+      pointLabel: null,
+      listen: null,
+      keyDownAt: this.now(),
+      finished: false,
+    };
+    this.run = run;
+    return run;
+  }
+
   /** Hold-to-talk key pressed. */
   keyDown(): void {
     const t = this.machine.dispatch({ type: 'keyDown' });
     if (!t) return;
     const interaction = this.machine.interaction;
     if (!interaction) return;
-    const latency = new LatencyRecorder(interaction.id, this.now);
-    latency.mark('keyDown');
-    const run: Run = {
-      interaction,
-      latency,
-      source: 'voice',
-      question: '',
-      answer: '',
-      pointLabel: null,
-      sttSession: null,
-      micFrames: [],
-      speech: null,
-      keyDownAt: this.now(),
-      finished: false,
-      usedMic: true,
-    };
-    this.run = run;
+    const run = this.newRun(interaction, 'voice', '');
     const { signal } = interaction;
     run.listenTimer = setTimeout(() => {
       if (this.run === run && this.machine.state === 'listening') {
@@ -212,60 +151,40 @@ export class Orchestrator {
       }
     }, MAX_LISTEN_MS);
 
-    // Everything here runs in parallel while the user is still talking. The mic goes first: every
-    // millisecond before it starts is speech lost.
-    let ready: SttSession | null = null;
-    this.deps.mic
-      .start(
-        (frame) => {
-          if (signal.aborted) return;
-          if (ready) ready.pushAudio(frame);
-          else run.micFrames.push(frame);
-        },
-        signal,
-        (e) => {
-          if (!signal.aborted && (this.machine.state === 'listening' || this.machine.state === 'transcribing'))
-            this.fail(run, e, 'mic');
-        },
-      )
-      .then(
-        () => latency.mark('recordingStarted'),
-        (e: unknown) => {
-          if (!signal.aborted) this.fail(run, e, 'mic');
-        },
-      );
-    // Listening directly: frames just accumulate and go to the answer model with the screenshot.
-    const direct = this.deps.listensDirectly?.() ?? false;
+    // Everything here runs in parallel while the user is still talking. Listening directly: frames
+    // just accumulate and go to the answer model with the screenshot.
     let stt: SttProvider | null = null;
-    if (!direct) {
+    if (!(this.deps.listensDirectly?.() ?? false)) {
       try {
         stt = this.deps.stt();
-        latency.setMeta('stt', stt.id);
+        run.latency.setMeta('stt', stt.id);
       } catch (e) {
         this.fail(run, e, 'stt');
         return;
       }
     }
-    if (stt) run.sttSession = stt.start({ sampleRate: 16000, signal });
-    run.sttSession?.then(
-      (session) => {
-        // Flush audio recorded before the connection was ready, then stream directly.
-        for (const f of run.micFrames.splice(0)) session.pushAudio(f);
-        ready = session;
-        latency.mark('sttReady');
+    run.listen = new ListenStage({
+      mic: this.deps.mic,
+      stt,
+      signal,
+      onError: (e, stage) => {
+        // Only while the recording matters; a mic hiccup during playback is not a failure.
+        if (stage === 'mic' && this.machine.state !== 'listening' && this.machine.state !== 'transcribing') return;
+        this.fail(run, e, stage);
       },
-      (e: unknown) => {
-        if (!signal.aborted) this.fail(run, e, 'stt');
-      },
-    );
+      onRecording: () => run.latency.mark('recordingStarted'),
+      onSttReady: () => run.latency.mark('sttReady'),
+    });
     try {
       this.deps.capture.begin(signal);
     } catch (e) {
       this.deps.log?.(`capture begin failed: ${String(e)}`);
     }
     try {
-      const chat = this.deps.chat();
-      void chat.prewarm?.(signal).catch(() => undefined);
+      void this.deps
+        .chat()
+        .prewarm?.(signal)
+        .catch(() => undefined);
       this.deps.speech().prewarm?.(signal);
     } catch {
       // Missing config surfaces when the answer starts; don't fail while the user is talking.
@@ -304,24 +223,8 @@ export class Orchestrator {
     this.machine.dispatch({ type: 'keyDown' });
     const interaction = this.machine.interaction;
     if (!interaction) return null;
-    const latency = new LatencyRecorder(interaction.id, this.now);
-    latency.mark('keyDown');
-    const run: Run = {
-      interaction,
-      latency,
-      source,
-      question: q,
-      answer: '',
-      pointLabel: null,
-      sttSession: null,
-      micFrames: [],
-      speech: null,
-      keyDownAt: this.now(),
-      finished: false,
-      usedMic: false,
-    };
-    this.run = run;
-    latency.mark('keyUp');
+    const run = this.newRun(interaction, source, q);
+    run.latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
     const screens = this.deps.capture.take(interaction.signal);
     screens.catch(() => undefined); // handled (or deliberately dropped) in answer()
@@ -331,35 +234,28 @@ export class Orchestrator {
 
   private async afterKeyUp(run: Run): Promise<void> {
     const { signal } = run.interaction;
+    const listen = run.listen;
+    if (!listen) return;
     const screens = this.deps.capture.take(signal);
     screens.catch(() => undefined); // handled in answer()
     // Let the last few frames through before stopping the mic and finalising the transcript.
-    await new Promise((r) => setTimeout(r, MIC_TAIL_MS));
-    if (this.run === run) this.deps.mic.stop();
+    await delay(MIC_TAIL_MS);
+    if (this.run === run) listen.stopMic();
     if (signal.aborted) return;
-    if (!run.sttSession) {
+    if (listen.direct) {
       // The model listens: hand it the recording (16 kHz mono WAV, small enough to upload instantly).
-      const pcm = joinFrames(run.micFrames.splice(0));
+      const pcm = listen.takeRecording();
       if (pcm.length < 16000 * MIN_AUDIO_S) {
-        this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
+        this.deps.overlay.message(NO_SPEECH, 'info');
         this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
         return;
       }
-      run.latency.mark('transcriptFinal');
       await this.answer(run, screens, '', { data: pcmToWav(pcm, 16000), format: 'wav' });
       return;
     }
     let transcript: string;
     try {
-      if (!run.sttSession) throw new Error('speech-to-text did not start');
-      const session = await withTimeout(
-        run.sttSession,
-        this.timeouts.transcriptMs,
-        'stt',
-        'speech recognition',
-        signal,
-      );
-      transcript = await withTimeout(session.finish(), this.timeouts.transcriptMs, 'stt', 'speech recognition', signal);
+      transcript = await listen.transcript(this.timeouts.transcriptMs);
     } catch (e) {
       if (!signal.aborted) this.fail(run, e, 'stt');
       return;
@@ -371,22 +267,7 @@ export class Orchestrator {
 
   private async answer(
     run: Run,
-    screensP: Promise<ScreenCapture>,
-    question: string,
-    audio?: VisionChatRequest['audio'],
-  ): Promise<void> {
-    try {
-      await this.answerInner(run, screensP, question, audio);
-    } catch (e) {
-      // Anything unexpected must end in a visible error, never a stuck "thinking".
-      run.speech?.stop();
-      if (!run.interaction.signal.aborted) this.fail(run, e, 'app');
-    }
-  }
-
-  private async answerInner(
-    run: Run,
-    screensP: Promise<ScreenCapture>,
+    screens: Promise<ScreenCapture>,
     question: string,
     audio?: VisionChatRequest['audio'],
   ): Promise<void> {
@@ -397,141 +278,72 @@ export class Orchestrator {
     const t = this.machine.dispatch({ type: 'transcriptFinal', text: audio ? '(voice)' : question });
     if (!t || t.to !== 'thinking') {
       // Empty transcript → the machine cancelled. Tell the user why instead of silently resetting.
-      if (t?.to === 'cancelled') this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
+      if (t?.to === 'cancelled') this.deps.overlay.message(NO_SPEECH, 'info');
       this.finish(run, 'cancelled', 'no speech detected');
       return;
     }
 
     let chat: VisionChatProvider;
-    let speechFactory: SpeechFactory;
+    let speech: SpeechFactory;
     try {
       chat = this.deps.chat();
-      speechFactory = this.deps.speech();
+      speech = this.deps.speech();
     } catch (e) {
       this.fail(run, e, 'config');
       return;
     }
     run.latency.setMeta('chat', chat.id);
     if (chat.model) run.latency.setMeta('model', chat.model);
-    if (speechFactory.id) run.latency.setMeta('voice', speechFactory.id);
+    if (speech.id) run.latency.setMeta('voice', speech.id);
 
-    let screens: ScreenCapture;
+    let result: AnswerRunResult;
     try {
-      screens = await screensP;
-      run.latency.mark('captureReady');
-    } catch (e) {
-      if (!signal.aborted) this.fail(run, e, 'capture');
-      return;
-    }
-    if (signal.aborted) return;
-    run.latency.setMeta(
-      'imageBytes',
-      screens.images.reduce((n, img) => n + img.data.byteLength, 0),
-    );
-    if (screens.images[0])
-      run.latency.setMeta('imageEdge', Math.max(screens.images[0].width, screens.images[0].height));
-
-    const system = buildSystemPrompt({
-      screens: screens.images.map((img, i) => ({
-        index: i + 1,
-        imageWidth: img.width,
-        imageHeight: img.height,
-        hasCursor: i + 1 === screens.cursorScreen,
-      })),
-      ...(this.deps.userContext?.() ? { userContext: this.deps.userContext() as string } : {}),
-      ...(audio ? { audioQuestion: true } : {}),
-    });
-
-    const speech = speechFactory.create(signal);
-    run.speech = speech;
-    // A voice failure on the first sentence should surface now, not after the whole answer streams.
-    speech.done.catch((e: unknown) => {
-      if (!signal.aborted && !run.finished) this.fail(run, e, 'speech');
-    });
-    speech.onFirstAudio(() => {
-      if (signal.aborted) return;
-      run.latency.mark('firstAudio');
-      this.machine.dispatch({ type: 'firstAudio' });
-    });
-
-    const parser = new PointStreamParser();
-    const heard = audio ? new HeardTagFilter() : null;
-    const feed = (text: string): ReturnType<PointStreamParser['push']> => {
-      if (!heard) return parser.push(text);
-      const out = heard.push(text);
-      if (heard.heard && !run.question) run.question = heard.heard;
-      return out ? parser.push(out) : [];
-    };
-    const chunker = new SentenceChunker();
-    const say = (sentence: string): void => {
-      run.latency.mark('firstSpeech');
-      speech.say(sentence);
-    };
-    const handleText = (text: string): void => {
-      run.answer += text;
-      this.deps.overlay.caption?.(run.answer);
-      for (const sentence of chunker.push(text)) say(sentence);
-    };
-    const handleEvents = (events: ReturnType<PointStreamParser['push']>): void => {
-      for (const ev of events) {
-        if (ev.type === 'text') handleText(ev.text);
-        else if (ev.type === 'point') this.handlePoint(run, ev.tag.kind === 'point' ? ev.tag : null, screens);
-        else this.deps.log?.(`invalid POINT tag dropped: ${ev.raw}`);
-      }
-    };
-
-    // Which stage a failure inside the loop below belongs to.
-    let stage: Stage = 'answer';
-    try {
-      run.latency.mark('requestSent');
-      const stream = chat.stream({
-        system,
-        history: this.deps.recentTurns(),
-        question: audio ? 'Answer the question in the audio.' : question,
-        images: screens.images,
+      const userContext = this.deps.userContext?.();
+      result = await runAnswer({
+        chat,
+        speech,
+        screens,
+        question,
         ...(audio ? { audio } : {}),
+        history: this.deps.recentTurns(),
+        ...(userContext ? { userContext } : {}),
         maxTokens: this.deps.maxTokens ?? 1500,
+        timeouts: this.timeouts,
         signal,
+        now: this.now,
+        trace: run.latency,
+        hooks: {
+          point: (target, label) => this.deps.overlay.point(target, label),
+          caption: (text) => {
+            run.answer = text;
+            this.deps.overlay.caption?.(text);
+          },
+          heard: (q) => {
+            if (!run.question) run.question = q;
+          },
+          firstAudio: () => {
+            if (this.run === run) this.machine.dispatch({ type: 'firstAudio' });
+          },
+          speechFailed: (e) => {
+            if (!run.finished) this.fail(run, e, 'speech');
+          },
+          ...(this.deps.log ? { log: this.deps.log } : {}),
+        },
       });
-      const iterator = stream[Symbol.asyncIterator]();
-      const deadline = this.now() + this.timeouts.answerMs;
-      let first = true;
-      for (;;) {
-        const remaining = first ? this.timeouts.firstTokenMs : Math.max(1, deadline - this.now());
-        const next = await withTimeout(iterator.next(), remaining, 'answer', 'the AI answer', signal);
-        if (next.done) break;
-        if (first) {
-          run.latency.mark('firstToken');
-          first = false;
-        }
-        handleEvents(feed(next.value));
-      }
-      if (heard) {
-        const rest = heard.end();
-        if (rest) handleEvents(parser.push(rest));
-        if (heard.heard && !run.question) run.question = heard.heard;
-      }
-      handleEvents(parser.end());
-      for (const sentence of chunker.end()) say(sentence);
-      speech.end();
-      if (!run.answer.trim()) {
-        if (audio && !run.question) {
-          // The model heard no speech in the recording.
-          speech.stop();
-          this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
-          this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
-          return;
-        }
-        throw new StageError('answer', 'bad-output', 'the answer was empty', { provider: chat.id });
-      }
-      stage = 'speech';
-      await withTimeout(speech.done, SPEAKING_TIMEOUT_MS, 'speech', 'playing the answer', signal);
     } catch (e) {
-      speech.stop();
-      if (!signal.aborted) this.fail(run, e, stage);
+      // Anything unexpected must end in a visible error, never a stuck "thinking".
+      if (!signal.aborted) this.fail(run, e, 'answer');
       return;
     }
     if (signal.aborted) return;
+    run.answer = result.answer;
+    run.pointLabel = result.pointLabel;
+    if (result.heard && !run.question) run.question = result.heard;
+    if (result.outcome === 'no-speech') {
+      this.deps.overlay.message(NO_SPEECH, 'info');
+      this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
+      return;
+    }
     // A very short answer can finish before first audio was reported (e.g. muted output).
     if (this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
     run.latency.mark('done');
@@ -539,26 +351,17 @@ export class Orchestrator {
     this.finish(run, 'answered');
   }
 
-  private handlePoint(run: Run, tag: PointTarget | null, screens: ScreenCapture): void {
-    if (!tag || run.pointLabel !== null) return; // only the first point is used
-    const mapped = mapPointToDisplay(tag, screens.geometry);
-    if (!mapped.ok) {
-      this.deps.log?.(`POINT skipped (${mapped.reason}): ${mapped.detail}`);
-      return;
-    }
-    run.pointLabel = tag.label || 'here';
-    run.latency.mark('firstPoint');
-    this.deps.overlay.point(mapped.point, tag.label);
-  }
-
   private fail(run: Run, e: unknown, stage: Stage): void {
     if (run.finished) return;
     const err = classifyFailure(e, stage);
     const message = userMessage(err);
-    run.latency.setFailure({ stage: err.stage, kind: err.kind, ...(err.provider ? { provider: err.provider } : {}) });
-    run.latency.event(err.stage, 'failed', { kind: err.kind, ...(err.provider ? { provider: err.provider } : {}) });
+    const who = err.provider ? { provider: err.provider } : {};
+    run.latency.setFailure({ stage: err.stage, kind: err.kind, ...who });
+    run.latency.event(err.stage, 'failed', { kind: err.kind, ...who });
     this.deps.log?.(
-      `interaction ${run.interaction.id} failed in ${err.stage} (${err.kind}${err.provider ? `, ${err.provider}` : ''}): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+      `interaction ${run.interaction.id} failed in ${err.stage} (${err.kind}${err.provider ? `, ${err.provider}` : ''}): ${
+        e instanceof Error ? (e.stack ?? e.message) : String(e)
+      }`,
     );
     this.deps.overlay.message(message, 'error');
     if (this.run === run) this.machine.dispatch({ type: 'fail', reason: message });
@@ -589,17 +392,17 @@ export class Orchestrator {
     }
   }
 
-  /** Called on cancel/error transitions: stop audio and the mic for that interaction. */
+  /** Called on cancel/error transitions: stop the mic and STT for that interaction. */
   private teardown(interactionId: string): void {
     const run = this.run;
     if (!run || run.interaction.id !== interactionId) return;
     clearTimeout(run.listenTimer);
-    if (run.usedMic) this.deps.mic.stop();
-    run.speech?.stop();
-    void run.sttSession?.then(
-      (s) => s.close(),
-      () => undefined,
-    );
+    // Answer and voice stages stop themselves on the aborted signal. The mic is shared: stop it again
+    // even if key-up already did, in case a slow mic start finished after that.
+    if (run.listen) {
+      this.deps.mic.stop();
+      run.listen.close();
+    }
     if (!run.finished) {
       // run.interaction is a snapshot; the live interaction has the end reason.
       const live = this.machine.interaction;

@@ -3,7 +3,8 @@ import type { DisplayGeometry } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import type { InteractionState } from './interaction.js';
 import { ConfigError } from './errors.js';
-import { MIC_TAIL_MS, MIN_HOLD_MS, Orchestrator, type OrchestratorDeps, type ScreenCapture } from './orchestrator.js';
+import { MIC_TAIL_MS, MIN_HOLD_MS, Orchestrator, type OrchestratorDeps } from './orchestrator.js';
+import type { ScreenCapture } from './ports.js';
 import type { SttProvider, SttSession, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { SpeechFactory, SpeechOutput } from './speech.js';
 
