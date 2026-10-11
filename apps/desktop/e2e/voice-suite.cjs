@@ -111,6 +111,19 @@ function evaluate(sc, r) {
     );
     if (!hit) fails.push(`no ${want.kind} action like ${JSON.stringify(want)}`);
   }
+  // Any one of several ways is fine (typing into the site's search, or opening the results URL).
+  if (
+    e.anyAction &&
+    !e.anyAction.some((want) =>
+      r.actions.some(
+        (a) =>
+          a.kind === want.kind &&
+          (!want.url || norm(a.url).includes(norm(want.url))) &&
+          (!want.text || norm(a.text).includes(norm(want.text))),
+      ),
+    )
+  )
+    fails.push(`none of ${JSON.stringify(e.anyAction)}`);
   if (e.noStartMenu && r.actions.some((a) => a.kind === 'keys' && a.keys.length === 1 && a.keys[0] === 'win'))
     fails.push('opened the Start menu');
   if (e.noActions && r.actions.some((a) => a.kind !== 'keys' || a.keys[0] !== 'mask'))

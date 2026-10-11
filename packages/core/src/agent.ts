@@ -268,6 +268,8 @@ Rules:
   changes account, privacy or security settings. The user will be asked to allow it.
 - Long tasks across several apps or sites: work through them part by part. Note what you find
   before moving to the next page. Never say done until every part of the task is finished.
+- Lists and feeds never end: note what is on screen after every scroll, and stop after about
+  eight screens (or once you have what the task asked for) instead of scrolling forever.
 - When the task asks you to tell the user something, read it from the screen (scroll if needed),
   then reply done with the answer in "say".
 - Never type passwords, card numbers, one-time codes or other secrets. Use fail and ask the user to
@@ -377,6 +379,8 @@ const STEP_RETRIES = 2;
 /** Notes and rows kept for the prompt (the newest win). */
 const MAX_NOTES = 60;
 const MAX_ROWS = 500;
+/** Scrolls in a row with nothing noted before the agent is told to wrap up with what it has. */
+const SCROLLS_WITHOUT_NOTES = 10;
 /** Consecutive unparseable replies before giving up. */
 const MAX_BAD_REPLIES = 2;
 
@@ -460,6 +464,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   let repeats = 0;
   let failedChecks = 0;
   let retries = 0;
+  let scrolls = 0;
   const notes: string[] = [];
   const rows: string[][] = [];
   const checked: { step: string; ok: boolean | null }[] = [];
@@ -489,6 +494,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       rows.length ? `Rows noted so far (${rows.length}):\n${rows.map((r) => r.join(' | ')).join('\n')}` : '',
       steps.length ? `Steps so far:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}` : 'No steps taken yet.',
       note,
+      scrolls >= SCROLLS_WITHOUT_NOTES
+        ? `You have scrolled ${scrolls} times without noting anything. Note what you have found so far, then finish the task with it.`
+        : '',
       'What is the next action?',
     ]
       .filter(Boolean)
@@ -572,6 +580,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     deps.onProgress?.({ goal, step: i, max, say });
     // Notes and sheets don't touch the screen.
     if (a.type === 'note') {
+      scrolls = 0;
       if (a.text) notes.push(a.text);
       if (a.row) rows.push(a.row);
       notes.splice(0, Math.max(0, notes.length - MAX_NOTES));
@@ -652,6 +661,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       await delay(deps.flightMs === undefined ? 300 : 0); // it slides over to the caret first
     }
     if (deps.signal.aborted) return stopped();
+    scrolls = a.type === 'scroll' ? scrolls + 1 : scrolls;
     if (a.type === 'wait') await delay(a.ms);
     else if (input) await deps.input.run(input, deps.signal);
     steps.push(describe(a));

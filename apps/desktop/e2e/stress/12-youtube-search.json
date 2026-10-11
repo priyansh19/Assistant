@@ -4,7 +4,20 @@
   "maxMinutes": 5,
   "expect": {
     "agentDone": true,
-    "typed": ["study music"]
+    "anyAction": [
+      {
+        "kind": "type",
+        "text": "study music"
+      },
+      {
+        "kind": "open",
+        "url": "study+music"
+      },
+      {
+        "kind": "open",
+        "url": "study%20music"
+      }
+    ]
   },
   "typed": true,
   "live": "all"

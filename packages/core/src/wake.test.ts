@@ -49,3 +49,12 @@ describe('misheard "write" is corrected in the instruction', () => {
     });
   });
 });
+
+describe('splitWake keeps the request exactly as said', () => {
+  it('keeps hyphens in file names and words', () => {
+    expect(splitWake('Clicky, save it as clicky-shopping.txt and play lo-fi').rest).toBe(
+      'save it as clicky-shopping.txt and play lo-fi',
+    );
+    expect(splitWake('Hi-Clicky open Notepad').rest).toBe('open Notepad');
+  });
+});

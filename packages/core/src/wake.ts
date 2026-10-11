@@ -39,10 +39,8 @@ export function soundsLikeName(word: string): boolean {
  * punctuation ("Plicky, open Notepad." → woke, "open Notepad.").
  */
 export function splitWake(text: string): { woke: boolean; rest: string } {
-  const tokens = text
-    .trim()
-    .split(/[\s-]+/)
-    .filter(Boolean);
+  const spans = [...text.trim().matchAll(/[^\s-]+/g)];
+  const tokens = spans.map((m) => m[0]);
   let i = 0;
   if (tokens.length > 1 && GREETINGS.has(letters(tokens[0] ?? ''))) i = 1;
   const one = tokens[i] ?? '';
@@ -51,9 +49,12 @@ export function splitWake(text: string): { woke: boolean; rest: string } {
   if ((next === 'here' || next === 'y' || next === 'e') && soundsLikeName(one + next)) used = 2;
   else if (soundsLikeName(one)) used = 1;
   if (!used) return { woke: false, rest: text.trim() };
-  const rest = tokens
-    .slice(i + used)
-    .join(' ')
+  // The rest exactly as said: hyphens and spacing matter in file names and searches
+  // ("clicky-shopping.txt", "lo-fi"). Found by the stress suite.
+  const last = spans[i + used - 1];
+  const rest = text
+    .trim()
+    .slice((last?.index ?? 0) + (last?.[0].length ?? 0))
     .replace(/^[\s,:;.!?-]+/, '')
     .trim();
   return { woke: true, rest };

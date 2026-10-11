@@ -3,14 +3,14 @@
   "say": "Clicky, open Notepad, write a three item shopping list and save it on my desktop as clicky-shopping.txt.",
   "maxMinutes": 6,
   "cleanup": [
-    "Remove-Item (Join-Path [Environment]::GetFolderPath('Desktop') 'clicky-shopping.txt') -ErrorAction SilentlyContinue"
+    "Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'clicky-shopping.txt') -ErrorAction SilentlyContinue"
   ],
   "expect": {
     "agentDone": true,
     "verify": [
       {
         "name": "file saved",
-        "cmd": "Test-Path (Join-Path [Environment]::GetFolderPath('Desktop') 'clicky-shopping.txt')",
+        "cmd": "Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'clicky-shopping.txt')",
         "equals": "True"
       }
     ]

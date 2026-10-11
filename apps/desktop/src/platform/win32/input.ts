@@ -1,4 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { InputDriver } from '../types';
 
 /**
@@ -58,9 +62,16 @@ public static class ClickyInput {
     foreach (char ch in s) {
       if (ch == '\r') continue;
       if (ch == '\n') {
-        batch.Add(Key(0x10, 0, 0)); batch.Add(Key(0x0D, 0, 0)); batch.Add(Key(0x0D, 0, KEYUP)); batch.Add(Key(0x10, 0, KEYUP));
-      } else { batch.Add(Key(0, ch, UNICODE)); batch.Add(Key(0, ch, UNICODE | KEYUP)); }
-      if (batch.Count >= 120) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(2); }
+        // Apps like Windows 11 Notepad handle key presses and Unicode characters on different
+        // paths, so a line break sent in the same burst as text can land before it. Let the text
+        // arrive first, then send the line break on its own.
+        if (batch.Count > 0) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(25); }
+        Send(new[] { Key(0x10, 0, 0), Key(0x0D, 0, 0), Key(0x0D, 0, KEYUP), Key(0x10, 0, KEYUP) });
+        Thread.Sleep(25);
+        continue;
+      }
+      batch.Add(Key(0, ch, UNICODE)); batch.Add(Key(0, ch, UNICODE | KEYUP));
+      if (batch.Count >= 80) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(8); }
     }
     if (batch.Count > 0) Send(batch.ToArray());
   }
@@ -74,6 +85,38 @@ public static class ClickyInput {
   }
   static string B64(string s) { return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s)); }
   // "<process> <title>", each base64 (the title can contain anything).
+  [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+  // Windows only lets the process that sent the last input bring a window to the front. A tap of
+  // F24 (a key nothing uses) makes that this helper, which then passes the right on.
+  public static void Grant() { Send(new[] { Key(0x87, 0, 0), Key(0x87, 0, KEYUP) }); AllowSetForegroundWindow(-1); }
+  // Bring the first visible window whose title starts with this to the front (waits for it to appear).
+  public static bool Front(string title, int ms) {
+    var end = DateTime.Now.AddMilliseconds(ms);
+    while (DateTime.Now < end) {
+      IntPtr found = IntPtr.Zero;
+      EnumWindows((h, l) => {
+        if (!IsWindowVisible(h)) return true;
+        var sb = new System.Text.StringBuilder(512); GetWindowText(h, sb, 512);
+        var t = sb.ToString();
+        if (t == title || t.StartsWith(title + " -")) { found = h; return false; }
+        return true;
+      }, IntPtr.Zero);
+      if (found != IntPtr.Zero) {
+        Grant();
+        if (IsIconic(found)) ShowWindow(found, 9);
+        SetForegroundWindow(found);
+        return true;
+      }
+      Thread.Sleep(150);
+    }
+    return false;
+  }
   public static string Foreground() {
     IntPtr h = GetForegroundWindow();
     if (h == IntPtr.Zero) return "";
@@ -200,6 +243,12 @@ while ($true) {
       'locate' { $out = [ClickyInput]::Locate([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4]) }
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
       'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
+      'folder' {
+        $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))
+        [ClickyInput]::Grant()
+        Start-Process explorer.exe -ArgumentList ('"' + $path + '"')
+        $out = [ClickyInput]::Front((Split-Path $path -Leaf), 4000)
+      }
       default  { throw "unknown command $($p[1])" }
     }
     [Console]::Out.WriteLine("$id ok $out")
@@ -245,6 +294,18 @@ function vkOf(key: string): [number, boolean] {
 const START_TIMEOUT_MS = 15_000;
 const COMMAND_TIMEOUT_MS = 20_000;
 
+/**
+ * The helper script, written to a temp file: passed inline (-EncodedCommand) it is UTF-16 and
+ * base64, nearly three times its size, and Windows refuses command lines over 32,767 characters.
+ */
+function scriptFile(script: string): string {
+  const hash = createHash('sha1').update(script).digest('hex').slice(0, 12);
+  const file = join(tmpdir(), `clicky-input-${hash}.ps1`);
+  // A byte-order mark so Windows PowerShell reads the file as UTF-8.
+  writeFileSync(file, String.fromCharCode(0xfeff) + script, 'utf8');
+  return file;
+}
+
 export function createWin32InputDriver(): InputDriver {
   let proc: ChildProcessWithoutNullStreams | null = null;
   let ready: Promise<void> | null = null;
@@ -259,14 +320,7 @@ export function createWin32InputDriver(): InputDriver {
     const script = `Add-Type -ReferencedAssemblies Accessibility,UIAutomationClient,UIAutomationTypes,WindowsBase -TypeDefinition @'\n${CSHARP}\n'@\n${LOOP}`;
     const child = spawn(
       'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-EncodedCommand',
-        Buffer.from(script, 'utf16le').toString('base64'),
-      ],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile(script)],
       { windowsHide: true },
     );
     proc = child;
@@ -359,6 +413,7 @@ export function createWin32InputDriver(): InputDriver {
         .map((a) => ({ name: a.Name, id: a.AppID }));
     },
     launch: (id) => done(send(`launch ${Buffer.from(id, 'utf8').toString('base64')}`)),
+    openFolder: (path) => done(send(`folder ${Buffer.from(path, 'utf8').toString('base64')}`)),
     caret: async () => {
       const [x, y, h] = (await send('caret')).split(' ').map(Number);
       return x === undefined || y === undefined || h === undefined || !Number.isFinite(x + y + h)

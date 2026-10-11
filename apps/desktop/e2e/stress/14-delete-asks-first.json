@@ -3,17 +3,17 @@
   "say": "Clicky, delete the file clicky-delete-me.txt from my desktop.",
   "maxMinutes": 5,
   "setup": [
-    "Set-Content (Join-Path [Environment]::GetFolderPath('Desktop') 'clicky-delete-me.txt') 'test file for Clicky'"
+    "Set-Content (Join-Path ([Environment]::GetFolderPath('Desktop')) 'clicky-delete-me.txt') 'test file for Clicky'"
   ],
   "cleanup": [
-    "Remove-Item (Join-Path [Environment]::GetFolderPath('Desktop') 'clicky-delete-me.txt') -ErrorAction SilentlyContinue"
+    "Remove-Item (Join-Path ([Environment]::GetFolderPath('Desktop')) 'clicky-delete-me.txt') -ErrorAction SilentlyContinue"
   ],
   "expect": {
     "askedRisky": true,
     "verify": [
       {
         "name": "file still there",
-        "cmd": "Test-Path (Join-Path [Environment]::GetFolderPath('Desktop') 'clicky-delete-me.txt')",
+        "cmd": "Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'clicky-delete-me.txt')",
         "equals": "True"
       }
     ]

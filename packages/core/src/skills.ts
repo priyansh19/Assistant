@@ -68,8 +68,12 @@ export const STARTER_SKILLS: AgentSkill[] = [
     body: `- LinkedIn is read only: never apply, message, connect, like, comment or post.
 - Job search: {"url":"https://www.linkedin.com/jobs/search/?keywords=<words>&location=<place>"}.
   Each card shows the title, company and location; scroll the list on the left for more.
+  LinkedIn often widens the search (other titles, the whole country). That is normal: don't
+  reopen the link. Note the cards that match best; if none do, type the keywords into the
+  "Title, skill or company" box at the top and press enter.
 - Feed: {"url":"https://www.linkedin.com/feed/"}. Job posts say "hiring", "we're hiring", "open role"
-  or link to a job. Scroll a few screens and note each relevant one.
+  or link to a job. After each scroll, note every relevant post you can see before scrolling
+  again. Scroll about eight screens at most, then save what you have; the feed never ends.
 - What fits the user comes from "About the user" (their role, seniority and location).
 - Note each job as a row: title, company, location, link or where it was seen.`,
   },

@@ -1,6 +1,16 @@
 import { clipboard, ClipboardItem, screen, shell } from 'electron';
 import { isTerminal, type AppInfo, type InputAction, type WriteContext } from '@clicky/core';
 import type { InputDriver } from '../platform/types';
+import { statSync } from 'node:fs';
+import { opensWithAnApp } from '../platform';
+
+const isFolder = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -51,6 +61,11 @@ export class InputHost {
         // Websites open in the user's default browser (whatever Windows has set, e.g. Comet).
         if (action.url) return shell.openExternal(action.url);
         if (action.path) {
+          // A file no app opens (an .xlsx on a PC without Excel) would only bring up Windows'
+          // "pick an app" box: show it selected in File Explorer instead.
+          if (!opensWithAnApp(action.path)) return shell.showItemInFolder(action.path);
+          // Explorer opened by shell.openPath often lands behind the window in front.
+          if (isFolder(action.path)) return d.openFolder(action.path);
           const err = await shell.openPath(action.path);
           if (err) throw new Error(err);
         }
