@@ -44,6 +44,10 @@ export type DictationKey = HoldKey | 'off';
 export const AGENT_CONFIRM_MODES = ['risky', 'always'] as const;
 export type AgentConfirmMode = (typeof AGENT_CONFIRM_MODES)[number];
 
+/** Short sounds when the hold key goes down and comes back up (synthesised, Clicky's own). */
+export const CUE_SOUNDS = ['soft', 'bubble', 'glass', 'off'] as const;
+export type CueSound = (typeof CUE_SOUNDS)[number];
+
 export const CURSOR_COLORS = ['blue', 'purple', 'green', 'orange', 'pink'] as const;
 export type CursorColor = (typeof CURSOR_COLORS)[number];
 
@@ -80,6 +84,8 @@ export interface Settings {
   agentConfirm: AgentConfirmMode;
   /** Plain dictation is tidied by the AI (punctuation, lists) before it's typed. */
   tidyDictation: boolean;
+  /** Sound on key press and release. */
+  cueSound: CueSound;
   /** "Writes like me": used when Clicky writes for the user. Stored on this PC only. */
   profileName: string;
   profileSignOff: string;
@@ -138,6 +144,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   agentEnabled: true,
   agentConfirm: 'risky',
   tidyDictation: true,
+  cueSound: 'soft',
   profileName: '',
   profileSignOff: '',
   profileTone: '',
@@ -210,6 +217,7 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     agentEnabled: bool(o['agentEnabled'], base.agentEnabled),
     agentConfirm: oneOf(AGENT_CONFIRM_MODES, o['agentConfirm'], base.agentConfirm),
     tidyDictation: bool(o['tidyDictation'], base.tidyDictation),
+    cueSound: oneOf(CUE_SOUNDS, o['cueSound'], base.cueSound),
     profileName: shortString(o['profileName'], base.profileName, 80),
     profileSignOff: shortString(o['profileSignOff'], base.profileSignOff, 200),
     profileTone: shortString(o['profileTone'], base.profileTone, 200),

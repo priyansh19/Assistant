@@ -471,12 +471,41 @@
             </div>
             <input type="text" id="ttsVoice" placeholder="Default voice" spellcheck="false" autocomplete="off" />
           </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Choose a voice</div>
+              <div class="desc" id="voice-test-desc">Press ▶ to hear a voice; it becomes Clicky's voice.</div>
+            </div>
+            <div class="voice-grid" id="voice-picker"></div>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Speaking speed</div>
+              <div class="desc" id="speed-desc"></div>
+            </div>
+            <input type="range" id="localVoiceSpeed" min="0.7" max="2" step="0.05" />
+          </div>
           <div class="row">
             <div class="label">
               <div class="title">Preview</div>
-              <div class="desc" id="voice-test-desc">Hear how Clicky sounds.</div>
+              <div class="desc">Hear the current voice at this speed.</div>
             </div>
             <button class="secondary" id="voice-test">Play sample</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Key sounds</div>
+              <div class="desc">A soft sound when you press and let go of the key.</div>
+            </div>
+            <div class="item-buttons">
+              <select id="cueSound">
+                <option value="soft">Soft</option>
+                <option value="bubble">Bubble</option>
+                <option value="glass">Glass</option>
+                <option value="off">Off</option>
+              </select>
+              <button type="button" class="secondary small" id="cue-test" aria-label="Play key sound">▶</button>
+            </div>
           </div>
         </div>
         <h2>On-device speech</h2>
@@ -496,13 +525,6 @@
               <div class="desc">Download a voice below, then pick it here.</div>
             </div>
             <select id="localVoice"></select>
-          </div>
-          <div class="row">
-            <div class="label">
-              <div class="title">Speaking speed</div>
-              <div class="desc" id="speed-desc"></div>
-            </div>
-            <input type="range" id="localVoiceSpeed" min="0.7" max="2" step="0.05" />
           </div>
           <div class="row">
             <div class="label">

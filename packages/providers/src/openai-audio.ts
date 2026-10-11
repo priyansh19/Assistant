@@ -66,7 +66,9 @@ export class OpenAITts implements TtsProvider {
   readonly id = 'openai-tts';
   private readonly fetchImpl: FetchLike;
 
-  constructor(private readonly opts: { apiKey: string; voice?: string; model?: string; fetch?: FetchLike }) {
+  constructor(
+    private readonly opts: { apiKey: string; voice?: string; model?: string; speed?: number; fetch?: FetchLike },
+  ) {
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
   }
 
@@ -86,6 +88,7 @@ export class OpenAITts implements TtsProvider {
             body: JSON.stringify({
               model: this.opts.model ?? 'gpt-4o-mini-tts',
               voice: this.opts.voice || 'alloy',
+              ...(this.opts.speed ? { speed: Math.min(4, Math.max(0.25, this.opts.speed)) } : {}),
               input: text,
               response_format: 'pcm',
             }),

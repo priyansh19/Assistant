@@ -39,6 +39,7 @@ const api = {
   savePlaybook: (p: Omit<Playbook, 'id'> & { id?: string }) => invoke<DashboardSnapshot>('dash:playbook-save', p),
   removePlaybook: (id: string) => invoke<DashboardSnapshot>('dash:playbook-remove', id),
   openPlaybooks: () => invoke<undefined>('dash:playbooks-open'),
+  playCue: (sound: 'soft' | 'bubble' | 'glass') => invoke<undefined>('dash:play-cue', sound),
   onHoldKey(fn: (down: boolean, key: 'talk' | 'dictate') => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean, key: 'talk' | 'dictate') => fn(down, key));

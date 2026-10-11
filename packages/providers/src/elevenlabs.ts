@@ -16,6 +16,8 @@ const WS_INACTIVITY_S = 180;
 const SPARE_MAX_AGE_MS = 150_000;
 
 export interface ElevenLabsOptions {
+  /** Speaking speed (capped to 0.7–1.2 by the service). */
+  speed?: number;
   apiKey: string;
   voiceId?: string;
   fetch?: FetchLike;
@@ -48,6 +50,12 @@ export class ElevenLabsTts implements TtsProvider {
   private readonly fetchImpl: FetchLike;
   private readonly WS: WebSocketCtor | null;
   private spare: Promise<OpenSocket | null> | null = null;
+
+  /** ElevenLabs accepts speeds from 0.7 to 1.2; faster settings are capped there. */
+  private voiceSettings(): { voice_settings?: { speed: number } } {
+    const s = this.opts.speed;
+    return s && s !== 1 ? { voice_settings: { speed: Math.min(1.2, Math.max(0.7, s)) } } : {};
+  }
 
   constructor(private readonly opts: ElevenLabsOptions) {
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
@@ -94,7 +102,7 @@ export class ElevenLabsTts implements TtsProvider {
       ws.onopen = () => {
         open = true;
         // The first message must be a single space; it carries the key and voice settings.
-        ws.send(JSON.stringify({ text: ' ', xi_api_key: this.opts.apiKey }));
+        ws.send(JSON.stringify({ text: ' ', xi_api_key: this.opts.apiKey, ...this.voiceSettings() }));
         resolve(sock);
       };
       ws.onerror = () => {
@@ -142,7 +150,7 @@ export class ElevenLabsTts implements TtsProvider {
           {
             method: 'POST',
             headers: { 'xi-api-key': this.opts.apiKey, 'content-type': 'application/json', accept: 'audio/pcm' },
-            body: JSON.stringify({ text, model_id: ELEVENLABS_MODEL }),
+            body: JSON.stringify({ text, model_id: ELEVENLABS_MODEL, ...this.voiceSettings() }),
             signal,
           },
         ),

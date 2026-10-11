@@ -216,6 +216,8 @@ function renderControls(s: Settings): void {
   set('profileTone', s.profileTone);
   set('profileSamples', s.profileSamples);
   check('tidyDictation', s.tidyDictation);
+  set('cueSound', s.cueSound);
+  renderVoicePicker(s);
   const dk = s.dictationKey === 'off' ? 'your dictation key' : HOLD_KEY_LABELS[s.dictationKey];
   for (const e of document.querySelectorAll('.dict-key')) e.textContent = dk;
   set('dictationKey', s.dictationKey);
@@ -1109,6 +1111,93 @@ function renderWizard(): void {
   }
 }
 
+// ----------------------------------------------------------------- voice picker
+
+interface VoiceOption {
+  value: string;
+  name: string;
+  desc: string;
+  /** Not downloaded yet (on-device voices). */
+  missing?: boolean;
+}
+
+const OPENAI_VOICES: VoiceOption[] = [
+  { value: 'alloy', name: 'Alloy', desc: 'balanced, neutral' },
+  { value: 'ash', name: 'Ash', desc: 'clear, male' },
+  { value: 'ballad', name: 'Ballad', desc: 'soft, expressive' },
+  { value: 'coral', name: 'Coral', desc: 'warm, female' },
+  { value: 'echo', name: 'Echo', desc: 'calm, male' },
+  { value: 'fable', name: 'Fable', desc: 'British, storyteller' },
+  { value: 'nova', name: 'Nova', desc: 'bright, female' },
+  { value: 'onyx', name: 'Onyx', desc: 'deep, male' },
+  { value: 'sage', name: 'Sage', desc: 'thoughtful, female' },
+  { value: 'shimmer', name: 'Shimmer', desc: 'gentle, female' },
+  { value: 'verse', name: 'Verse', desc: 'lively, male' },
+];
+
+const ELEVEN_VOICES: VoiceOption[] = [
+  { value: '', name: 'Default', desc: 'ElevenLabs default' },
+  { value: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', desc: 'calm, US female' },
+  { value: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', desc: 'soft, US female' },
+  { value: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', desc: 'deep, US male' },
+  { value: 'ErXwobaYiN019PkySvjV', name: 'Antoni', desc: 'warm, US male' },
+  { value: 'MF3mGyEYCl7XYWbV9V6O', name: 'Elli', desc: 'young, US female' },
+];
+
+function voiceOptions(s: Settings): {
+  options: VoiceOption[];
+  current: string;
+  field: 'ttsVoice' | 'localVoice' | null;
+} {
+  if (s.ttsProvider === 'local') {
+    const options = snap.local.models
+      .filter((m) => m.kind === 'voice')
+      .map((m) => ({ value: `piper:${m.id}`, name: m.name, desc: m.desc, missing: !m.installed }));
+    return { options, current: s.localVoice, field: 'localVoice' };
+  }
+  if (s.ttsProvider === 'openai') return { options: OPENAI_VOICES, current: s.ttsVoice || 'alloy', field: 'ttsVoice' };
+  if (s.ttsProvider === 'elevenlabs') return { options: ELEVEN_VOICES, current: s.ttsVoice, field: 'ttsVoice' };
+  return { options: [{ value: '', name: 'Windows voice', desc: 'built in, offline' }], current: '', field: null };
+}
+
+let lastPickerKey = '';
+function renderVoicePicker(s: Settings): void {
+  const { options, current, field } = voiceOptions(s);
+  const key = JSON.stringify([s.ttsProvider, current, options.map((o) => [o.value, o.missing])]);
+  if (key === lastPickerKey) return;
+  lastPickerKey = key;
+  const desc = $('voice-test-desc');
+  $('voice-picker').replaceChildren(
+    ...options.map((o) => {
+      const chip = el('button', { className: `voice-chip${o.value === current ? ' selected' : ''}` }, [
+        el('span', { className: 'play', text: o.missing ? '↓' : '▶' }),
+        el('span', {}, [
+          el('div', { className: 'name', text: o.name }),
+          el('div', { className: 'vdesc', text: o.missing ? `${o.desc} · download` : o.desc }),
+        ]),
+      ]);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(o.value === current));
+      chip.title = o.missing ? `Download ${o.name}` : `Use and preview ${o.name}`;
+      chip.addEventListener('click', async () => {
+        if (o.missing) {
+          desc.textContent = `Downloading ${o.name}…`;
+          const r = await api.localDownload(o.value.replace(/^piper:/, ''));
+          desc.textContent = r.ok ? `${o.name} is ready. Press ▶ to hear it.` : r.message;
+          return;
+        }
+        if (field) await save({ [field]: o.value } as Partial<Settings>, true);
+        desc.className = 'desc';
+        desc.textContent = `Playing ${o.name}…`;
+        const r = await api.voiceTest();
+        desc.textContent = r.ok ? `${o.name} is Clicky's voice now.` : r.message;
+        desc.className = r.ok ? 'desc' : 'key-error';
+      });
+      return chip;
+    }),
+  );
+}
+
 // ----------------------------------------------------------------- playbooks
 
 let editingPlaybook: string | null | undefined; // undefined: editor closed; null: new playbook
@@ -1253,6 +1342,11 @@ async function init(): Promise<void> {
   bindText('profileTone');
   bindText('profileSamples');
   bindToggle('tidyDictation');
+  bindSelect('cueSound');
+  $('cue-test').addEventListener('click', () => {
+    const s = $<HTMLSelectElement>('cueSound').value;
+    if (s !== 'off') void api.playCue(s as 'soft' | 'bubble' | 'glass');
+  });
   initPlaybooks();
   bindSelect('dictationKey');
   bindToggle('agentEnabled');

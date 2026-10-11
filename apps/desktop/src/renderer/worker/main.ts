@@ -577,6 +577,43 @@ async function handle(req: WorkerRequest): Promise<unknown> {
       return voiceStop(req.streamId);
     case 'engine.detached':
       return detachEngine();
+    case 'cue':
+      return playCue(req.kind, req.sound);
+  }
+}
+
+/**
+ * Clicky's own key sounds, synthesised so there's nothing to download or license. Each is two quick
+ * notes: rising when you start talking, falling when you let go. Quiet on purpose.
+ */
+const CUES: Record<
+  'soft' | 'bubble' | 'glass',
+  { type: OscillatorType; notes: [number, number]; len: number; gain: number }
+> = {
+  soft: { type: 'sine', notes: [660, 880], len: 0.07, gain: 0.12 },
+  bubble: { type: 'sine', notes: [520, 1040], len: 0.05, gain: 0.14 },
+  glass: { type: 'triangle', notes: [1320, 1760], len: 0.09, gain: 0.07 },
+};
+
+function playCue(kind: 'start' | 'end', sound: 'soft' | 'bubble' | 'glass'): void {
+  const c = CUES[sound];
+  const ctx = playbackContext();
+  void ctx.resume();
+  const notes = kind === 'start' ? c.notes : [c.notes[1], c.notes[0]];
+  let t = ctx.currentTime + 0.005;
+  for (const f of notes) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = c.type;
+    osc.frequency.setValueAtTime(f, t);
+    if (sound === 'bubble') osc.frequency.exponentialRampToValueAtTime(f * 1.25, t + c.len);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(c.gain, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + c.len);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + c.len + 0.02);
+    t += c.len * 0.8;
   }
 }
 

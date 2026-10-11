@@ -75,9 +75,14 @@ export function createTts(s: Settings, getKey: KeyLookup): TtsProvider | null {
       apiKey: need(getKey, 'elevenlabs'),
       ...(s.ttsVoice ? { voiceId: s.ttsVoice } : {}),
       streaming: s.streamingVoice,
+      speed: s.localVoiceSpeed,
     });
   }
-  return new OpenAITts({ apiKey: need(getKey, 'openai') });
+  return new OpenAITts({
+    apiKey: need(getKey, 'openai'),
+    ...(s.ttsVoice ? { voice: s.ttsVoice } : {}),
+    speed: s.localVoiceSpeed,
+  });
 }
 
 /** Live check that a key works (no tokens spent). Throws a ProviderError/SDK error with the reason. */

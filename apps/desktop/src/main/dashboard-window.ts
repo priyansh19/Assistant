@@ -222,6 +222,9 @@ export class DashboardWindow {
       });
       return this.snapshot();
     });
+    handle(IPC.dashPlayCue, (sound) => {
+      if (sound === 'soft' || sound === 'bubble' || sound === 'glass') this.controller.playCue(sound);
+    });
     handle(IPC.dashPlaybookRemove, (id) => {
       if (typeof id === 'string') this.controller.playbooks.remove(id);
       return this.snapshot();

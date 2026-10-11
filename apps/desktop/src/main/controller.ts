@@ -113,6 +113,7 @@ export class Controller {
       case 'ready':
         return;
       case 'state': {
+        this.cue(this.current.state, msg.state);
         if (isResting(msg.state)) {
           if (this.anchorTimer) clearTimeout(this.anchorTimer);
           this.anchorTimer = setTimeout(() => this.overlays.anchor(null), 2500);
@@ -236,6 +237,20 @@ export class Controller {
     this.engine.send({ type: 'prewarm' });
     const s = this.settings.get();
     if (s.dictationKey !== 'off' || s.agentEnabled) this.input.warm();
+  }
+
+  /** Key sounds: one as listening starts, one when the key is let go. */
+  private cue(from: InteractionState, to: InteractionState): void {
+    const sound = this.settings.get().cueSound;
+    if (sound === 'off') return;
+    if (to === 'listening' && from !== 'listening') this.worker.send({ op: 'cue', kind: 'start', sound });
+    else if (from === 'listening' && to === 'transcribing') this.worker.send({ op: 'cue', kind: 'end', sound });
+  }
+
+  /** Preview a key sound (dashboard). */
+  playCue(sound: 'soft' | 'bubble' | 'glass'): void {
+    this.worker.send({ op: 'cue', kind: 'start', sound });
+    setTimeout(() => this.worker.send({ op: 'cue', kind: 'end', sound }), 450);
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */

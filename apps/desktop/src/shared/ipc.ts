@@ -49,6 +49,7 @@ export const IPC = {
   dashPlaybookSave: 'dash:playbook-save',
   dashPlaybookRemove: 'dash:playbook-remove',
   dashPlaybooksOpen: 'dash:playbooks-open',
+  dashPlayCue: 'dash:play-cue',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
