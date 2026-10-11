@@ -37,6 +37,26 @@ public static class LiveWin {
     }, IntPtr.Zero);
     return list.ToArray();
   }
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  // Put a normal window (a browser, else File Explorer) in front, so the hold key is heard: Windows
+  // hides key presses from Clicky while an administrator window like Task Manager is in front.
+  public static bool FocusNormal() {
+    IntPtr pick = IntPtr.Zero;
+    foreach (var want in new[] { "comet", "chrome", "msedge", "explorer" }) {
+      EnumWindows((h, l) => {
+        if (!IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;
+        var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+        if (sb.Length == 0 || sb.ToString() == "Program Manager") return true;
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        try { if (System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant() == want) { pick = h; return false; } } catch { }
+        return true;
+      }, IntPtr.Zero);
+      if (pick != IntPtr.Zero) break;
+    }
+    if (pick == IntPtr.Zero) return false;
+    keybd_event(0x87, 0, 0, UIntPtr.Zero); keybd_event(0x87, 0, 2, UIntPtr.Zero);
+    return SetForegroundWindow(pick);
+  }
   public static string Front() {
     var h = GetForegroundWindow();
     var sb = new StringBuilder(512); GetWindowText(h, sb, 512);

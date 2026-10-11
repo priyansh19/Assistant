@@ -119,8 +119,15 @@ export class InputHost {
         const p = screen.dipToScreenPoint(action.at.global);
         return d.scroll(p.x, p.y, action.amount);
       }
-      case 'type':
+      case 'type': {
+        // Several lines are pasted, not typed: apps like Windows 11 Notepad autocorrect and mix up
+        // typed lines ("delta" came out as "eelta"), found by the live suite.
+        if (action.text.includes('\n')) {
+          const app = await d.foreground().catch(() => null);
+          if (app && !isTerminal(app) && (await this.paste(action.text))) return;
+        }
         return d.type(action.text);
+      }
       case 'backspace':
         return d.backspace(action.count);
       case 'keys':
@@ -198,6 +205,30 @@ export class InputHost {
     )
       return null;
     return copied;
+  }
+
+  /** Paste text with Ctrl+V, then put the clipboard back as it was. False if it can't be restored. */
+  private async paste(text: string): Promise<boolean> {
+    const items = await clipboard.read();
+    if (!items.every((it) => it.types.every((t) => RESTORABLE.test(t)))) return false;
+    const saved: Record<string, Blob>[] = [];
+    for (const it of items) {
+      const rec: Record<string, Blob> = {};
+      for (const t of it.types) {
+        const v = await it.getType(t);
+        if (v instanceof Blob) rec[t] = v;
+      }
+      saved.push(rec);
+    }
+    await clipboard.writeText(text);
+    try {
+      await this.need().keys(['ctrl', 'v']);
+      await delay(250); // let the app read the clipboard before it's put back
+    } finally {
+      if (!saved.some((r) => Object.keys(r).length)) clipboard.clear();
+      else await clipboard.write(saved.filter((r) => Object.keys(r).length).map((r) => new ClipboardItem(r)));
+    }
+    return true;
   }
 
   /** The text caret as a point on a display (DIP, relative to that display), when the app exposes it. */

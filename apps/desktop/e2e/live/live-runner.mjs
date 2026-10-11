@@ -4,6 +4,10 @@
 // task says), then checks the result and reads what Clicky heard, said and did from its own logs.
 //
 //   node e2e/live/live-runner.mjs [--only W01,F02] [--out <dir>]
+//
+// Model comparison: --model <OpenRouter id> --freeze <dir> runs every task with that agent model,
+// starting each from the same learned state (lessons, skills, notes, agents.md copied into <dir>
+// on first use and put back before each task, with Clicky restarted), so no run learns from another.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,6 +25,10 @@ const arg = (n) => {
 };
 const only = arg('--only')?.split(',');
 const outDir = arg('--out') ?? path.join(os.tmpdir(), 'clicky-live');
+const model = arg('--model');
+const freeze = arg('--freeze');
+const userData = path.join(process.env.APPDATA, 'Clicky');
+const STATE = ['agent-lessons.json', 'notes.json', 'agents.md', 'skills'];
 fs.mkdirSync(outDir, { recursive: true });
 const appData = process.env.APPDATA;
 const logFile = path.join(appData, 'Clicky', 'logs', 'clicky.log');
@@ -69,14 +77,41 @@ const results = [];
 // Tasks that close or minimise windows touch the user's own apps: only with --destructive, when
 // the user said the PC is free for it.
 const destructive = process.argv.includes('--destructive');
+/** Put the frozen learned state back, set the agent model and restart Clicky. */
+async function freshClicky() {
+  if (!freeze) return;
+  ps('Get-Process Clicky -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2');
+  if (!fs.existsSync(freeze)) {
+    fs.mkdirSync(freeze, { recursive: true });
+    for (const f of STATE)
+      if (fs.existsSync(path.join(userData, f)))
+        fs.cpSync(path.join(userData, f), path.join(freeze, f), { recursive: true });
+    if (fs.existsSync(path.join(userData, 'settings.json')))
+      fs.copyFileSync(path.join(userData, 'settings.json'), path.join(freeze, 'settings.original.json'));
+  }
+  for (const f of STATE) {
+    fs.rmSync(path.join(userData, f), { recursive: true, force: true });
+    if (fs.existsSync(path.join(freeze, f)))
+      fs.cpSync(path.join(freeze, f), path.join(userData, f), { recursive: true });
+  }
+  const settingsFile = path.join(userData, 'settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  settings.agentModel = model ?? '';
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 1));
+  ps(`Start-Process "$env:LOCALAPPDATA\\Programs\\clicky\\Clicky.exe"; Start-Sleep 12`);
+}
+
 for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructive || !x.destructive))) {
-  say(`--- ${t.id}: ${t.say}`);
+  await freshClicky();
+  say(`--- ${t.id}: ${t.say}${model ? ` [model ${model}]` : ''}`);
   for (const s of t.setup ?? []) say(`setup: ${ps(s).slice(0, 200)}`);
   const wav = path.join(outDir, `${t.id}.wav`);
   ps(`New-SpokenWav '${t.say.replace(/'/g, "''")}' '${wav}'`);
   const before = history()[0]?.id;
   const offset = fs.statSync(logFile).size;
   const t0 = Date.now();
+  // An administrator window in front (Task Manager) hides the hold key from Clicky.
+  if (/taskmgr|administrator/i.test(ps('[LiveWin]::Front()'))) ps('[LiveWin]::FocusNormal()');
   ps(`Invoke-Spoken '${wav}'`);
   // Wait for the answer or task to finish (a new history entry), answering any "allow?" prompts.
   let entry = null;
@@ -151,6 +186,14 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     reviews: (log.match(/agent (recovering|review): .*/g) ?? []).map((l) => l.slice(0, 300)),
     route: (log.match(/agent step review: .*/) ?? [''])[0].slice(0, 500),
     seconds: Math.round((Date.now() - t0) / 1000),
+    model: model ?? 'default',
+    checksWorked: (log.match(/agent check: .* worked$/gm) ?? []).length,
+    checksFailed: (log.match(/agent check: .* failed$/gm) ?? []).length,
+    stepFailures: (log.match(/agent step failed: /g) ?? []).length,
+    retries: (log.match(/agent step retry \d/g) ?? []).length,
+    rateLimited: (log.match(/429|rate.?limit/gi) ?? []).length,
+    recoveries: (log.match(/agent recovering/g) ?? []).length,
+    stepTimes: [...log.matchAll(/^(\S+) INFO agent step \d+:/gm)].map((m) => Date.parse(m[1])),
   };
   r.checkOut = ps(t.check);
   r.pass = !!entry && entry.outcome !== 'timeout' && t.pass(r.checkOut, r);
