@@ -13,21 +13,16 @@ export const OPENAI_BASE = 'https://api.openai.com/v1';
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENAI_DEFAULT_MODEL = 'gpt-4.1-mini';
 /**
- * OpenRouter defaults are free models (owner's rule, 2026-10-11): a fast vision model for answers,
- * writing and agent steps. Free models are rate-limited, so requests list other free vision models
- * as fallbacks and OpenRouter moves to the next one when a model is busy. Paid models are used only
- * when the user types one into the model setting.
+ * OpenRouter defaults (owner's choice, 2026-10-11): a cheap, fast paid vision model for answers,
+ * writing and agent steps, about $0.0003 per answer with a screenshot. If it's busy, OpenRouter
+ * moves to the next model in the list. A model typed into the settings replaces all of this.
  */
-export const OPENROUTER_DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free';
+export const OPENROUTER_DEFAULT_MODEL = 'google/gemini-2.5-flash-lite';
 /** OpenRouter rejects a fallback list longer than this. */
 export const OPENROUTER_MAX_MODELS = 3;
-export const OPENROUTER_FREE_FALLBACKS = [
-  'google/gemma-4-31b-it:free',
-  'thinkingmachines/inkling-small:free',
-  'dots-studio/dots-3-note-preview:free',
-];
-/** Free models that also accept audio, for "the answer model listens" mode. */
-export const OPENROUTER_FREE_LISTEN_MODELS = ['thinkingmachines/inkling-small:free', 'thinkingmachines/inkling:free'];
+export const OPENROUTER_FALLBACKS = ['qwen/qwen3.7-flash', 'anthropic/claude-haiku-5.5'];
+/** Models that also accept audio, for "the answer model listens" mode. */
+export const OPENROUTER_LISTEN_MODELS = ['google/gemini-2.5-flash-lite', 'google/gemini-3.1-flash-lite'];
 
 interface ChatChunk {
   choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
@@ -39,15 +34,15 @@ export class OpenAICompatibleChat implements VisionChatProvider {
   readonly id: string;
   private readonly base: string;
   readonly model: string;
-  /** No model chosen in settings: use the free defaults with fallbacks. */
-  private readonly freeDefaults: boolean;
+  /** No model chosen in settings: use the defaults with fallbacks. */
+  private readonly useDefaults: boolean;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly opts: OpenAICompatibleOptions) {
     this.id = opts.id;
     this.base = opts.id === 'openrouter' ? OPENROUTER_BASE : OPENAI_BASE;
     this.model = opts.model?.trim() || (opts.id === 'openrouter' ? OPENROUTER_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL);
-    this.freeDefaults = opts.id === 'openrouter' && !opts.model?.trim();
+    this.useDefaults = opts.id === 'openrouter' && !opts.model?.trim();
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
   }
 
@@ -66,13 +61,13 @@ export class OpenAICompatibleChat implements VisionChatProvider {
   }
 
   async *stream(req: VisionChatRequest): AsyncIterable<string> {
-    const free = this.freeDefaults
+    const list = this.useDefaults
       ? req.audio
-        ? OPENROUTER_FREE_LISTEN_MODELS
-        : [OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FREE_FALLBACKS]
+        ? OPENROUTER_LISTEN_MODELS
+        : [OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FALLBACKS]
       : null;
     // OpenRouter accepts at most three models in a fallback list.
-    const models = free?.slice(0, OPENROUTER_MAX_MODELS);
+    const models = list?.slice(0, OPENROUTER_MAX_MODELS);
     const body = {
       model: models?.[0] ?? this.model,
       ...(models ? { models } : {}),

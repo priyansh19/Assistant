@@ -507,7 +507,7 @@ describe('pcmToWav', () => {
   });
 });
 
-describe('OpenRouter free defaults', () => {
+describe('OpenRouter defaults', () => {
   const capture = () => {
     const bodies: Array<Record<string, unknown>> = [];
     const fetchImpl: FetchLike = async (_url, init) => {
@@ -532,7 +532,7 @@ describe('OpenRouter free defaults', () => {
     for await (const _ of it) void _;
   };
 
-  it('sends at most three free models, primary first, and none when a model is chosen', async () => {
+  it('sends at most three models, primary first, and none when a model is chosen', async () => {
     const c = capture();
     const free = createChat({ ...DEFAULT_SETTINGS, chatProvider: 'openrouter' }, () => 'sk-or-test', c.fetchImpl);
     await drain(free.stream(req()));
@@ -540,7 +540,7 @@ describe('OpenRouter free defaults', () => {
     const [vision, listen] = c.bodies;
     expect((vision?.['models'] as string[]).length).toBeLessThanOrEqual(3);
     expect(vision?.['model']).toBe((vision?.['models'] as string[])[0]);
-    expect((vision?.['models'] as string[]).every((m) => m.endsWith(':free'))).toBe(true);
+    expect(vision?.['model']).toBe('google/gemini-2.5-flash-lite');
     expect((listen?.['models'] as string[]).length).toBeLessThanOrEqual(3);
     const paid = createChat(
       { ...DEFAULT_SETTINGS, chatProvider: 'openrouter', chatModel: 'anthropic/claude-sonnet' },
