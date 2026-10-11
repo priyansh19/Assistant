@@ -24,6 +24,7 @@ export * from './elevenlabs.js';
 export * from './http.js';
 export * from './openai-audio.js';
 export * from './openai-compatible.js';
+export * from './sherpa-ws.js';
 export * from './tts-queue.js';
 
 const PROVIDER_NAMES: Record<CredentialId, string> = {
@@ -59,6 +60,7 @@ export function createChat(s: Settings, getKey: KeyLookup, fetchImpl?: FetchLike
 }
 
 export function createStt(s: Settings, getKey: KeyLookup): SttProvider {
+  if (s.sttProvider === 'local') throw new ConfigError('Local speech recognition is provided by the desktop app.');
   if (s.sttProvider === 'model')
     throw new ConfigError('The answer model listens directly; no speech-to-text service is used.');
   if (s.sttProvider === 'assemblyai') return new AssemblyAIStt({ apiKey: need(getKey, 'assemblyai') });
@@ -67,7 +69,7 @@ export function createStt(s: Settings, getKey: KeyLookup): SttProvider {
 
 /** Cloud TTS for the chosen voice, or null for the offline system voice. */
 export function createTts(s: Settings, getKey: KeyLookup): TtsProvider | null {
-  if (s.ttsProvider === 'system') return null;
+  if (s.ttsProvider === 'system' || s.ttsProvider === 'local') return null; // handled by the desktop app
   if (s.ttsProvider === 'elevenlabs') {
     return new ElevenLabsTts({ apiKey: need(getKey, 'elevenlabs'), ...(s.ttsVoice ? { voiceId: s.ttsVoice } : {}) });
   }

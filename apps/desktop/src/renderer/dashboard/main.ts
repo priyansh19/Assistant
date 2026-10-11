@@ -236,6 +236,7 @@ function renderControls(s: Settings): void {
   set('ttsProvider', s.ttsProvider);
   set('ttsVoice', s.ttsVoice);
   $('ttsVoiceRow').hidden = s.ttsProvider !== 'elevenlabs';
+  renderLocal(s);
   if (s.sttProvider === 'model' && s.chatProvider === 'anthropic') {
     $('model-desc').textContent = "Claude can't listen to audio. Pick OpenRouter, or a speech-to-text service below.";
   }
@@ -245,6 +246,89 @@ function renderControls(s: Settings): void {
     sw.setAttribute('aria-pressed', String(on));
   }
   document.documentElement.style.setProperty('--cursor', CURSOR_COLOR_HEX[s.cursorColor]);
+}
+
+// ----------------------------------------------------------------- on-device speech
+
+function renderLocal(s: Settings): void {
+  const local = snap.local;
+  $('openwhispr-note').hidden = !local.openWhispr;
+  const voices = local.models.filter((m) => m.kind === 'voice');
+  const sel = $<HTMLSelectElement>('localVoice');
+  const installed = voices.filter((v) => v.installed);
+  const current = s.localVoice;
+  if (document.activeElement !== sel) {
+    sel.replaceChildren(
+      ...(installed.length ? installed : voices).map((v) => {
+        const o = new Option(`${v.name} (${v.desc})${v.installed ? '' : ' — not downloaded'}`, `piper:${v.id}`);
+        o.disabled = !v.installed;
+        return o;
+      }),
+    );
+    sel.value = current;
+  }
+  const speed = $<HTMLInputElement>('localVoiceSpeed');
+  if (document.activeElement !== speed) speed.value = String(s.localVoiceSpeed);
+  $('speed-desc').textContent = `${s.localVoiceSpeed.toFixed(2)}×`;
+  if (document.activeElement !== $('localSttModel')) $<HTMLSelectElement>('localSttModel').value = s.localSttModel;
+
+  $('local-models').replaceChildren(
+    ...local.models.map((m) => {
+      const meta = el('div', { className: 'item-meta' }, [
+        el('span', { className: 'pill', text: m.kind === 'stt' ? 'Speech recognition' : 'Voice' }),
+        el('span', { text: `${m.sizeMb} MB` }),
+      ]);
+      let status = m.installed ? '✓ Downloaded' : '';
+      if (m.progress !== undefined)
+        status = m.progress === null ? 'Unpacking…' : `Downloading ${Math.round(m.progress * 100)}%`;
+      if (m.error) status = `Failed: ${m.error}`;
+      if (status) meta.append(el('span', { className: m.error ? 'pill err' : '', text: status }));
+      const buttons = el('div', { className: 'item-buttons' });
+      const busy = m.progress !== undefined;
+      if (!m.installed && !busy) {
+        buttons.append(
+          button(m.error ? 'Retry' : 'Download', 'primary small', async () => {
+            const r = await api.localDownload(m.id);
+            toast(r.ok ? `${m.name} is ready` : r.message);
+          }),
+        );
+      }
+      if (m.kind === 'voice' && m.installed) {
+        buttons.append(
+          button('Use', 'secondary small', () => save({ localVoice: `piper:${m.id}`, ttsProvider: 'local' })),
+        );
+      }
+      if (m.installed) {
+        buttons.append(
+          button('Remove', 'secondary small', async () => {
+            await api.localRemove(m.id);
+          }),
+        );
+      }
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: m.name }),
+          el('div', { className: 'item-a', text: m.desc }),
+          meta,
+        ]),
+        buttons,
+      ]);
+    }),
+  );
+}
+
+/** Start the downloads a local preset needs (Moonshine + the chosen voice), in the background. */
+function ensureLocalModels(s: Settings): void {
+  const want: string[] = [];
+  if (s.sttProvider === 'local' && !snap.local.openWhispr) {
+    const stt = s.localSttModel === 'parakeet-v3' ? 'parakeet-v3' : 'moonshine-tiny';
+    if (!snap.local.models.some((m) => m.kind === 'stt' && m.installed)) want.push(stt);
+  }
+  if (s.ttsProvider === 'local') want.push(s.localVoice.replace(/^piper:/, ''));
+  for (const id of want) {
+    const m = snap.local.models.find((x) => x.id === id);
+    if (m && !m.installed && m.progress === undefined) void api.localDownload(id);
+  }
 }
 
 // ----------------------------------------------------------------- home
@@ -677,8 +761,14 @@ interface Preset {
 
 const PRESETS: Preset[] = [
   {
+    id: 'fastest',
+    title: 'Fastest (recommended): OpenRouter + on-device speech',
+    desc: 'One OpenRouter key. Your voice is recognised and the answer spoken right here on this PC (downloads ~175 MB once).',
+    settings: { chatProvider: 'openrouter', sttProvider: 'local', ttsProvider: 'local' },
+  },
+  {
     id: 'best',
-    title: 'Best experience (recommended)',
+    title: 'Claude + cloud speech',
     desc: 'Claude answers, AssemblyAI hears you live, ElevenLabs speaks. 3 keys.',
     settings: { chatProvider: 'anthropic', sttProvider: 'assemblyai', ttsProvider: 'elevenlabs' },
   },
@@ -831,7 +921,14 @@ function renderWizard(): void {
       ]);
       c.type = 'button';
       c.setAttribute('aria-pressed', String(current === p.id));
-      c.addEventListener('click', () => void save(p.settings, true).then(renderWizard));
+      c.addEventListener(
+        'click',
+        () =>
+          void save(p.settings, true).then(() => {
+            ensureLocalModels(snap.settings);
+            renderWizard();
+          }),
+      );
       return c;
     });
     body.replaceChildren(
@@ -1054,6 +1151,9 @@ async function init(): Promise<void> {
   bindSelect('sttProvider');
   bindSelect('ttsProvider');
   bindText('ttsVoice');
+  bindSelect('localVoice');
+  bindSelect('localSttModel');
+  bindSelect('localVoiceSpeed', Number);
 
   $('ask-form').addEventListener('submit', (e) => {
     e.preventDefault();

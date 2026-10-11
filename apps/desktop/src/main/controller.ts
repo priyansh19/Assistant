@@ -18,6 +18,7 @@ import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
 import type { SettingsStore } from './settings-store';
+import { ModelStore } from './local-speech/store';
 import type { WorkerHost } from './worker-host';
 
 type StateListener = (state: InteractionState) => void;
@@ -48,6 +49,8 @@ export class Controller {
   private readonly asks = new Map<number, (r: AskResult | null) => void>();
   private readonly samples = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   hooks: ControllerHooks = {};
+  /** On-device speech model downloads. The models themselves run in the engine. */
+  readonly local = { store: new ModelStore() };
 
   constructor(
     platform: Platform,
@@ -88,6 +91,7 @@ export class Controller {
       missing: this.missingKeys(),
       history: this.history.list(),
       demo: DEMO,
+      modelsDir: this.local.store.root,
     };
   }
 

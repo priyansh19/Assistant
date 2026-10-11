@@ -11,10 +11,16 @@ export const CHAT_PROVIDERS = ['anthropic', 'openrouter', 'openai'] as const;
 export type ChatProviderId = (typeof CHAT_PROVIDERS)[number];
 
 /** 'model': the answer model listens to the recorded audio itself (e.g. Gemini via OpenRouter). */
-export const STT_PROVIDERS = ['assemblyai', 'openai', 'model'] as const;
+/** 'local': on this PC (OpenWhispr's Parakeet server if running, else a downloaded model). */
+export const STT_PROVIDERS = ['assemblyai', 'openai', 'model', 'local'] as const;
 export type SttProviderId = (typeof STT_PROVIDERS)[number];
 
-export const TTS_PROVIDERS = ['elevenlabs', 'openai', 'system'] as const;
+/** 'local': Kokoro or Piper running on this PC. */
+export const TTS_PROVIDERS = ['elevenlabs', 'openai', 'system', 'local'] as const;
+
+/** Downloadable local speech-to-text models. 'auto' prefers a running OpenWhispr server. */
+export const LOCAL_STT_MODELS = ['auto', 'moonshine-tiny', 'parakeet-v3'] as const;
+export type LocalSttModel = (typeof LOCAL_STT_MODELS)[number];
 export type TtsProviderId = (typeof TTS_PROVIDERS)[number];
 
 /** Keys that work well for hold-to-talk because they do nothing on their own. */
@@ -53,6 +59,12 @@ export interface Settings {
   ttsProvider: TtsProviderId;
   /** ElevenLabs voice id; empty means the default voice. */
   ttsVoice: string;
+  /** Which local speech-to-text model to use when sttProvider is 'local'. */
+  localSttModel: LocalSttModel;
+  /** Local voice as 'engine:voice', e.g. 'kokoro:af_heart' or 'piper:lessac'. */
+  localVoice: string;
+  /** Local voice speed, 0.7–1.5. */
+  localVoiceSpeed: number;
   holdKey: HoldKey;
   /** Long edge of the screenshot sent to the model, in pixels. */
   captureMaxEdge: number;
@@ -86,6 +98,9 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   sttProvider: 'assemblyai',
   ttsProvider: 'elevenlabs',
   ttsVoice: '',
+  localSttModel: 'auto',
+  localVoice: 'piper:en_US-lessac',
+  localVoiceSpeed: 1.1,
   holdKey: 'RightCtrl',
   captureMaxEdge: 1280,
   captureAllDisplays: false,
@@ -106,8 +121,8 @@ export const CAPTURE_EDGE_RANGE = { min: 640, max: 2560 } as const;
 /** Which credential each provider choice needs. `system` TTS needs none. */
 export function requiredCredentials(s: Settings): CredentialId[] {
   const ids = new Set<CredentialId>([s.chatProvider]);
-  if (s.sttProvider !== 'model') ids.add(s.sttProvider);
-  if (s.ttsProvider !== 'system') ids.add(s.ttsProvider);
+  if (s.sttProvider !== 'model' && s.sttProvider !== 'local') ids.add(s.sttProvider);
+  if (s.ttsProvider !== 'system' && s.ttsProvider !== 'local') ids.add(s.ttsProvider);
   return [...ids];
 }
 
@@ -135,6 +150,14 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     sttProvider: oneOf(STT_PROVIDERS, o['sttProvider'], base.sttProvider),
     ttsProvider: oneOf(TTS_PROVIDERS, o['ttsProvider'], base.ttsProvider),
     ttsVoice: shortString(o['ttsVoice'], base.ttsVoice),
+    localSttModel: oneOf(LOCAL_STT_MODELS, o['localSttModel'], base.localSttModel),
+    localVoice: /^(kokoro|piper):[a-z0-9_-]{1,40}$/i.test(String(o['localVoice'] ?? ''))
+      ? String(o['localVoice'])
+      : base.localVoice,
+    localVoiceSpeed:
+      typeof o['localVoiceSpeed'] === 'number' && Number.isFinite(o['localVoiceSpeed'])
+        ? Math.min(1.5, Math.max(0.7, o['localVoiceSpeed']))
+        : base.localVoiceSpeed,
     holdKey: oneOf(HOLD_KEYS, o['holdKey'], base.holdKey),
     captureMaxEdge: Math.round(Math.min(Math.max(edge, CAPTURE_EDGE_RANGE.min), CAPTURE_EDGE_RANGE.max)),
     captureAllDisplays:

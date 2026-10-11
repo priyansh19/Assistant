@@ -64,6 +64,7 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   missing: [],
   history: [],
   demo: true,
+  modelsDir: '/nonexistent/models',
   ...over,
 });
 

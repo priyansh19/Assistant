@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "sherpa-onnx-node": "1.13.8",
     "uiohook-napi": "1.5.5"
   },
   "devDependencies": {

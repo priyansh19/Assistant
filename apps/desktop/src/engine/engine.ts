@@ -14,6 +14,9 @@ import { createChat, createStt, createTts } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
 import type { HoldKeyHook } from '../platform/types';
 import { demoChat, demoStt } from './demo';
+import { LocalSpeechEngine } from './local-speech/engine';
+import { ModelFiles } from './local-speech/files';
+import { localStt, localTts } from './local-speech/providers';
 import type { MediaChannel } from './media-channel';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './media-ports';
 
@@ -43,6 +46,8 @@ export class Engine {
     tts?: TtsProvider | null;
     speech?: SpeechFactory;
   } = {};
+  /** On-device models stay loaded across config changes; rebuilt only if the folder moves. */
+  private local: { files: ModelFiles; engine: LocalSpeechEngine } | null = null;
   private hook: HoldKeyHook | null = null;
   private keyTest = false;
   private nextPlanId = 1;
@@ -52,7 +57,7 @@ export class Engine {
     const settings = () => this.cfg().settings;
     this.orchestrator = new Orchestrator({
       chat: () => (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(settings(), this.key)),
-      stt: () => (this.providers.stt ??= this.cfg().demo ? demoStt() : createStt(settings(), this.key)),
+      stt: () => (this.providers.stt ??= this.createStt()),
       speech: () => this.speech(),
       capture: createCapturePort(opts.media, (all) => this.plan(all), settings),
       mic: createMicPort(opts.media, () => settings().micDeviceId),
@@ -87,10 +92,41 @@ export class Engine {
 
   private readonly key = (id: CredentialId): string | null => this.config?.keys[id] ?? null;
 
+  private localSpeech(): { files: ModelFiles; engine: LocalSpeechEngine } {
+    const dir = this.cfg().modelsDir;
+    if (this.local?.files.root !== dir) {
+      const files = new ModelFiles(dir);
+      const engine = new LocalSpeechEngine(files, (message) => this.post({ type: 'log', level: 'warn', message }));
+      this.local = { files, engine };
+    }
+    return this.local;
+  }
+
+  private localStt(): SttProvider {
+    return localStt(this.localSpeech().engine, () => this.cfg().settings.localSttModel);
+  }
+
+  private localTts(): TtsProvider {
+    const { engine, files } = this.localSpeech();
+    return localTts(engine, files, () => this.cfg().settings);
+  }
+
+  private createStt(): SttProvider {
+    const cfg = this.cfg();
+    // Demo mode swaps out cloud services only; on-device speech is real either way.
+    if (cfg.settings.sttProvider === 'local') return this.localStt();
+    return cfg.demo ? demoStt() : createStt(cfg.settings, this.key);
+  }
+
+  private createTts(): TtsProvider | null {
+    const cfg = this.cfg();
+    if (cfg.settings.ttsProvider === 'local') return this.localTts();
+    return cfg.demo ? null : createTts(cfg.settings, this.key);
+  }
+
   private speech(): SpeechFactory {
     if (this.providers.speech) return this.providers.speech;
-    const cfg = this.cfg();
-    const tts = cfg.demo ? null : (this.providers.tts ??= createTts(cfg.settings, this.key));
+    const tts = this.providers.tts === undefined ? (this.providers.tts = this.createTts()) : this.providers.tts;
     const factory = tts ? cloudSpeech(tts, () => createAudioSink(this.opts.media)) : systemSpeech(this.opts.media);
     this.providers.speech = factory;
     return factory;
@@ -219,8 +255,18 @@ export class Engine {
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   private prewarm(): void {
     const cfg = this.config;
-    if (!cfg || cfg.demo || cfg.missing.length || cfg.settings.sttProvider === 'model') return;
+    if (!cfg) return;
     try {
+      // On-device models need no key: load them even before keys are entered.
+      if (cfg.settings.sttProvider === 'local') this.localStt().prewarm?.();
+      if (cfg.settings.ttsProvider === 'local') void this.localTts().prewarm?.(new AbortController().signal);
+      if (
+        cfg.demo ||
+        cfg.missing.length ||
+        cfg.settings.sttProvider === 'model' ||
+        cfg.settings.sttProvider === 'local'
+      )
+        return;
       (this.providers.stt ??= createStt(cfg.settings, this.key)).prewarm?.();
     } catch {
       // missing config shows up when the user asks

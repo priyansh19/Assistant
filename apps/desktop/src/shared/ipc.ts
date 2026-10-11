@@ -40,6 +40,8 @@ export const IPC = {
   dashHoldKey: 'dash:hold-key',
   dashChanged: 'dash:changed',
   dashMicLevel: 'dash:mic-level',
+  dashLocalDownload: 'dash:local-download',
+  dashLocalRemove: 'dash:local-remove',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -68,6 +70,25 @@ export interface DashboardSnapshot {
   actions: SavedAction[];
   /** Last four characters of each saved key, so the user can tell which key is stored. */
   keyHints: Partial<Record<CredentialId, string>>;
+  local: LocalSpeechView;
+}
+
+export interface LocalModelView {
+  id: string;
+  kind: 'stt' | 'voice';
+  name: string;
+  desc: string;
+  sizeMb: number;
+  installed: boolean;
+  /** 0–1 while downloading, null while unpacking, undefined when idle. */
+  progress?: number | null;
+  error?: string;
+}
+
+export interface LocalSpeechView {
+  models: LocalModelView[];
+  /** OpenWhispr's local speech server is running (usable without downloading anything). */
+  openWhispr: boolean;
 }
 
 export type KeySetResult = { ok: true; snapshot: DashboardSnapshot } | { ok: false; reason: string };

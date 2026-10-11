@@ -25,6 +25,8 @@ export interface EngineConfig {
   history: HistoryEntry[];
   /** CLICKY_DEMO: offline providers. */
   demo: boolean;
+  /** Folder of downloaded on-device speech models (main downloads them, the engine runs them). */
+  modelsDir: string;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
