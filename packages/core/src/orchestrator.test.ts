@@ -542,10 +542,18 @@ describe('dictation and agent mode', () => {
     expect(chat.requests[0]?.question).toContain('Task: close this window');
   });
 
-  it('agent requests are answered normally when agent mode is off', async () => {
-    const t = setup({ agent: () => ({ enabled: false, confirm: 'risky' }), input: { run: async () => undefined } });
+  it('asking for the agent while it is off opens its setup instead of acting', async () => {
+    let opened = 0;
+    const acted: unknown[] = [];
+    const t = setup({
+      agent: () => ({ enabled: false, confirm: 'risky' }),
+      agentNotReady: () => void opened++,
+      input: { run: async (a) => void acted.push(a) },
+    });
     const r = await t.o.ask('Agent, close this window', 'typed');
-    expect(r?.answer).toBe('Click Export. Then choose PDF.');
+    expect(opened).toBe(1);
+    expect(acted).toEqual([]);
+    expect(r?.answer).toMatch(/isn't set up yet/);
   });
 });
 

@@ -40,6 +40,11 @@ export class InputHost {
     }
   }
 
+  /** The app in front (never-touch check for agent mode). */
+  async foreground(): Promise<AppInfo | null> {
+    return (await this.driver?.foreground().catch(() => null)) ?? null;
+  }
+
   /** Write mode, at key-up: the app in front and the text the user has selected there, if any. */
   async writeContext(): Promise<WriteContext> {
     const d = this.driver;

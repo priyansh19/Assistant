@@ -236,6 +236,14 @@ export interface AgentDeps {
   atCaret?(): void;
   /** How long the companion takes to fly to a target before the click (default 950 ms). */
   flightMs?: number;
+  /** The app in front, if it's on the user's never-touch list (checked before every step). */
+  blockedApp?(): Promise<string | null>;
+  /** Resolves when the user isn't holding the run paused (Pause button). */
+  whilePaused?(signal: AbortSignal): Promise<void>;
+  /** True if the user used the mouse or keyboard themselves since the last step. */
+  userInterrupted?(): boolean;
+  /** Progress for the step strip. */
+  onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
 }
 
 export interface AgentResult {
@@ -304,6 +312,19 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
   for (let i = 0; i < max;) {
     if (deps.signal.aborted) return stopped();
+    await deps.whilePaused?.(deps.signal);
+    if (deps.signal.aborted) return stopped();
+    // The user took over the mouse or keyboard: wait for them before doing anything else.
+    if (deps.userInterrupted?.()) {
+      deps.log?.('agent paused: the user used the mouse or keyboard');
+      const go = await deps.confirm('You used the mouse, so I paused. Continue', deps.signal);
+      if (!go || deps.signal.aborted) return stopped();
+    }
+    const blocked = await deps.blockedApp?.();
+    if (blocked) {
+      deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
+      return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
+    }
     const screens = await deps.capture.take(deps.signal);
     if (deps.signal.aborted) return stopped();
     const question = [
@@ -342,6 +363,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     const say = a.say || describe(a);
     deps.log?.(`agent step ${i}: ${describe(a)}${a.say ? ` — "${a.say}"` : ''}${a.risky ? ' (risky)' : ''}`);
     deps.onStep?.(say);
+    deps.onProgress?.({ goal, step: i, max, say });
     let input: InputAction | null = null;
     if (a.type === 'click' || a.type === 'double_click' || a.type === 'right_click' || a.type === 'scroll') {
       const mapped = mapPointToDisplay(a, screens.geometry);

@@ -652,6 +652,50 @@
     </main>
 
     <!-- First-run setup wizard -->
+    <div id="agent-setup" class="wizard" hidden>
+      <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="agent-setup-title">
+        <div class="wizard-body">
+          <h1 id="agent-setup-title">Let Clicky do tasks for you</h1>
+          <p>
+            Say <b>"Clickey, …"</b> and Clicky does it with your mouse and keyboard while you watch, for example
+            "Clickey, open Notepad and write a shopping list". Before it starts, here's how it behaves:
+          </p>
+          <ul class="rules">
+            <li>
+              It shows every step first: the triangle flies to the spot, and a bar at the top shows what it's doing.
+            </li>
+            <li>It always asks before <b>sending, buying, deleting, posting or submitting</b> anything.</li>
+            <li>It never types passwords, card numbers or codes, and it stops at sign-in screens.</li>
+            <li>
+              <b>Esc</b> or the Stop button stops it at once. If you use the mouse or keyboard, it pauses and asks.
+            </li>
+            <li>It stops after 25 steps, and never touches the apps you list below.</li>
+          </ul>
+          <div class="card">
+            <div class="row">
+              <div class="label"><div class="title">Ask before acting</div></div>
+              <select id="as-confirm">
+                <option value="risky">Only for sending, buying, deleting… (recommended)</option>
+                <option value="always">Before every step</option>
+              </select>
+            </div>
+            <div class="row column">
+              <div class="label">
+                <div class="title">Apps it must never touch</div>
+                <div class="desc">Comma-separated app names. Password managers are listed already.</div>
+              </div>
+              <textarea id="as-blocked" rows="2"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="wizard-foot">
+          <button class="link" id="as-cancel">Not now</button>
+          <div class="spacer"></div>
+          <button class="primary" id="as-accept">I understand, turn on agent mode</button>
+        </div>
+      </div>
+    </div>
+
     <div id="wizard" class="wizard" hidden>
       <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
         <div class="wizard-steps" id="wizard-steps" aria-hidden="true"></div>

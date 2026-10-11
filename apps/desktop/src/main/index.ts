@@ -65,6 +65,7 @@ if (!app.requestSingleInstanceLock()) {
           overlays?.message('Clicky hid its window to see your screen. It comes back after the answer.', 'info');
       },
       needKeys: () => dashboard.open('keys'),
+      needAgentSetup: () => dashboard.open('agent'),
     };
 
     ctl.startHoldKey();

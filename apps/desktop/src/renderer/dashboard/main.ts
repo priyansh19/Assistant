@@ -10,6 +10,8 @@ import {
   type CredentialId,
   type HistoryEntry,
   type SavedAction,
+  AGENT_RULES_VERSION,
+  agentReady,
   type Playbook,
   type Settings,
 } from '@clicky/core';
@@ -1111,6 +1113,23 @@ function renderWizard(): void {
   }
 }
 
+// ----------------------------------------------------------------- agent setup (consent)
+
+function openAgentSetup(): void {
+  $<HTMLSelectElement>('as-confirm').value = snap.settings.agentConfirm;
+  $<HTMLTextAreaElement>('as-blocked').value = snap.settings.agentBlockedApps;
+  $('agent-setup').hidden = false;
+  document.querySelector('main')?.setAttribute('inert', '');
+  document.querySelector('nav')?.setAttribute('inert', '');
+  $('as-accept').focus();
+}
+
+function closeAgentSetup(): void {
+  $('agent-setup').hidden = true;
+  document.querySelector('main')?.removeAttribute('inert');
+  document.querySelector('nav')?.removeAttribute('inert');
+}
+
 // ----------------------------------------------------------------- voice picker
 
 interface VoiceOption {
@@ -1349,7 +1368,28 @@ async function init(): Promise<void> {
   });
   initPlaybooks();
   bindSelect('dictationKey');
-  bindToggle('agentEnabled');
+  // Turning agent mode on goes through its rules screen the first time (explicit consent).
+  $<HTMLInputElement>('agentEnabled').addEventListener('change', (e) => {
+    const box = e.target as HTMLInputElement;
+    if (box.checked && !agentReady({ ...snap.settings, agentEnabled: true })) {
+      box.checked = false;
+      openAgentSetup();
+      return;
+    }
+    void save({ agentEnabled: box.checked });
+  });
+  $('as-cancel').addEventListener('click', closeAgentSetup);
+  $('as-accept').addEventListener('click', async () => {
+    await save({
+      agentEnabled: true,
+      agentConsentAt: Date.now(),
+      agentRulesVersion: AGENT_RULES_VERSION,
+      agentConfirm: $<HTMLSelectElement>('as-confirm').value as Settings['agentConfirm'],
+      agentBlockedApps: $<HTMLTextAreaElement>('as-blocked').value.trim(),
+    });
+    closeAgentSetup();
+    toast('Agent mode is on. Say "Clickey, …" to try it. Esc stops it.');
+  });
   bindSelect('agentConfirm');
   bindToggle('paused');
   bindToggle('launchAtLogin');
@@ -1493,7 +1533,10 @@ async function init(): Promise<void> {
   });
 
   api.onChanged((page) => {
-    if (page) showPage(page);
+    if (page === 'agent') {
+      showPage('general');
+      openAgentSetup();
+    } else if (page) showPage(page);
     void refresh();
   });
 
@@ -1501,7 +1544,10 @@ async function init(): Promise<void> {
   render();
   void refreshMicDevices();
   const page = new URLSearchParams(location.search).get('page');
-  if (page) showPage(page);
+  if (page === 'agent') {
+    showPage('general');
+    openAgentSetup();
+  } else if (page) showPage(page);
   if (!snap.settings.onboardingDone) openWizard();
   else if (snap.missing.length && !page) showPage('keys');
   // Relative times ("2 min ago") stay fresh.

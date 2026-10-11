@@ -12,7 +12,7 @@
  * nothing late from an old interaction can touch the new one.
  */
 
-import { actionGoal, agentGoal, runAgent, type AgentResult } from './agent.js';
+import { actionGoal, agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
@@ -75,7 +75,11 @@ export interface OrchestratorDeps {
   /** Speech-to-text for dictation, when it differs from stt() (e.g. the model listens directly). */
   dictationStt?(): SttProvider;
   /** Agent mode settings; agent requests are answered normally when absent or disabled. */
-  agent?(): { enabled: boolean; confirm: AgentConfirmMode };
+  agent?(): { enabled: boolean; confirm: AgentConfirmMode; ready?: boolean };
+  /** Agent mode was asked for but isn't set up (off, or rules not accepted): open its setup. */
+  agentNotReady?(): void;
+  /** Extra agent hooks from the app: never-touch list, pause, user takeover, step strip. */
+  agentHooks?(): Pick<AgentDeps, 'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress'>;
   /** Ask the user to allow an agent step. */
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
   /** Write mode: the app in front and any selected text, read at key-up. */
@@ -552,6 +556,12 @@ export class Orchestrator {
     if (speech.id) run.latency.setMeta('voice', speech.id);
 
     const agent = audio ? null : this.agentRequest(question);
+    if (agent?.setup) {
+      spec?.discard();
+      this.deps.agentNotReady?.();
+      await this.sayOnly(run, speech, "Agent mode isn't set up yet. I've opened its setup; it takes thirty seconds.");
+      return;
+    }
     if (agent) {
       spec?.discard();
       const go = !agent.ask || ((await this.deps.confirm?.(`Do this for you: ${agent.goal}`, signal)) ?? false);
@@ -603,10 +613,15 @@ export class Orchestrator {
   }
 
   /** The task, if this question asks agent mode to do something and agent mode is on. */
-  private agentRequest(question: string): { goal: string; confirm: AgentConfirmMode; ask: boolean } | null {
+  private agentRequest(
+    question: string,
+  ): { goal: string; confirm: AgentConfirmMode; ask: boolean; setup?: boolean } | null {
     const cfg = this.deps.agent?.();
-    if (!cfg?.enabled) return null;
+    if (!cfg) return null;
     const goal = agentGoal(question);
+    // Asked by name while agent mode isn't set up: offer the setup instead of acting.
+    if (goal && (!cfg.enabled || cfg.ready === false)) return { goal, confirm: cfg.confirm, ask: false, setup: true };
+    if (!cfg.enabled || cfg.ready === false) return null;
     if (goal) return { goal, confirm: cfg.confirm, ask: false };
     // Phrased as a request but without "Agent": offer to do it, and only start once the user agrees.
     const action = this.deps.confirm ? actionGoal(question) : null;
@@ -835,6 +850,7 @@ export class Orchestrator {
         ...(this.deps.log ? { log: this.deps.log } : {}),
         onStep: (say) => this.deps.overlay.caption?.(say),
         ...(this.deps.atCaret ? { atCaret: () => this.deps.atCaret?.() } : {}),
+        ...(this.deps.agentHooks?.() ?? {}),
       });
     } catch (e) {
       if (!signal.aborted) this.fail(run, e, 'answer');
@@ -865,6 +881,25 @@ export class Orchestrator {
       result.outcome === 'done' ? 'answered' : 'error',
       result.outcome === 'done' ? undefined : result.summary,
     );
+  }
+
+  /** Speak one sentence as the whole answer (used for "agent mode isn't set up"). */
+  private async sayOnly(run: Run, speech: SpeechFactory, text: string): Promise<void> {
+    const { signal } = run.interaction;
+    run.answer = text;
+    this.deps.overlay.message(text, 'info');
+    const out = speech.create(signal);
+    out.onFirstAudio(() => {
+      if (this.run === run && this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
+    });
+    out.say(text);
+    out.end();
+    await withTimeout(out.done, 20_000, 'speech', 'saying it', signal).catch(() => out.stop());
+    if (signal.aborted) return;
+    if (this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
+    run.latency.mark('done');
+    this.machine.dispatch({ type: 'speechDone' });
+    this.finish(run, 'answered');
   }
 
   private fail(run: Run, e: unknown, stage: Stage): void {

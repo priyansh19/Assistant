@@ -13,6 +13,8 @@ export interface HoldKeyHook {
     onCancel?: () => void;
     onDictateDown?: () => void;
     onDictateUp?: () => void;
+    /** Any mouse movement, click or other key press (agent mode pauses when the user takes over). */
+    onUserInput?: () => void;
   }): void;
   stop(): void;
 }

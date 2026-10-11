@@ -1,5 +1,6 @@
 import {
   HOLD_KEY_LABELS,
+  agentReady,
   buildUserContext,
   cloudSpeech,
   contextTurns,
@@ -10,6 +11,7 @@ import {
   type HoldKey,
   type InputAction,
   type WriteContext,
+  type AppInfo,
   type SpeechFactory,
   type SttProvider,
   type TtsProvider,
@@ -65,6 +67,14 @@ export class Engine {
   private readonly plans = new Map<number, { resolve: (p: CapturePlan) => void; reject: (e: Error) => void }>();
   private readonly inputs = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   private readonly contexts = new Map<number, (c: WriteContext) => void>();
+  private readonly foregrounds = new Map<number, (a: AppInfo | null) => void>();
+  /** Last mouse or key use that wasn't Clicky's own input. */
+  private lastUserInputAt = 0;
+  /** Mouse events until then are Clicky's own clicks moving the pointer. */
+  private ownMouseUntil = 0;
+  /** When the current agent step started, to tell if the user acted since. */
+  private stepStartedAt = 0;
+  private agentPaused = false;
   /** Until then, an Esc may be one Clicky typed itself. */
   private ownKeysUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
@@ -101,7 +111,24 @@ export class Engine {
       dictationStt: () =>
         // When the answer model listens itself there is no speech-to-text service: dictate on this PC.
         settings().sttProvider === 'model' ? this.localStt() : (this.providers.stt ??= this.createStt()),
-      agent: () => ({ enabled: settings().agentEnabled, confirm: settings().agentConfirm }),
+      agent: () => ({
+        enabled: settings().agentEnabled,
+        confirm: settings().agentConfirm,
+        ready: agentReady(settings()),
+      }),
+      agentNotReady: () => this.post({ type: 'agentSetup' }),
+      agentHooks: () => ({
+        blockedApp: () => this.blockedApp(),
+        whilePaused: async (signal) => {
+          while (this.agentPaused && !signal.aborted) await new Promise((r) => setTimeout(r, 150));
+        },
+        userInterrupted: () => {
+          const took = this.stepStartedAt > 0 && this.lastUserInputAt > this.stepStartedAt;
+          this.stepStartedAt = Date.now();
+          return took;
+        },
+        onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
+      }),
       confirm: (text, signal) => this.confirm(text, signal),
       writeContext: () => this.writeContext(),
       atCaret: () => this.post({ type: 'caretAnchor' }),
@@ -263,6 +290,19 @@ export class Engine {
         else p.resolve();
         return;
       }
+      case 'foreground.reply': {
+        const done = this.foregrounds.get(msg.id);
+        this.foregrounds.delete(msg.id);
+        done?.(msg.app);
+        return;
+      }
+      case 'agent.pause':
+        this.agentPaused = msg.on;
+        this.post({ type: 'agentPaused', on: msg.on });
+        return;
+      case 'agent.allow':
+        this.pendingConfirm?.(true);
+        return;
       case 'writeContext.reply': {
         const done = this.contexts.get(msg.id);
         this.contexts.delete(msg.id);
@@ -309,6 +349,11 @@ export class Engine {
           this.orchestrator.cancel('escape');
         },
         onDictateDown: () => this.dictateDown(),
+        onUserInput: () => {
+          const now = Date.now();
+          if (now < this.ownKeysUntil || now < this.ownMouseUntil) return;
+          this.lastUserInputAt = now;
+        },
         onDictateUp: () => {
           if (this.keyTest) return this.post({ type: 'keyTest', down: false, key: 'dictate' });
           this.orchestrator.keyUp();
@@ -356,6 +401,36 @@ export class Engine {
     this.post({ type: 'caretAnchor' });
   }
 
+  /** The app in front if it's on the never-touch list. */
+  private async blockedApp(): Promise<string | null> {
+    const list = this.cfg()
+      .settings.agentBlockedApps.split(',')
+      .map((a) =>
+        a
+          .trim()
+          .toLowerCase()
+          .replace(/\.exe$/, '')
+          .replace(/\s+/g, ''),
+      )
+      .filter((a) => a.length >= 2);
+    if (!list.length) return null;
+    const id = this.nextPlanId++;
+    const app = await new Promise<AppInfo | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.foregrounds.delete(id);
+        resolve(null);
+      }, 1500);
+      this.foregrounds.set(id, (a) => {
+        clearTimeout(timer);
+        resolve(a);
+      });
+      this.post({ type: 'foreground', id });
+    });
+    if (!app) return null;
+    const hay = `${app.process} ${app.title}`.toLowerCase().replace(/\s+/g, '');
+    return list.some((n) => hay.includes(n)) ? app.title || app.process : null;
+  }
+
   /** Ask main for the app in front and the selection; an empty context if main is slow. */
   private writeContext(): Promise<WriteContext> {
     const id = this.nextPlanId++;
@@ -376,12 +451,15 @@ export class Engine {
   private input(action: InputAction, signal: AbortSignal): Promise<void> {
     if (signal.aborted) return Promise.reject(new Error('cancelled'));
     const id = this.nextPlanId++;
-    if (action.kind === 'keys' || action.kind === 'type') this.ownKeysUntil = Date.now() + 60_000;
+    if (action.kind === 'keys' || action.kind === 'type' || action.kind === 'backspace')
+      this.ownKeysUntil = Date.now() + 60_000;
+    if (action.kind === 'click' || action.kind === 'scroll') this.ownMouseUntil = Date.now() + 60_000;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {
         clearTimeout(timer);
         this.inputs.delete(id);
         this.ownKeysUntil = Math.min(this.ownKeysUntil, Date.now() + OWN_KEYS_MS);
+        this.ownMouseUntil = Math.min(this.ownMouseUntil, Date.now() + OWN_KEYS_MS);
       };
       const timer = setTimeout(() => {
         done();
@@ -408,6 +486,7 @@ export class Engine {
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
     return new Promise<boolean>((resolve) => {
       show();
+      this.post({ type: 'agentAsk', text: `${text}?` });
       const again = setInterval(show, 8000); // overlay messages fade; keep the question up
       const timer = setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS);
       const onAbort = (): void => finish(false);
@@ -416,6 +495,7 @@ export class Engine {
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         if (this.pendingConfirm === finish) this.pendingConfirm = null;
+        this.post({ type: 'agentAsk', text: null });
         resolve(ok);
       };
       if (signal.aborted) return finish(false);

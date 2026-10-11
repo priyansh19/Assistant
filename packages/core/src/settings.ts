@@ -82,6 +82,12 @@ export interface Settings {
   /** Questions that start with "agent" are carried out with the mouse and keyboard. */
   agentEnabled: boolean;
   agentConfirm: AgentConfirmMode;
+  /** When the user accepted the agent rules (ms since epoch); 0 = never. Agent mode needs it. */
+  agentConsentAt: number;
+  /** The rules version they accepted; a material change asks again. */
+  agentRulesVersion: number;
+  /** Apps agent mode must never act in (comma-separated process or window names). */
+  agentBlockedApps: string;
   /** Plain dictation is tidied by the AI (punctuation, lists) before it's typed. */
   tidyDictation: boolean;
   /** Sound on key press and release. */
@@ -141,8 +147,12 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   localVoiceSpeed: 1.1,
   holdKey: 'RightCtrl',
   dictationKey: 'RightAlt',
-  agentEnabled: true,
+  agentEnabled: false,
   agentConfirm: 'risky',
+  agentConsentAt: 0,
+  agentRulesVersion: 0,
+  agentBlockedApps:
+    '1password, bitwarden, keepass, keepassxc, lastpass, dashlane, keeper, enpass, protonpass, roboform',
   tidyDictation: true,
   cueSound: 'soft',
   profileName: '',
@@ -169,6 +179,14 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
 });
 
 export const CAPTURE_EDGE_RANGE = { min: 640, max: 2560 } as const;
+
+/** Bump when the agent rules shown to the user change materially; they are asked to agree again. */
+export const AGENT_RULES_VERSION = 1;
+
+/** Agent mode may act only when it's on and the current rules were accepted. */
+export function agentReady(s: Settings): boolean {
+  return s.agentEnabled && s.agentConsentAt > 0 && s.agentRulesVersion >= AGENT_RULES_VERSION;
+}
 
 /** Which credential each provider choice needs. `system` TTS needs none. */
 export function requiredCredentials(s: Settings): CredentialId[] {
@@ -216,6 +234,15 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     dictationKey: dictation === holdKey ? 'off' : dictation,
     agentEnabled: bool(o['agentEnabled'], base.agentEnabled),
     agentConfirm: oneOf(AGENT_CONFIRM_MODES, o['agentConfirm'], base.agentConfirm),
+    agentConsentAt:
+      typeof o['agentConsentAt'] === 'number' && Number.isFinite(o['agentConsentAt']) && o['agentConsentAt'] >= 0
+        ? o['agentConsentAt']
+        : base.agentConsentAt,
+    agentRulesVersion:
+      typeof o['agentRulesVersion'] === 'number' && Number.isInteger(o['agentRulesVersion'])
+        ? o['agentRulesVersion']
+        : base.agentRulesVersion,
+    agentBlockedApps: shortString(o['agentBlockedApps'], base.agentBlockedApps, 600),
     tidyDictation: bool(o['tidyDictation'], base.tidyDictation),
     cueSound: oneOf(CUE_SOUNDS, o['cueSound'], base.cueSound),
     profileName: shortString(o['profileName'], base.profileName, 80),

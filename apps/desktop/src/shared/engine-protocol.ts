@@ -14,6 +14,7 @@ import type {
   MappedShape,
   Playbook,
   WriteContext,
+  AppInfo,
   Settings,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
@@ -55,6 +56,10 @@ export type MainToEngine =
   | { type: 'capturePlan.reply'; id: number; plan?: CapturePlan; error?: string }
   | { type: 'input.reply'; id: number; error?: string }
   | { type: 'writeContext.reply'; id: number; context: WriteContext }
+  | { type: 'foreground.reply'; id: number; app: AppInfo | null }
+  /** Step strip buttons. */
+  | { type: 'agent.pause'; on: boolean }
+  | { type: 'agent.allow' }
   /** The media renderer died; a new port follows once it's back. */
   | { type: 'media.crashed' }
   | { type: 'shutdown' };
@@ -87,4 +92,12 @@ export type EngineToMain =
   | { type: 'writeContext'; id: number }
   /** Dictation started: move the companion to the text caret. */
   | { type: 'caretAnchor' }
+  /** The app in front (never-touch check before each agent step). */
+  | { type: 'foreground'; id: number }
+  /** Agent mode was asked for but isn't set up: open its rules screen. */
+  | { type: 'agentSetup' }
+  /** Step strip: progress, a question waiting for Allow, or the end of the run. */
+  | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
+  | { type: 'agentAsk'; text: string | null }
+  | { type: 'agentPaused'; on: boolean }
   | { type: 'holdKey.failed'; message: string };

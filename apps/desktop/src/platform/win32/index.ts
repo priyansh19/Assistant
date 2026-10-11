@@ -21,9 +21,11 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
   let dictDown = false;
   let onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null;
   let onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null;
+  let onMouse: (() => void) | null = null;
   return {
-    start({ onDown, onUp, onCancel, onDictateDown, onDictateUp }) {
+    start({ onDown, onUp, onCancel, onDictateDown, onDictateUp, onUserInput }) {
       onKeyDown = (e) => {
+        if (e.keycode !== keycode && e.keycode !== dictCode) onUserInput?.();
         if (e.keycode === UiohookKey.Escape) {
           onCancel?.();
           return;
@@ -50,11 +52,23 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
       };
       uIOhook.on('keydown', onKeyDown);
       uIOhook.on('keyup', onKeyUp);
+      if (onUserInput) {
+        onMouse = () => onUserInput();
+        uIOhook.on('mousemove', onMouse);
+        uIOhook.on('mousedown', onMouse);
+        uIOhook.on('wheel', onMouse);
+      }
       uIOhook.start();
     },
     stop() {
       if (onKeyDown) uIOhook.off('keydown', onKeyDown);
       if (onKeyUp) uIOhook.off('keyup', onKeyUp);
+      if (onMouse) {
+        uIOhook.off('mousemove', onMouse);
+        uIOhook.off('mousedown', onMouse);
+        uIOhook.off('wheel', onMouse);
+      }
+      onMouse = null;
       onKeyDown = onKeyUp = null;
       uIOhook.stop();
     },

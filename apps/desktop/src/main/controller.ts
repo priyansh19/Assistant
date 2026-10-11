@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import {
   CREDENTIAL_IDS,
+  CURSOR_COLOR_HEX,
   isResting,
   HOLD_KEY_LABELS,
   requiredCredentials,
@@ -17,6 +18,7 @@ import type { CredentialStore } from './credential-store';
 import { EngineHost } from './engine-host';
 import { InputHost } from './input-host';
 import { PlaybookStore } from './playbook-store';
+import { TaskStrip } from './task-strip';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -31,6 +33,8 @@ export interface ControllerHooks {
   beforeListen?(): void;
   /** Keys are missing: show the user where to add them. */
   needKeys?(): void;
+  /** Agent mode was asked for but isn't set up: show its rules screen. */
+  needAgentSetup?(): void;
 }
 
 /** A typed question that outlives this is answered with an error rather than left hanging. */
@@ -57,6 +61,11 @@ export class Controller {
   private readonly input: InputHost;
   readonly playbooks = new PlaybookStore();
   private anchorTimer: NodeJS.Timeout | null = null;
+  private readonly strip = new TaskStrip({
+    pause: (on) => this.engine.send({ type: 'agent.pause', on }),
+    stop: () => this.engine.send({ type: 'cancel', reason: 'stopped from the task strip' }),
+    allow: () => this.engine.send({ type: 'agent.allow' }),
+  });
 
   constructor(
     platform: Platform,
@@ -115,6 +124,7 @@ export class Controller {
       case 'state': {
         this.cue(this.current.state, msg.state);
         if (isResting(msg.state)) {
+          this.strip.end();
           if (this.anchorTimer) clearTimeout(this.anchorTimer);
           this.anchorTimer = setTimeout(() => this.overlays.anchor(null), 2500);
         }
@@ -181,6 +191,27 @@ export class Controller {
           .writeContext()
           .catch(() => ({ app: null, selection: null }))
           .then((context) => this.engine.send({ type: 'writeContext.reply', id: msg.id, context }));
+        return;
+      case 'foreground':
+        void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
+        return;
+      case 'agentSetup':
+        this.hooks.needAgentSetup?.();
+        return;
+      case 'agentProgress':
+        this.strip.update({
+          goal: msg.goal,
+          step: msg.step,
+          max: msg.max,
+          say: msg.say,
+          color: CURSOR_COLOR_HEX[this.settings.get().cursorColor],
+        });
+        return;
+      case 'agentAsk':
+        if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
+        return;
+      case 'agentPaused':
+        this.strip.update({ paused: msg.on });
         return;
       case 'caretAnchor':
         if (this.anchorTimer) clearTimeout(this.anchorTimer);
@@ -319,6 +350,7 @@ export class Controller {
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
     this.engine.stop();
+    this.strip.destroy();
     this.input.dispose();
   }
 }
