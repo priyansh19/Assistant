@@ -1,4 +1,4 @@
-import { clipboard, ClipboardItem, screen } from 'electron';
+import { clipboard, ClipboardItem, screen, shell } from 'electron';
 import { isTerminal, type AppInfo, type InputAction, type WriteContext } from '@clicky/core';
 import type { InputDriver } from '../platform/types';
 
@@ -13,7 +13,13 @@ const RESTORABLE = /^(text\/plain|text\/html|text\/rtf|image\/png)$/;
  * correctly across displays with different scaling.
  */
 export class InputHost {
-  constructor(private readonly driver: InputDriver | null) {}
+  constructor(
+    private readonly driver: InputDriver | null,
+    private readonly findApp: (name: string) => { name: string; id: string } | null = () => null,
+  ) {}
+
+  /** Called when a click target was found somewhere else than the screenshot said (the screen changed). */
+  onRetarget: ((at: { x: number; y: number }, label: string) => void) | null = null;
 
   /** Start the helper in the background so the first dictation doesn't wait for it. */
   warm(): void {
@@ -24,8 +30,31 @@ export class InputHost {
     const d = this.need();
     switch (action.kind) {
       case 'click': {
-        const p = screen.dipToScreenPoint(action.at.global);
+        let p = screen.dipToScreenPoint(action.at.global);
+        // The screen may have changed since the screenshot (taskbar icons shift when an app opens):
+        // find the named control where it is now and click that.
+        if (action.target) {
+          const live = await d.locate(action.target, p.x, p.y).catch(() => null);
+          if (live && Math.hypot(live.x - p.x, live.y - p.y) > 6) {
+            p = live;
+            this.onRetarget?.(screen.screenToDipPoint(live), action.target);
+          }
+        }
         return d.click(p.x, p.y, action.button, action.count);
+      }
+      case 'open': {
+        if (action.app) {
+          const a = this.findApp(action.app);
+          if (a) return d.launch(a.id);
+          if (!action.url && !action.path) throw new Error(`"${action.app}" isn't installed on this PC.`);
+        }
+        // Websites open in the user's default browser (whatever Windows has set, e.g. Comet).
+        if (action.url) return shell.openExternal(action.url);
+        if (action.path) {
+          const err = await shell.openPath(action.path);
+          if (err) throw new Error(err);
+        }
+        return;
       }
       case 'scroll': {
         const p = screen.dipToScreenPoint(action.at.global);

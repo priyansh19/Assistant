@@ -98,6 +98,8 @@ export interface OrchestratorDeps {
   writeContext?(signal: AbortSignal): Promise<WriteContext>;
   /** The model for agent steps, when it differs from chat() (agents need precise click positions). */
   agentChat?(): VisionChatProvider;
+  /** Installed apps and common folders, for agent mode's open action. */
+  inventory?(): { apps: string[]; folders: string[] } | undefined;
   /** Save something the user asked Clicky to remember (a correction, a preference). */
   remember?(note: string): void;
   /** Hints from earlier successful runs of a similar task (continuous learning). */
@@ -689,6 +691,19 @@ export class Orchestrator {
       return;
     }
     if (signal.aborted) return;
+    const context = await contextP;
+    if (signal.aborted) return;
+    const last = this.lastInsert;
+    let plan = planDictation(text, { hasSelection: !!context.selection, last, now: this.now() });
+    // "Hey Clicky, open WhatsApp" on the write key: the user is talking to Clicky, not dictating.
+    if (plan.kind === 'assistant' || plan.kind === 'greet') {
+      run.mode = 'answer';
+      run.record = true;
+      const screens = this.deps.capture.take(signal);
+      screens.catch(() => undefined);
+      await this.answer(run, screens, plan.kind === 'assistant' ? plan.question : text);
+      return;
+    }
     run.latency.mark('transcriptFinal');
     const t = this.machine.dispatch({ type: 'transcriptFinal', text });
     if (!t || t.to !== 'thinking') {
@@ -698,10 +713,6 @@ export class Orchestrator {
     }
     const input = this.deps.input;
     if (!input) return this.fail(run, new ConfigError('Typing into other apps is not available here.'), 'config');
-    const context = await contextP;
-    if (signal.aborted) return;
-    const last = this.lastInsert;
-    let plan = planDictation(text, { hasSelection: !!context.selection, last, now: this.now() });
     if (plan.kind === 'revise' && last?.app?.process !== context.app?.process)
       plan = { kind: 'write', instruction: plan.instruction };
     run.question = text;
@@ -896,8 +907,10 @@ export class Orchestrator {
     let result: AgentResult;
     try {
       const hints = this.deps.agentHints?.(goal);
+      const inventory = this.deps.inventory?.();
       result = await runAgent(goal, {
         ...(hints ? { hints } : {}),
+        ...(inventory ? { inventory } : {}),
         chat: this.deps.agentChat?.() ?? chat,
         capture: this.deps.capture,
         input,

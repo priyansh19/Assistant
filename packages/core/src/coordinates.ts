@@ -100,3 +100,16 @@ export function mapPointToDisplay(
     },
   };
 }
+
+/**
+ * Models give positions as thousandths of the screenshot (0–1000 on each axis; Gemini models do
+ * this natively). Convert to that screenshot's pixels before mapping onto the display.
+ */
+export function fromThousandths<T extends { x: number; y: number; screen: number | null }>(
+  p: T,
+  captures: readonly CaptureGeometry[],
+): T {
+  const cap = captures[(p.screen ?? 1) - 1];
+  if (!cap) return p;
+  return { ...p, x: (p.x / 1000) * cap.imageWidth, y: (p.y / 1000) * cap.imageHeight };
+}

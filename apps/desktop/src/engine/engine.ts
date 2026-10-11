@@ -138,6 +138,7 @@ export class Engine {
       agentChat: () => this.agentChat(),
       agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
       remember: (note) => this.post({ type: 'remember', note }),
+      inventory: () => this.cfg().inventory,
       agentRunFinished: (goal, result) => {
         const lesson = lessonFrom(goal, result, Date.now());
         if (lesson) this.post({ type: 'agentLesson', lesson });

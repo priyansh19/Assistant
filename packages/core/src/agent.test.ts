@@ -119,7 +119,7 @@ function fakes(replies: string[], opts: { confirm?: boolean; confirmMode?: 'risk
 describe('runAgent', () => {
   it('runs steps in order, mapping clicks to the display, then reports done', async () => {
     const f = fakes([
-      '{"action":"click","x":500,"y":250,"target":"Search","say":"Clicking search"}',
+      '{"action":"click","x":500,"y":500,"target":"Search","say":"Clicking search"}',
       '{"action":"type","text":"notepad"}',
       '{"action":"key","keys":"enter"}',
       '{"action":"done","say":"Notepad is open."}',
@@ -214,5 +214,11 @@ describe('Start menu guard', () => {
   it('rejects the bare Windows key but allows Win+R', () => {
     expect(parseAgentAction('{"action":"key","keys":"win"}')).toMatchObject({ ok: false });
     expect(parseAgentAction('{"action":"key","keys":"win+r"}')).toMatchObject({ ok: true });
+  });
+});
+
+describe('"click here" is how speech recognition often hears the name', () => {
+  it('starts a task', () => {
+    expect(agentGoal('Click here, open Grokbot.')).toBe('open Grokbot');
   });
 });

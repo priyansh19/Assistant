@@ -42,9 +42,16 @@ export const REVISE_WINDOW_MS = 120_000;
 export const UNDO_WINDOW_MS = 30_000;
 
 export type DictationPlan =
-  { kind: 'plain'; text: string } | { kind: 'write'; instruction: string } | { kind: 'revise'; instruction: string };
+  | { kind: 'plain'; text: string }
+  /** Just "hey Clicky": nothing to type. */
+  | { kind: 'greet' }
+  /** Addressed to Clicky but not a writing request ("hey Clicky, open WhatsApp"): answer or do it. */
+  | { kind: 'assistant'; question: string }
+  | { kind: 'write'; instruction: string }
+  | { kind: 'revise'; instruction: string };
 
-const WAKE = /^\s*(?:hey|hi|okay|ok)?[\s,]*clicky\b[\s,:.!-]*/i;
+/** The assistant's name, including how speech recognition often hears it ("click here"). */
+const WAKE = /^\s*(?:hey|hi|okay|ok)?[\s,]*(?:clickey|clicky|click\s+here|klicky)\b[\s,:.!-]*/i;
 const REVISE =
   /^\s*(?:(?:please|can you|could you)\s+)?(?:make\s+(?:it|this|that)\s+)?(?:a\s+(?:bit|little)\s+)?(shorter|longer|more\s+\w+|less\s+\w+|simpler|friendlier|warmer|punchier|clearer|rewrite(?:\s+(?:it|this|that))?|try\s+again|redo(?:\s+(?:it|this|that))?|another\s+version|different(?:ly)?)\b/i;
 const VERBS =
@@ -60,7 +67,9 @@ export function planDictation(
   const body = text.replace(WAKE, '').trim();
   if (opts.last && opts.now - opts.last.at <= REVISE_WINDOW_MS && REVISE.test(body) && body.split(/\s+/).length <= 12)
     return { kind: 'revise', instruction: body };
-  if (woke || opts.hasSelection || VERBS.test(body)) return { kind: 'write', instruction: body || text };
+  if (opts.hasSelection || VERBS.test(body)) return { kind: 'write', instruction: body || text };
+  if (woke)
+    return body.replace(/[\s,.!?]+/g, '').length < 3 ? { kind: 'greet' } : { kind: 'assistant', question: body };
   return { kind: 'plain', text };
 }
 
@@ -119,6 +128,7 @@ export function writeSystemPrompt(o: WritePromptOptions): string {
 
 /** The user message for a write request. */
 export function writeQuestion(o: WritePromptOptions): string {
+  if (o.plan.kind === 'greet' || o.plan.kind === 'assistant') return '';
   if (o.plan.kind === 'plain')
     return `Clean up this dictated text and return only the cleaned text. Do not reply to it:\n"""\n${o.plan.text}\n"""`;
   if (o.plan.kind === 'revise' && o.previous) {

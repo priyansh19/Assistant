@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, screen } from 'electron';
 import {
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
@@ -22,6 +22,7 @@ import { TaskStrip } from './task-strip';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
 import { LessonStore } from './lesson-store';
+import { Inventory } from './inventory';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -62,6 +63,7 @@ export class Controller {
   /** On-device speech model downloads. The models themselves run in the engine. */
   readonly local = { store: new ModelStore() };
   private readonly input: InputHost;
+  readonly inventory: Inventory;
   readonly playbooks = new PlaybookStore();
   readonly style = new StyleStore();
   readonly lessons = new LessonStore();
@@ -87,7 +89,16 @@ export class Controller {
     private readonly worker: WorkerHost,
   ) {
     this.engine = new EngineHost(platform, worker);
-    this.input = new InputHost(platform.createInputDriver());
+    const driver = platform.createInputDriver();
+    this.inventory = new Inventory(driver);
+    this.input = new InputHost(driver, (name) => this.inventory.find(name));
+    // A click target moved since the screenshot: fly the triangle to where it really is.
+    this.input.onRetarget = (at, label) => {
+      const d = screen.getDisplayNearestPoint(at);
+      const local = { x: at.x - d.bounds.x, y: at.y - d.bounds.y };
+      log.info(`click target "${label}" moved; clicking it at its live position`);
+      this.overlays.point({ displayId: d.id, local, global: at }, label);
+    };
     this.engine.onMessage((msg) => this.onEngine(msg));
     // The overlay waveform: levels come from the media renderer through main, only while listening.
     worker.on((e) => {
@@ -105,9 +116,11 @@ export class Controller {
     this.playbooks.onChange(push);
     this.style.onChange(push);
     this.lessons.onChange(push);
+    this.inventory.onChange(push);
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
+    this.inventory.start();
   }
 
   private config(): EngineConfig {
@@ -127,6 +140,7 @@ export class Controller {
       style: this.style.get(),
       lessons: this.lessons.list(),
       notes: this.lessons.notes(),
+      inventory: this.inventory.view(),
     };
   }
 
@@ -383,6 +397,7 @@ export class Controller {
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
     this.tasks.stop();
+    this.inventory.stop();
     this.engine.stop();
     this.strip.destroy();
     this.input.dispose();
