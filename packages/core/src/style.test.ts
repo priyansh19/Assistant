@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserContext } from './profile.js';
-import { contextOf, learnedStyleText, learningAllowed, mergeStyle, parseStyleReply, type LearnedStyle } from './style.js';
+import {
+  contextOf,
+  learnedStyleText,
+  learningAllowed,
+  mergeStyle,
+  parseStyleReply,
+  type LearnedStyle,
+} from './style.js';
 
 describe('style learning', () => {
   it('maps apps to kinds of writing', () => {

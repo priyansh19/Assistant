@@ -107,6 +107,8 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
   let stage: Stage = 'capture';
   let speech: SpeechStage | null = null;
   const drawn = { count: 0 };
+  /** Whether the model sent any POINT tag, for the log (no movement is usually a missing tag). */
+  let sawTag = false;
   try {
     const screens = await input.screens;
     trace.mark('captureReady');
@@ -183,6 +185,8 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         input.hooks.caption?.(result.answer);
         speech.push(ev.text);
       } else if (ev.type === 'point') {
+        sawTag = true;
+        if (!ev.tag) input.hooks.log?.('POINT none: the model chose not to point');
         pointAt(ev.tag, screens, result, input);
       } else if (ev.type === 'draw') {
         drawShape(ev.shape, screens, drawn, input);
@@ -194,6 +198,10 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
       }
     }
     speech.end();
+    if (!sawTag)
+      input.hooks.log?.(
+        `POINT missing: the reply had no tag (starts "${result.answer.slice(0, 80).replace(/\s+/g, ' ')}")`,
+      );
     result.answer = result.answer.trim();
     if (!result.answer) {
       if (input.audio && !result.heard) {
@@ -240,6 +248,9 @@ function pointAt(
     return;
   }
   result.pointLabel = tag.label || 'here';
+  input.hooks.log?.(
+    `POINT ${tag.x},${tag.y}${tag.screen ? ` screen${tag.screen}` : ''} "${tag.label}" → display ${mapped.point.displayId} at ${Math.round(mapped.point.local.x)},${Math.round(mapped.point.local.y)}`,
+  );
   input.trace.mark('firstPoint');
   input.hooks.point(mapped.point, tag.label);
 }

@@ -532,7 +532,7 @@ describe('OpenRouter defaults', () => {
     for await (const _ of it) void _;
   };
 
-  it('sends at most three models, primary first, and none when a model is chosen', async () => {
+  it('sends at most three models, primary first, with the chosen model leading', async () => {
     const c = capture();
     const free = createChat({ ...DEFAULT_SETTINGS, chatProvider: 'openrouter' }, () => 'sk-or-test', c.fetchImpl);
     await drain(free.stream(req()));
@@ -548,7 +548,12 @@ describe('OpenRouter defaults', () => {
       c.fetchImpl,
     );
     await drain(paid.stream(req()));
-    expect(c.bodies[2]?.['models']).toBeUndefined();
+    // A chosen model comes first and still falls back to the defaults when busy.
     expect(c.bodies[2]?.['model']).toBe('anthropic/claude-sonnet');
+    expect(c.bodies[2]?.['models']).toEqual([
+      'anthropic/claude-sonnet',
+      'google/gemini-2.5-flash-lite',
+      'qwen/qwen3.7-flash',
+    ]);
   });
 });

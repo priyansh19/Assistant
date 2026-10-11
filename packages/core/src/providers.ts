@@ -43,6 +43,8 @@ export interface VisionChatProvider {
   readonly id: string;
   /** The model id in use, for the latency trace. */
   readonly model?: string;
+  /** The model that actually answered the last request (differs when a busy model fell back). */
+  readonly servedModel?: string | undefined;
   /** Open connections early (TLS, HTTP/2) so the real request starts warm. Safe to call often. */
   prewarm?(signal: AbortSignal): Promise<void>;
   /**

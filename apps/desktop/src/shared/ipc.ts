@@ -60,6 +60,7 @@ export const IPC = {
   dashTaskRun: 'dash:task-run',
   dashStyleRemove: 'dash:style-remove',
   dashStyleClear: 'dash:style-clear',
+  dashModels: 'dash:models',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -93,6 +94,16 @@ export interface DashboardSnapshot {
   /** What Clicky learned about how the user writes. */
   style: LearnedStyle;
   tasks: TaskView[];
+}
+
+/** One OpenRouter model for the picker. */
+export interface ModelOption {
+  id: string;
+  name: string;
+  free: boolean;
+  openSource: boolean;
+  /** Approximate dollars per 1,000 answers with a screenshot. */
+  per1000: number;
 }
 
 export interface TaskView {

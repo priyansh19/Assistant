@@ -583,18 +583,30 @@ export class Engine {
   }
 
   /** Voice preview for the dashboard. */
+  private sampleAc: AbortController | null = null;
+
+  /**
+   * One preview at a time: a new one stops the one playing. Previews skip the backup Windows voice
+   * so a slow cloud voice can't end up playing alongside it.
+   */
   private async speakSample(text: string): Promise<void> {
+    this.sampleAc?.abort();
     const ac = new AbortController();
+    this.sampleAc = ac;
     const timer = setTimeout(() => ac.abort(), 20000);
-    const out = this.speech().create(ac.signal);
+    const tts = this.providers.tts === undefined ? (this.providers.tts = this.createTts()) : this.providers.tts;
+    const factory = tts ? cloudSpeech(tts, () => createAudioSink(this.opts.media)) : systemSpeech(this.opts.media);
+    const out = factory.create(ac.signal);
     try {
       out.say(text);
       out.end();
       await out.done;
-      if (ac.signal.aborted) throw new Error('The voice took too long to respond. Check your internet connection.');
+      if (ac.signal.aborted && this.sampleAc === ac)
+        throw new Error('The voice took too long to respond. Check your internet connection.');
     } finally {
       clearTimeout(timer);
       out.stop();
+      if (this.sampleAc === ac) this.sampleAc = null;
     }
   }
 }

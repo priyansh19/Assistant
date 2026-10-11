@@ -18,7 +18,7 @@ import {
   type Settings,
 } from '@clicky/core';
 import type { DashboardApi } from '../../preload/dashboard';
-import type { DashboardSnapshot, TestResult } from '../../shared/ipc';
+import type { DashboardSnapshot, ModelOption, TestResult } from '../../shared/ipc';
 
 declare global {
   interface Window {
@@ -256,6 +256,7 @@ function renderControls(s: Settings): void {
   check('backupVoice', s.backupVoice);
   set('chatProvider', s.chatProvider);
   set('chatModel', s.chatModel);
+  renderModelPick(s);
   $<HTMLInputElement>('chatModel').placeholder = snap.defaultModel;
   $('model-desc').textContent = `Leave empty to use ${snap.defaultModel}.`;
   set('sttProvider', s.sttProvider);
@@ -1333,6 +1334,58 @@ function closeAgentSetup(): void {
   document.querySelector('nav')?.removeAttribute('inert');
 }
 
+// ----------------------------------------------------------------- model picker
+
+let modelOptions: ModelOption[] = [];
+let lastModelKey = '';
+
+function price(m: ModelOption): string {
+  if (m.free) return 'free, may be rate limited';
+  return m.per1000 < 0.01 ? 'under $0.01 per 1,000 answers' : `about ${m.per1000.toFixed(2)} per 1,000 answers`;
+}
+
+/** OpenRouter: a picker of models that can see the screen. Other providers keep the text field. */
+function renderModelPick(s: Settings): void {
+  const pick = $<HTMLSelectElement>('chatModelPick');
+  const custom = $<HTMLInputElement>('chatModel');
+  const openRouter = s.chatProvider === 'openrouter';
+  pick.hidden = !openRouter;
+  if (!openRouter) {
+    custom.hidden = false;
+    return;
+  }
+  const key = JSON.stringify([s.chatModel, modelOptions.length]);
+  if (key === lastModelKey || document.activeElement === pick) return;
+  lastModelKey = key;
+  const opt = (m: ModelOption): HTMLOptionElement => new Option(`${m.name} — ${price(m)}`, m.id);
+  const group = (label: string, list: ModelOption[]): HTMLOptGroupElement => {
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const m of list.slice(0, 40)) g.append(opt(m));
+    return g;
+  };
+  const known = new Set(modelOptions.map((m) => m.id));
+  pick.replaceChildren(
+    new Option(`Recommended: ${snap.defaultModel} (cheap, fast, falls back if busy)`, ''),
+    group(
+      'Open-source models',
+      modelOptions.filter((m) => m.openSource && !m.free),
+    ),
+    group(
+      'Free models (rate limited)',
+      modelOptions.filter((m) => m.free),
+    ),
+    group(
+      'Other models, cheapest first',
+      modelOptions.filter((m) => !m.openSource && !m.free),
+    ),
+    new Option('Type a model id…', '__custom'),
+  );
+  if (s.chatModel && !known.has(s.chatModel)) pick.add(new Option(s.chatModel, s.chatModel), 1);
+  pick.value = s.chatModel;
+  custom.hidden = !(s.chatModel && !known.has(s.chatModel) && modelOptions.length > 0);
+}
+
 // ----------------------------------------------------------------- voice picker
 
 interface VoiceOption {
@@ -1383,6 +1436,7 @@ function voiceOptions(s: Settings): {
 }
 
 let lastPickerKey = '';
+let previewing = false;
 function renderVoicePicker(s: Settings): void {
   const { options, current, field } = voiceOptions(s);
   const key = JSON.stringify([s.ttsProvider, current, options.map((o) => [o.value, o.missing])]);
@@ -1402,18 +1456,24 @@ function renderVoicePicker(s: Settings): void {
       chip.setAttribute('aria-pressed', String(o.value === current));
       chip.title = o.missing ? `Download ${o.name}` : `Use and preview ${o.name}`;
       chip.addEventListener('click', async () => {
+        if (previewing) return; // one preview at a time
         if (o.missing) {
           desc.textContent = `Downloading ${o.name}…`;
           const r = await api.localDownload(o.value.replace(/^piper:/, ''));
           desc.textContent = r.ok ? `${o.name} is ready. Press ▶ to hear it.` : r.message;
           return;
         }
-        if (field) await save({ [field]: o.value } as Partial<Settings>, true);
-        desc.className = 'desc';
-        desc.textContent = `Playing ${o.name}…`;
-        const r = await api.voiceTest();
-        desc.textContent = r.ok ? `${o.name} is Clicky's voice now.` : r.message;
-        desc.className = r.ok ? 'desc' : 'key-error';
+        previewing = true;
+        try {
+          if (field) await save({ [field]: o.value } as Partial<Settings>, true);
+          desc.className = 'desc';
+          desc.textContent = `Playing ${o.name}…`;
+          const r = await api.voiceTest();
+          desc.textContent = r.ok ? `${o.name} is Clicky's voice now.` : r.message;
+          desc.className = r.ok ? 'desc' : 'key-error';
+        } finally {
+          previewing = false;
+        }
       });
       return chip;
     }),
@@ -1628,6 +1688,22 @@ async function init(): Promise<void> {
   bindToggle('backupVoice');
   bindSelect('chatProvider');
   bindText('chatModel');
+  $<HTMLSelectElement>('chatModelPick').addEventListener('change', (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    const custom = $<HTMLInputElement>('chatModel');
+    if (v === '__custom') {
+      custom.hidden = false;
+      custom.focus();
+      return;
+    }
+    custom.hidden = true;
+    void save({ chatModel: v });
+  });
+  void api.models().then((m) => {
+    modelOptions = m;
+    lastModelKey = '';
+    renderModelPick(snap.settings);
+  });
   bindSelect('sttProvider');
   bindSelect('ttsProvider');
   bindText('ttsVoice');

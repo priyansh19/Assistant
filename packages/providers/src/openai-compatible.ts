@@ -25,6 +25,8 @@ export const OPENROUTER_FALLBACKS = ['qwen/qwen3.7-flash', 'anthropic/claude-hai
 export const OPENROUTER_LISTEN_MODELS = ['google/gemini-2.5-flash-lite', 'google/gemini-3.1-flash-lite'];
 
 interface ChatChunk {
+  /** OpenRouter: the model that actually served the request. */
+  model?: string;
   choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
   error?: { message?: string };
 }
@@ -36,6 +38,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
   readonly model: string;
   /** No model chosen in settings: use the defaults with fallbacks. */
   private readonly useDefaults: boolean;
+  servedModel: string | undefined;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly opts: OpenAICompatibleOptions) {
@@ -65,7 +68,10 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       ? req.audio
         ? OPENROUTER_LISTEN_MODELS
         : [OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FALLBACKS]
-      : null;
+      : this.id === 'openrouter'
+        ? // A chosen model still falls back to the defaults when it's busy or rate limited.
+          [...new Set([this.model, OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FALLBACKS])]
+        : null;
     // OpenRouter accepts at most three models in a fallback list.
     const models = list?.slice(0, OPENROUTER_MAX_MODELS);
     const body = {
@@ -92,6 +98,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
         },
       ],
     };
+    this.servedModel = undefined;
     const res = await ensureOk(
       this.id,
       await this.fetchImpl(`${this.base}/chat/completions`, {
@@ -111,6 +118,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       } catch {
         continue; // keep-alive or vendor comment
       }
+      if (chunk.model && !this.servedModel) this.servedModel = chunk.model;
       if (chunk.error) throw new Error(`${this.id}: ${chunk.error.message ?? 'stream error'}`);
       const choice = chunk.choices?.[0];
       if (choice?.finish_reason === 'error') throw new Error(`${this.id}: the model stopped with an error`);

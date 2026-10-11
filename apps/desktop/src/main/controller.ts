@@ -148,8 +148,12 @@ export class Controller {
       case 'overlay': {
         const o = msg.overlay;
         if (o.op === 'state') this.overlays.state(o.state);
-        else if (o.op === 'point') this.overlays.point(o.target, o.label);
-        else if (o.op === 'draw') this.overlays.draw(o.shape);
+        else if (o.op === 'point') {
+          log.info(
+            `overlay point on display ${o.target.displayId} at ${Math.round(o.target.local.x)},${Math.round(o.target.local.y)} "${o.label}"`,
+          );
+          this.overlays.point(o.target, o.label);
+        } else if (o.op === 'draw') this.overlays.draw(o.shape);
         else if (o.op === 'message') this.overlays.message(o.text, o.kind);
         return;
       }

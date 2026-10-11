@@ -5,6 +5,7 @@ import type {
   DashboardSnapshot,
   IpcChannel,
   KeySetResult,
+  ModelOption,
   MicDevice,
   TestResult,
   TryResult,
@@ -46,6 +47,7 @@ const api = {
   removeStyle: (ctx: string, kind: 'notes' | 'examples', index: number) =>
     invoke<DashboardSnapshot>('dash:style-remove', ctx, kind, index),
   clearStyle: () => invoke<DashboardSnapshot>('dash:style-clear'),
+  models: () => invoke<ModelOption[]>('dash:models'),
   onHoldKey(fn: (down: boolean, key: 'talk' | 'dictate') => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean, key: 'talk' | 'dictate') => fn(down, key));

@@ -40,6 +40,15 @@ import {
   type WriteContext,
 } from './write.js';
 
+/** OpenRouter may report a dated variant of the model asked for (e.g. …-001). */
+function sameModel(a: string, b: string): boolean {
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+function shortModel(id: string): string {
+  return id.split('/').pop() ?? id;
+}
+
 /** How a typed question or action ended, for UI that waits on it. */
 export interface AskResult {
   outcome: HistoryEntry['outcome'];
@@ -603,6 +612,12 @@ export class Orchestrator {
     if (signal.aborted) return;
     run.answer = result.answer;
     run.pointLabel = result.pointLabel;
+    const served = chat.servedModel;
+    if (served && chat.model && !sameModel(served, chat.model)) {
+      run.latency.setMeta('servedModel', served);
+      this.deps.log?.(`${chat.model} was busy; ${served} answered`);
+      this.deps.overlay.message(`${shortModel(chat.model)} was busy, so ${shortModel(served)} answered.`, 'info');
+    }
     if (result.heard && !run.question) run.question = result.heard;
     if (result.outcome === 'no-speech') {
       this.deps.overlay.message(NO_SPEECH, 'info');

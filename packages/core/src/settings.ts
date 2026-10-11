@@ -166,7 +166,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   styleLearning: true,
   styleExcludeApps: '1password, bitwarden, keepass, lastpass, dashlane, keeper, bank',
   captureMaxEdge: 1280,
-  captureAllDisplays: false,
+  captureAllDisplays: true,
   launchAtLogin: false,
   rememberHistory: true,
   useRecentContext: true,

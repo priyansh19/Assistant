@@ -484,7 +484,10 @@
               <div class="title">Model</div>
               <div class="desc" id="model-desc">Leave empty to use the default.</div>
             </div>
-            <input type="text" id="chatModel" spellcheck="false" autocomplete="off" />
+            <div class="item-buttons">
+              <select id="chatModelPick" aria-label="Model"></select>
+              <input type="text" id="chatModel" spellcheck="false" autocomplete="off" hidden />
+            </div>
           </div>
         </div>
         <div class="card">

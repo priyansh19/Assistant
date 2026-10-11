@@ -23,6 +23,7 @@ import type { Controller } from './controller';
 import type { CredentialStore } from './credential-store';
 import type { HistoryStore } from './history-store';
 import { log, redact } from './log';
+import { openRouterModels } from './model-catalog';
 import type { SettingsStore } from './settings-store';
 import { STT_MODELS, VOICES } from '../engine/local-speech/catalog';
 import { openWhisprRunning } from '../engine/local-speech/providers';
@@ -232,6 +233,7 @@ export class DashboardWindow {
     handle(IPC.dashPlayCue, (sound) => {
       if (sound === 'soft' || sound === 'bubble' || sound === 'glass') this.controller.playCue(sound);
     });
+    handle(IPC.dashModels, () => openRouterModels());
     handle(IPC.dashTaskAdd, (goal) => {
       if (typeof goal === 'string') this.controller.tasks.add(goal);
       return this.snapshot();
