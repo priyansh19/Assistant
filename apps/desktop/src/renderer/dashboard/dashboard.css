@@ -977,3 +977,7 @@ input[type='search'] {
   color: var(--text);
   border: 1px solid rgba(255, 170, 0, 0.6);
 }
+
+#agent-setup {
+  z-index: 1000;
+}

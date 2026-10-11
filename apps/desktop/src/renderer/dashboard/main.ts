@@ -831,7 +831,20 @@ const PRESETS: Preset[] = [
   },
 ];
 
-const STEPS = ['welcome', 'providers', 'keys', 'mic', 'key', 'done'] as const;
+/** First run: about a minute from here to the first spoken answer (onboarding plan §3.2). */
+const STEPS = ['welcome', 'providers', 'keys', 'key', 'mic', 'about', 'done'] as const;
+/** When setup started, to show how long the first answer took. */
+let setupStartedAt = 0;
+let keyHintTimer: number | undefined;
+
+/** Playbooks to switch on from what the user says they do (step "about"). */
+const WORK_PLAYBOOKS: Array<{ re: RegExp; id: string; mode: Playbook['mode'] }> = [
+  { re: /e-?mail|outlook|gmail|inbox|client/i, id: 'email-replies', mode: 'auto' },
+  { re: /cod(e|ing)|develop|program|engineer|software|claude|cursor|terminal/i, id: 'ai-prompts', mode: 'auto' },
+  { re: /linkedin|recruit|sales|network|hiring|job/i, id: 'linkedin', mode: 'auto' },
+  { re: /start-?up|founder|pitch|investor|fundrais/i, id: 'founder-pitch', mode: 'always' },
+  { re: /learn|student|study|new to|beginner|course/i, id: 'teach-me', mode: 'always' },
+];
 let step = 0;
 let focusedStep = -1;
 
@@ -857,6 +870,7 @@ function firstIncompleteStep(): number {
 
 function openWizard(at = 0): void {
   step = at;
+  if (at === 0 || !setupStartedAt) setupStartedAt = Date.now();
   focusedStep = -1;
   $('wizard').hidden = false;
   document.querySelector('main')?.setAttribute('inert', '');
@@ -881,7 +895,17 @@ async function setKeyDetection(on: boolean): Promise<void> {
   await api.holdKeyTest(on);
 }
 
-api.onHoldKey((down) => {
+api.onHoldKey((down, which) => {
+  if (which === 'dictate') {
+    const d = document.getElementById('dict-detect');
+    if (!d || snap.settings.dictationKey === 'off') return;
+    d.className = 'detected';
+    d.textContent = down
+      ? `✓ ${HOLD_KEY_LABELS[snap.settings.dictationKey]} detected. Let go…`
+      : '✓ Works. Hold it in any text box to write.';
+    return;
+  }
+  window.clearTimeout(keyHintTimer);
   const target = document.getElementById('key-detect');
   if (!target) return;
   target.className = 'detected';
@@ -1047,6 +1071,26 @@ function renderWizard(): void {
       id: 'key-detect',
       text: `Press and hold ${key} now to check it works.`,
     });
+    window.clearTimeout(keyHintTimer);
+    keyHintTimer = window.setTimeout(() => {
+      const d = document.getElementById('key-detect');
+      if (d && d.className !== 'detected')
+        d.textContent = `Nothing yet. Some laptops have no ${key}; pick another key, such as Right Shift.`;
+    }, 8000);
+    const dk = s.dictationKey === 'off' ? null : HOLD_KEY_LABELS[s.dictationKey];
+    const dictRow = dk
+      ? el('div', { className: 'row' }, [
+          el('div', { className: 'label' }, [
+            el('div', { className: 'title', text: 'Write key' }),
+            el('div', {
+              className: 'desc',
+              id: 'dict-detect',
+              text: `Now hold ${dk}: it writes wherever your text cursor is.`,
+            }),
+          ]),
+          el('span', { className: 'big-key', text: dk }),
+        ])
+      : null;
     const voiceDesc = el('div', { className: 'desc', text: 'Hear how Clicky sounds.' });
     const play = button('Play sample', 'secondary', async () => {
       voiceDesc.className = 'desc';
@@ -1056,7 +1100,7 @@ function renderWizard(): void {
       voiceDesc.className = r.ok ? 'key-ok' : 'key-error';
     });
     body.replaceChildren(
-      h1('Your talk key and voice'),
+      h1('Your keys and voice'),
       el('p', {
         text: 'Pick a key you can hold comfortably. Some laptops have no Right Ctrl; choose another key if nothing is detected.',
       }),
@@ -1065,6 +1109,7 @@ function renderWizard(): void {
           el('div', { className: 'label' }, [el('div', { className: 'title', text: 'Hold-to-talk key' }), detect]),
           sel,
         ]),
+        ...(dictRow ? [dictRow] : []),
         el('div', { className: 'row' }, [
           el('div', { className: 'label' }, [el('div', { className: 'title', text: 'Voice' }), voiceDesc]),
           play,
@@ -1072,6 +1117,40 @@ function renderWizard(): void {
       ]),
     );
     focusTarget = sel;
+  } else if (name === 'about') {
+    const field = (label: string, id: string, value: string, placeholder: string): HTMLElement => {
+      const input = el('input', { id });
+      input.type = 'text';
+      input.value = value;
+      input.placeholder = placeholder;
+      input.autocomplete = 'off';
+      return el('div', { className: 'row column' }, [
+        el('div', { className: 'label' }, [el('div', { className: 'title', text: label })]),
+        input,
+      ]);
+    };
+    const suggested = el('div', { className: 'desc', id: 'about-playbooks' });
+    const card = el('div', { className: 'card' }, [
+      field('What should I call you?', 'about-name', s.profileName, 'Your first name'),
+      field('What do you mostly do on this computer?', 'about-work', '', 'e.g. sales emails and spreadsheets'),
+      field('How should your writing sound?', 'about-tone', s.profileTone, 'e.g. short and friendly'),
+    ]);
+    body.replaceChildren(
+      h1('Three quick questions'),
+      el('p', {
+        text: `So Clicky writes like you. Type, or click a box and hold ${s.dictationKey === 'off' ? 'your write key' : HOLD_KEY_LABELS[s.dictationKey]} to say it. You can change this later in Writes like me.`,
+      }),
+      card,
+      suggested,
+    );
+    const work = card.querySelector<HTMLInputElement>('#about-work');
+    work?.addEventListener('input', () => {
+      const hits = WORK_PLAYBOOKS.filter((w) => w.re.test(work.value))
+        .map((w) => snap.playbooks.find((p) => p.id === w.id)?.name)
+        .filter(Boolean);
+      suggested.textContent = hits.length ? `I'll switch on these playbooks for you: ${hits.join(', ')}.` : '';
+    });
+    focusTarget = card.querySelector<HTMLInputElement>('#about-name');
   } else {
     const result = el('div', { className: 'try-result desc', id: 'try-result' });
     const tryBtn = button('Try it now', 'primary', async () => {
@@ -1086,7 +1165,8 @@ function renderWizard(): void {
       if (!r) return;
       if (r.outcome === 'answered') {
         result.className = 'try-result key-ok';
-        result.textContent = `✓ “${r.answer}”${r.pointLabel ? ` (pointed at ${r.pointLabel})` : ''}`;
+        const secs = setupStartedAt ? Math.round((Date.now() - setupStartedAt) / 1000) : 0;
+        result.textContent = `✓ “${r.answer}”${r.pointLabel ? ` (pointed at ${r.pointLabel})` : ''}${secs ? ` Your first answer came ${secs} s after you started setup.` : ''}`;
       } else {
         result.className = 'try-result key-error';
         result.textContent =
@@ -1111,6 +1191,34 @@ function renderWizard(): void {
         text: 'Clicky lives in the tray. If you don’t see it near the clock, click the ^ arrow. Opening Clicky from the Start menu also brings you back here.',
       }),
     );
+    const toggle = (label: string, checked: boolean, onChange: (on: boolean) => void): HTMLElement => {
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = checked;
+      box.addEventListener('change', () => onChange(box.checked));
+      return el('div', { className: 'row' }, [
+        el('div', { className: 'label' }, [el('div', { className: 'title', text: label })]),
+        el('label', { className: 'toggle' }, [box, el('span')]),
+      ]);
+    };
+    body.append(
+      el('div', { className: 'card' }, [
+        toggle('Start with Windows', s.launchAtLogin, (on) => void save({ launchAtLogin: on }, true)),
+        toggle('Remember recent answers', s.rememberHistory, (on) => void save({ rememberHistory: on }, true)),
+        el('div', { className: 'row' }, [
+          el('div', { className: 'label' }, [
+            el('div', { className: 'title', text: 'Agent mode' }),
+            el('div', {
+              className: 'desc',
+              text: agentReady(s)
+                ? 'On. Say "Clickey, …" to have it do a task.'
+                : 'Off for now. Set it up when you need it.',
+            }),
+          ]),
+          button(agentReady(s) ? 'Review rules' : 'Set up', 'secondary small', () => openAgentSetup()),
+        ]),
+      ]),
+    );
     next.textContent = 'Finish';
     focusTarget = tryBtn;
   }
@@ -1119,6 +1227,22 @@ function renderWizard(): void {
   if (focusedStep !== step) {
     focusedStep = step;
     (focusTarget ?? next).focus();
+  }
+}
+
+/** Save the "three questions" answers and switch on the playbooks they suggest. */
+async function saveAbout(): Promise<void> {
+  const v = (id: string): string => document.querySelector<HTMLInputElement>(`#${id}`)?.value.trim() ?? '';
+  const name = v('about-name');
+  const tone = v('about-tone');
+  const work = v('about-work');
+  const patch: Partial<Settings> = {};
+  if (name) patch.profileName = name;
+  if (tone) patch.profileTone = tone;
+  if (Object.keys(patch).length) await save(patch, true);
+  for (const w of WORK_PLAYBOOKS) {
+    const p = snap.playbooks.find((x) => x.id === w.id);
+    if (p && w.re.test(work) && p.mode !== w.mode) snap = await api.savePlaybook({ ...p, mode: w.mode });
   }
 }
 
@@ -1598,7 +1722,9 @@ async function init(): Promise<void> {
     }
   };
   $('wizard-next').addEventListener('click', () => {
-    if (!$<HTMLButtonElement>('wizard-next').disabled) void move(1);
+    if ($<HTMLButtonElement>('wizard-next').disabled) return;
+    if (STEPS[step] === 'about') void saveAbout().then(() => move(1));
+    else void move(1);
   });
   $('wizard-back').addEventListener('click', () => void move(-1));
   $('wizard-skip').addEventListener('click', () => {
