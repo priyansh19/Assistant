@@ -12,11 +12,13 @@ Clicky is a personal tool that calls AI providers directly with your own API key
 
 | Provider | Receives | When |
 |---|---|---|
-| AssemblyAI (speech to text) | Your voice audio (16 kHz mono PCM) while the key is held | Each voice question |
+| AssemblyAI (speech to text) | Your voice audio (16 kHz mono PCM) while the hold key or the dictation key is held | Each voice question or dictation |
 | OpenAI (speech to text, if chosen) | A WAV of your voice question | Each voice question, after you let go |
 | Anthropic / OpenAI / OpenRouter (answer model) | The screenshot(s) as JPEG (default 1280 px long edge; only the screen your cursor is on unless *Include all displays* is on), your question text, a short system prompt describing the screenshots, and, if *Follow-up questions* is on, the last few questions and answers from the past 10 minutes | Each question. With *Answer as you let go* on, the question may be sent twice: first as heard so far, then as finally transcribed if the words differ (the first request is cancelled). With *Send the screen early* on (Claude only), the screenshot, system prompt and recent turns are sent about 0.3 s after you press the key, while you are still holding it, and Anthropic keeps them in its prompt cache for a few minutes |
 | ElevenLabs / OpenAI (voice, if chosen) | The answer text, phrase by phrase. With ElevenLabs a voice connection opens when you press the key; your key is sent in its first message, not in the address | Each answer |
 | Windows voice | Nothing leaves the PC | Each answer |
+
+**Agent mode** (a question starting with "Agent") sends the answer model a new screenshot before each step, with the task and the steps taken so far, for up to 25 steps while the task runs. Clicky then clicks and types on this PC itself; nothing about those actions goes to any other service. **Dictation** sends your voice only to the speech-to-text service (or keeps it on the PC with on-device speech). The words are typed where your text cursor is, and nothing goes to the answer model or into history.
 
 Key checks in the dashboard call each provider's key or model endpoint; they send no screenshots or audio.
 
