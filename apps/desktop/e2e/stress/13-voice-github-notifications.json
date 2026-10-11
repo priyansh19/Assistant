@@ -1,0 +1,17 @@
+{
+  "name": "Spoken: open my GitHub notifications",
+  "key": "talk",
+  "say": "Clicky, open my GitHub notifications.",
+  "maxMinutes": 5,
+  "expect": {
+    "agentDone": true,
+    "actions": [
+      {
+        "kind": "open",
+        "url": "github.com"
+      }
+    ]
+  },
+  "typed": false,
+  "live": "all"
+}

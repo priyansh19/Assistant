@@ -1,0 +1,12 @@
+{
+  "name": "Shopping site: search and read a price (popups, slow load)",
+  "say": "Clicky, go to amazon.ae, search for a USB-C hub and tell me the price of the first result.",
+  "maxMinutes": 8,
+  "expect": {
+    "agentDone": true,
+    "notAsked": true,
+    "saidAny": ["aed", "dirham", "dhs"]
+  },
+  "typed": true,
+  "live": "all"
+}

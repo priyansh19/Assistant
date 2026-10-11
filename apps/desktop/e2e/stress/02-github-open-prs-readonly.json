@@ -1,0 +1,12 @@
+{
+  "name": "GitHub: how many PRs are open on Assistant (read only)",
+  "say": "Clicky, open GitHub in Comet, go to my Assistant repository and tell me how many pull requests are open.",
+  "maxMinutes": 6,
+  "expect": {
+    "agentDone": true,
+    "notAsked": true,
+    "saidAny": ["no open", "zero", "0 open", "none", "no pull"]
+  },
+  "typed": true,
+  "live": "all"
+}

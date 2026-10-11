@@ -28,7 +28,18 @@ export type AgentAction =
   | { type: 'scroll'; x: number; y: number; screen: number | null; amount: number; say: string; risky: boolean }
   | { type: 'wait'; ms: number; say: string; risky: boolean }
   | { type: 'open'; app: string; url: string; path: string; say: string; risky: boolean }
+  /** Write down something seen on screen (free text and/or one table row) to use in later steps. */
+  | { type: 'note'; text: string; row: string[] | null; say: string; risky: boolean }
+  /** Save a table as an .xlsx file; rows default to every noted row. */
+  | { type: 'save_sheet'; name: string; columns: string[]; rows: string[][] | null; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
+
+const cells = (v: unknown, max: number): string[] | null =>
+  Array.isArray(v) && v.length
+    ? v
+        .slice(0, max)
+        .map((c) => (typeof c === 'string' ? c : c === null || c === undefined ? '' : String(c)).slice(0, 500))
+    : null;
 
 /** The model's verdict on its previous step, judged from the new screenshot. */
 export type StepCheck = 'worked' | 'failed' | null;
@@ -186,6 +197,32 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
       if (url && !/^https?:\/\//i.test(url)) return { ok: false, error: 'url must start with http:// or https://' };
       return { ok: true, action: { type, app, url, path, say, risky } };
     }
+    case 'note': {
+      const text = typeof o['text'] === 'string' ? o['text'].trim().slice(0, 1500) : '';
+      const row = cells(o['row'], 20);
+      if (!text && !row) return { ok: false, error: 'note needs text or a row' };
+      return { ok: true, action: { type, text, row, say, risky } };
+    }
+    case 'save_sheet': {
+      const columns = cells(o['columns'], 20) ?? [];
+      const rows = Array.isArray(o['rows'])
+        ? o['rows']
+            .slice(0, 1000)
+            .map((r) => cells(r, 20))
+            .filter((r): r is string[] => r !== null)
+        : null;
+      return {
+        ok: true,
+        action: {
+          type,
+          name: str(o['name'], 80) || 'Clicky sheet',
+          columns,
+          rows: rows?.length ? rows : null,
+          say,
+          risky,
+        },
+      };
+    }
     case 'wait':
       return { ok: true, action: { type, ms: Math.max(200, Math.min(5000, num(o['ms']) ?? 1000)), say, risky } };
     case 'done':
@@ -216,13 +253,23 @@ Actions:
   {"url":"https://…"} opens a website in the user's default browser; {"path":"C:\\…"} opens a folder or file.
   This is the fastest, most reliable way to open things: use it instead of clicking around.
 - wait: {"ms":N} when something is still loading.
-- done: {"say":"..."} when the task is complete. "say" is one short spoken sentence about what you did.
+- note: {"text":"..."} and/or {"row":["…","…"]} writes down what you see now (facts, names, links,
+  counts, one table row) so you still have it after leaving the page. Your notes come back every turn.
+- save_sheet: {"name":"LinkedIn jobs","columns":["Title","Company","Location"]} saves an Excel
+  (.xlsx) file in Documents\\Clicky with every row you noted (or give "rows": [[…],[…]] yourself).
+  The next step tells you where it was saved; open it with {"path": …} so the user sees it.
+- done: {"say":"..."} when the task is complete. "say" is one or two short spoken sentences with
+  the result: what you found (numbers, names, titles) or what you did.
 - fail: {"say":"..."} when the task is impossible or unsafe; say why in one short sentence.
 
 Rules:
-- Add "risky": true to any step that sends a message or email, posts, buys or pays, deletes,
-  submits a form, installs software, or changes account, privacy or security settings. The user
-  will be asked to allow it.
+- Add "risky": true to any step that sends a message or email, posts, comments, applies for a job,
+  buys or pays, deletes, merges or closes a pull request, submits a form, installs software, or
+  changes account, privacy or security settings. The user will be asked to allow it.
+- Long tasks across several apps or sites: work through them part by part. Note what you find
+  before moving to the next page. Never say done until every part of the task is finished.
+- When the task asks you to tell the user something, read it from the screen (scroll if needed),
+  then reply done with the answer in "say".
 - Never type passwords, card numbers, one-time codes or other secrets. Use fail and ask the user to
   do that part themselves.
 - Look at the new screenshot to check that the previous step worked before going on. If it didn't,
@@ -245,8 +292,11 @@ function agentSystemPrompt(
   screens: ScreenCapture,
   userContext?: string,
   inventory?: { apps: string[]; folders: string[] },
+  briefing?: string,
 ): string {
-  const lines = [AGENT_PROMPT, '', 'Screenshots in this message:'];
+  const lines = [AGENT_PROMPT];
+  if (briefing?.trim()) lines.push('', briefing.trim().slice(0, 6000));
+  lines.push('', 'Screenshots in this message:');
   screens.images.forEach((img, i) =>
     lines.push(
       `- screen${i + 1}: ${img.width}x${img.height} px${i + 1 === screens.cursorScreen ? ' (the mouse is on this screen)' : ''}`,
@@ -291,6 +341,14 @@ export interface AgentDeps {
   inventory?: { apps: string[]; folders: string[] };
   /** Lessons from earlier successful runs of similar tasks, shown to the model as hints. */
   hints?: string;
+  /** agents.md: Clicky's standing briefing (role, this PC, how to read screenshots). */
+  briefing?: string;
+  /** Skills (task playbooks) that match this task. */
+  skills?: string;
+  /** Save a table as an .xlsx file; resolves to where it was saved. */
+  saveSheet?(name: string, columns: string[], rows: string[][]): Promise<string>;
+  /** Tokens each step may spend thinking (default 1024). */
+  thinkingTokens?: number;
   /** Progress for the step strip. */
   onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
 }
@@ -311,8 +369,14 @@ export interface AgentResult {
 export const AGENT_MAX_STEPS = 200;
 /** Steps in a row that the model reports didn't work before Clicky gives up. */
 const MAX_FAILED_CHECKS = 4;
-const STEP_FIRST_TOKEN_MS = 20_000;
-const STEP_TOTAL_MS = 45_000;
+/** The first word can come after up to a thousand tokens of thinking. */
+const STEP_FIRST_TOKEN_MS = 30_000;
+const STEP_TOTAL_MS = 60_000;
+/** A step whose model call failed (busy, timed out, cut off) is retried this many times. */
+const STEP_RETRIES = 2;
+/** Notes and rows kept for the prompt (the newest win). */
+const MAX_NOTES = 60;
+const MAX_ROWS = 500;
 /** Consecutive unparseable replies before giving up. */
 const MAX_BAD_REPLIES = 2;
 
@@ -322,7 +386,9 @@ async function ask(deps: AgentDeps, system: string, question: string, screens: S
     history: [],
     question,
     images: screens.images,
-    maxTokens: 400,
+    // Room for a save_sheet with many rows.
+    maxTokens: 2000,
+    thinkingTokens: deps.thinkingTokens ?? 1024,
     signal: deps.signal,
   });
   const it = stream[Symbol.asyncIterator]();
@@ -352,6 +418,8 @@ function actionSignature(a: AgentAction): string | null {
       return `key:${a.keys.join('+')}`;
     case 'type':
       return `type:${a.text}`;
+    case 'note':
+      return `note:${a.text}|${a.row?.join('|') ?? ''}`;
     default:
       return null;
   }
@@ -373,6 +441,10 @@ function describe(a: AgentAction): string {
       return `waited ${a.ms} ms`;
     case 'open':
       return `opened ${a.app || a.url || a.path}`;
+    case 'note':
+      return `noted ${a.row ? `row [${a.row.join(' | ')}]` : ''}${a.row && a.text ? ' and ' : ''}${a.text ? `"${a.text.slice(0, 80)}"` : ''}`;
+    case 'save_sheet':
+      return `saved the sheet "${a.name}"`;
     default:
       return a.type;
   }
@@ -387,6 +459,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   let lastSig: string | null = null;
   let repeats = 0;
   let failedChecks = 0;
+  let retries = 0;
+  const notes: string[] = [];
+  const rows: string[][] = [];
   const checked: { step: string; ok: boolean | null }[] = [];
   const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
   for (let i = 0; i < max;) {
@@ -408,14 +483,33 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (deps.signal.aborted) return stopped();
     const question = [
       `Task: ${goal}`,
+      deps.skills ?? '',
       deps.hints ? `What worked before for similar tasks (use it if it fits):\n${deps.hints}` : '',
+      notes.length ? `Your notes so far:\n${notes.map((n) => `- ${n}`).join('\n')}` : '',
+      rows.length ? `Rows noted so far (${rows.length}):\n${rows.map((r) => r.join(' | ')).join('\n')}` : '',
       steps.length ? `Steps so far:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}` : 'No steps taken yet.',
       note,
       'What is the next action?',
     ]
       .filter(Boolean)
       .join('\n\n');
-    const reply = await ask(deps, agentSystemPrompt(screens, deps.userContext, deps.inventory), question, screens);
+    let reply: string;
+    try {
+      reply = await ask(
+        deps,
+        agentSystemPrompt(screens, deps.userContext, deps.inventory, deps.briefing),
+        question,
+        screens,
+      );
+    } catch (e) {
+      if (deps.signal.aborted) return stopped();
+      // A busy model, a slow first word or a cut-off reply: try the step again before giving up.
+      if (++retries > STEP_RETRIES) throw e;
+      deps.log?.(`agent step retry ${retries}: ${e instanceof Error ? e.message : String(e)}`);
+      await delay(1500 * retries);
+      continue;
+    }
+    retries = 0;
     if (deps.signal.aborted) return stopped();
     const parsed = parseAgentAction(reply);
     if (!parsed.ok) {
@@ -476,6 +570,40 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     deps.log?.(`agent step ${i}: ${describe(a)}${a.say ? ` — "${a.say}"` : ''}${a.risky ? ' (risky)' : ''}`);
     deps.onStep?.(say);
     deps.onProgress?.({ goal, step: i, max, say });
+    // Notes and sheets don't touch the screen.
+    if (a.type === 'note') {
+      if (a.text) notes.push(a.text);
+      if (a.row) rows.push(a.row);
+      notes.splice(0, Math.max(0, notes.length - MAX_NOTES));
+      rows.splice(0, Math.max(0, rows.length - MAX_ROWS));
+      steps.push(describe(a));
+      checked.push({ step: describe(a), ok: true });
+      continue;
+    }
+    if (a.type === 'save_sheet') {
+      const table = a.rows ?? rows;
+      if (!deps.saveSheet) {
+        note = 'Saving files is not available here. Tell the user what you found in "say" instead.';
+        steps.push('(save_sheet is not available)');
+        continue;
+      }
+      if (!table.length) {
+        note = 'There are no rows to save yet. Note each item with {"action":"note","row":[…]} first.';
+        steps.push('(nothing to save yet)');
+        continue;
+      }
+      deps.overlay.message(say, 'info');
+      try {
+        const saved = await deps.saveSheet(a.name, a.columns, table);
+        deps.log?.(`agent saved a sheet: ${saved} (${table.length} rows)`);
+        steps.push(`saved ${table.length} rows to ${saved}`);
+        checked.push({ step: `saved the sheet "${a.name}"`, ok: true });
+      } catch (e) {
+        note = `Saving the sheet failed (${e instanceof Error ? e.message : String(e)}).`;
+        steps.push('(saving the sheet failed)');
+      }
+      continue;
+    }
     let input: InputAction | null = null;
     if (a.type === 'click' || a.type === 'double_click' || a.type === 'right_click' || a.type === 'scroll') {
       const mapped = mapPointToDisplay(fromThousandths(a, screens.geometry), screens.geometry);

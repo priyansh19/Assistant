@@ -1,0 +1,14 @@
+{
+  "name": "LinkedIn job search → top five → Excel sheet (read only)",
+  "say": "Clicky, search LinkedIn jobs for senior AI engineer roles in Dubai and put the top five in an Excel sheet with the title, company and location.",
+  "maxMinutes": 15,
+  "expect": {
+    "agentDone": true,
+    "notAsked": true,
+    "sheet": {
+      "minRows": 3
+    }
+  },
+  "typed": true,
+  "live": "all"
+}

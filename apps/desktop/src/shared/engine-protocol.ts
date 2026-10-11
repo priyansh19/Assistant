@@ -14,6 +14,7 @@ import type {
   MappedShape,
   Playbook,
   AgentLesson,
+  AgentSkill,
   LearnedStyle,
   StyleContext,
   WriteContext,
@@ -45,6 +46,12 @@ export interface EngineConfig {
   notes: string[];
   /** Installed app names and common folders (main scans them). */
   inventory: { apps: string[]; folders: string[] };
+  /** agents.md: the standing briefing added to every agent run. */
+  briefing: string;
+  /** Task skills (skills/*.md); the ones matching a task are added to its run. */
+  skills: AgentSkill[];
+  /** Where files Clicky makes (sheets) are saved: Documents/Clicky. */
+  outputDir: string;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */

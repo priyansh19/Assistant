@@ -70,6 +70,9 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   lessons: [],
   notes: [],
   inventory: { apps: [], folders: [] },
+  briefing: '',
+  skills: [],
+  outputDir: '',
   ...over,
 });
 

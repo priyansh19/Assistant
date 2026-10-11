@@ -1,0 +1,17 @@
+{
+  "name": "File Explorer: newest file in Downloads",
+  "say": "Clicky, open my Downloads folder and tell me the name of the newest file in it.",
+  "maxMinutes": 5,
+  "expect": {
+    "agentDone": true,
+    "verify": [
+      {
+        "name": "said the newest file",
+        "cmd": "(Get-ChildItem ([Environment]::GetFolderPath('UserProfile') + '\\Downloads') -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).BaseName",
+        "inSaid": true
+      }
+    ]
+  },
+  "typed": true,
+  "live": "all"
+}

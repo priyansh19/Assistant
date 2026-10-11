@@ -1,0 +1,11 @@
+{
+  "name": "Calculator → Notepad (carry a result between apps)",
+  "say": "Clicky, open Calculator, work out 1234 times 56, then type the answer into a new Notepad window.",
+  "maxMinutes": 6,
+  "expect": {
+    "agentDone": true,
+    "typed": ["69104"]
+  },
+  "typed": true,
+  "live": "all"
+}

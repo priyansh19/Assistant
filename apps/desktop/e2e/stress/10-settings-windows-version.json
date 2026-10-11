@@ -1,0 +1,12 @@
+{
+  "name": "Windows Settings: which Windows version (read only)",
+  "say": "Clicky, open Windows Settings and tell me which version of Windows this PC runs.",
+  "maxMinutes": 5,
+  "expect": {
+    "agentDone": true,
+    "notAsked": true,
+    "saidAny": ["windows 11", "insider", "29683", "25h2", "24h2"]
+  },
+  "typed": true,
+  "live": "all"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "GitHub: read the latest merged PR title",
+  "say": "Clicky, open github.com/priyansh19/Assistant, look at the closed pull requests and tell me the title of the most recent one.",
+  "maxMinutes": 6,
+  "expect": {
+    "agentDone": true,
+    "saidAny": ["voice test suite", "forgiving name"]
+  },
+  "typed": true,
+  "live": "all"
+}

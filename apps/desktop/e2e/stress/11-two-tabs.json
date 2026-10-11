@@ -1,0 +1,11 @@
+{
+  "name": "Comet: two tabs, switch back, read a heading",
+  "say": "Clicky, open example.com and wikipedia.org in Comet, then switch back to the example.com tab and tell me its heading.",
+  "maxMinutes": 6,
+  "expect": {
+    "agentDone": true,
+    "saidAny": ["example domain"]
+  },
+  "typed": true,
+  "live": "all"
+}

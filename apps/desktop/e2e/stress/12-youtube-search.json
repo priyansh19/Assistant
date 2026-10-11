@@ -1,0 +1,11 @@
+{
+  "name": "YouTube: search (slow page, typing into a site)",
+  "say": "Clicky, open YouTube and search for lo-fi study music.",
+  "maxMinutes": 5,
+  "expect": {
+    "agentDone": true,
+    "typed": ["study music"]
+  },
+  "typed": true,
+  "live": "all"
+}

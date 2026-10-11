@@ -30,6 +30,12 @@ export interface VisionChatRequest {
   maxTokens: number;
   signal: AbortSignal;
   /**
+   * Tokens the model may spend thinking before it answers, on top of maxTokens. Off (0) by default:
+   * thinking delays the first word, and a thinking model given only maxTokens can spend them all
+   * thinking and return no answer.
+   */
+  thinkingTokens?: number;
+  /**
    * Mark the system prompt, history and screenshots as a cacheable prefix. Set when warmCache was
    * called for the same prefix during the key press, so this request reads it from the cache.
    */

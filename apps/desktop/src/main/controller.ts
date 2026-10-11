@@ -1,4 +1,5 @@
 import { app, screen } from 'electron';
+import { join } from 'node:path';
 import {
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
@@ -18,6 +19,7 @@ import type { CredentialStore } from './credential-store';
 import { EngineHost } from './engine-host';
 import { InputHost } from './input-host';
 import { PlaybookStore } from './playbook-store';
+import { SkillStore } from './skill-store';
 import { TaskStrip } from './task-strip';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
@@ -67,6 +69,7 @@ export class Controller {
   readonly playbooks = new PlaybookStore();
   readonly style = new StyleStore();
   readonly lessons = new LessonStore();
+  readonly skills = new SkillStore();
   /** Background tasks: run one at a time while the user is away from the mouse. */
   readonly tasks = new TaskQueue({
     settings: () => this.settings.get(),
@@ -117,10 +120,12 @@ export class Controller {
     this.style.onChange(push);
     this.lessons.onChange(push);
     this.inventory.onChange(push);
+    this.skills.onChange(push);
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
     this.inventory.start();
+    this.skills.start();
   }
 
   private config(): EngineConfig {
@@ -141,6 +146,9 @@ export class Controller {
       lessons: this.lessons.list(),
       notes: this.lessons.notes(),
       inventory: this.inventory.view(),
+      briefing: this.skills.briefing(),
+      skills: this.skills.list(),
+      outputDir: join(app.getPath('documents'), 'Clicky'),
     };
   }
 
@@ -237,6 +245,7 @@ export class Controller {
         return;
       case 'agentLesson':
         this.lessons.add(msg.lesson);
+        this.skills.learn(msg.lesson);
         return;
       case 'styleLearned':
         this.style.learn(msg.context, { notes: msg.notes, examples: msg.examples });
@@ -398,6 +407,7 @@ export class Controller {
   shutdown(): void {
     this.tasks.stop();
     this.inventory.stop();
+    this.skills.stop();
     this.engine.stop();
     this.strip.destroy();
     this.input.dispose();

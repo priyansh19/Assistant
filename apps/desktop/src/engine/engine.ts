@@ -4,6 +4,8 @@ import {
   buildUserContext,
   lessonFrom,
   lessonHints,
+  matchSkills,
+  skillsText,
   contextOf,
   learningAllowed,
   parseStyleReply,
@@ -33,6 +35,7 @@ import { LocalSpeechEngine } from './local-speech/engine';
 import { ModelFiles } from './local-speech/files';
 import { localStt, localTts } from './local-speech/providers';
 import type { MediaChannel } from './media-channel';
+import { saveXlsx } from './xlsx';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './media-ports';
 
 export interface EngineOptions {
@@ -137,6 +140,8 @@ export class Engine {
       agentNotReady: () => this.post({ type: 'agentSetup' }),
       agentChat: () => this.agentChat(),
       agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
+      agentSkills: (goal) => skillsText(matchSkills(goal, this.cfg().skills)) || undefined,
+      agentBriefing: () => this.cfg().briefing || undefined,
       remember: (note) => this.post({ type: 'remember', note }),
       inventory: () => this.cfg().inventory,
       agentRunFinished: (goal, result) => {
@@ -172,6 +177,7 @@ export class Engine {
           this.stepStartedAt = Date.now();
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
+        saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
       confirm: (text, signal) => this.confirm(text, signal),
       writeContext: () => this.writeContext(),

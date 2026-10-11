@@ -79,7 +79,14 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       ...(models ? { models } : {}),
       stream: true,
       // OpenAI's newer models only accept max_completion_tokens; OpenRouter uses max_tokens.
-      ...(this.id === 'openai' ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
+      ...(this.id === 'openai'
+        ? { max_completion_tokens: req.maxTokens }
+        : { max_tokens: req.maxTokens + (req.thinkingTokens ?? 0) }),
+      // OpenRouter: thinking is off unless asked for. Models that think by default (Claude Haiku
+      // 5.5, Qwen) otherwise spend the whole budget thinking and send back no answer.
+      ...(this.id === 'openrouter'
+        ? { reasoning: req.thinkingTokens ? { max_tokens: req.thinkingTokens, exclude: true } : { enabled: false } }
+        : {}),
       messages: [
         { role: 'system', content: req.system },
         ...req.history.map((t) => ({ role: t.role, content: t.text })),
@@ -110,6 +117,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
     );
     if (!res.body) throw new Error(`${this.id}: empty response`);
     let finished = false;
+    let said = false;
     for await (const data of sseData(res.body)) {
       if (data === '[DONE]') return;
       let chunk: ChatChunk;
@@ -122,9 +130,16 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       if (chunk.error) throw new Error(`${this.id}: ${chunk.error.message ?? 'stream error'}`);
       const choice = chunk.choices?.[0];
       if (choice?.finish_reason === 'error') throw new Error(`${this.id}: the model stopped with an error`);
-      if (choice?.finish_reason) finished = true;
       const text = choice?.delta?.content;
-      if (text) yield text;
+      if (text) {
+        said = true;
+        yield text;
+      }
+      if (choice?.finish_reason) {
+        finished = true;
+        if (!said && choice.finish_reason === 'length')
+          throw new Error(`${this.id}: ${this.servedModel ?? 'the model'} used its whole budget thinking and gave no answer`);
+      }
     }
     // The connection ended without [DONE] or a finish reason: the answer was cut off.
     if (!finished) throw new Error(`${this.id}: the answer was cut off (connection closed early)`);

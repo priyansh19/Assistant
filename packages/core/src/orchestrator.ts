@@ -91,7 +91,7 @@ export interface OrchestratorDeps {
   /** Agent mode was asked for but isn't set up (off, or rules not accepted): open its setup. */
   agentNotReady?(): void;
   /** Extra agent hooks from the app: never-touch list, pause, user takeover, step strip. */
-  agentHooks?(): Pick<AgentDeps, 'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress'>;
+  agentHooks?(): Pick<AgentDeps, 'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress' | 'saveSheet'>;
   /** Ask the user to allow an agent step. */
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
   /** Write mode: the app in front and any selected text, read at key-up. */
@@ -104,6 +104,9 @@ export interface OrchestratorDeps {
   remember?(note: string): void;
   /** Hints from earlier successful runs of a similar task (continuous learning). */
   agentHints?(goal: string): string | undefined;
+  /** Skills (task playbooks) that match the task, and Clicky's standing briefing (agents.md). */
+  agentSkills?(goal: string): string | undefined;
+  agentBriefing?(): string | undefined;
   /** A run finished: its steps and their checks, for the run log and learning. */
   agentRunFinished?(goal: string, result: AgentResult): void;
   /** Move the companion to the text caret (agent typing steps). */
@@ -908,8 +911,12 @@ export class Orchestrator {
     try {
       const hints = this.deps.agentHints?.(goal);
       const inventory = this.deps.inventory?.();
+      const skills = this.deps.agentSkills?.(goal);
+      const briefing = this.deps.agentBriefing?.();
       result = await runAgent(goal, {
         ...(hints ? { hints } : {}),
+        ...(skills ? { skills } : {}),
+        ...(briefing ? { briefing } : {}),
         ...(inventory ? { inventory } : {}),
         chat: this.deps.agentChat?.() ?? chat,
         capture: this.deps.capture,

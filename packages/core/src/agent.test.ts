@@ -222,3 +222,78 @@ describe('"click here" is how speech recognition often hears the name', () => {
     expect(agentGoal('Click here, open Grokbot.')).toBe('open Grokbot');
   });
 });
+
+describe('long tasks: notes and sheets', () => {
+  it('keeps notes across steps and saves the noted rows as a sheet', async () => {
+    const f = fakes([
+      '{"action":"note","row":["AI Lead","Acme","Dubai"],"say":"Noting a job"}',
+      '{"action":"note","row":["ML Engineer","Beta","Abu Dhabi"],"text":"Feed has 2 job posts"}',
+      '{"action":"save_sheet","name":"LinkedIn jobs","columns":["Title","Company","Location"]}',
+      '{"action":"done","say":"Saved 2 jobs."}',
+    ]);
+    const saved: { name: string; columns: string[]; rows: string[][] }[] = [];
+    const r = await runAgent('jobs to excel', {
+      ...f.deps,
+      saveSheet: async (name, columns, rows) => {
+        saved.push({ name, columns, rows });
+        return 'C:/Docs/Clicky/LinkedIn jobs.xlsx';
+      },
+    });
+    expect(r.outcome).toBe('done');
+    expect(saved).toEqual([
+      {
+        name: 'LinkedIn jobs',
+        columns: ['Title', 'Company', 'Location'],
+        rows: [
+          ['AI Lead', 'Acme', 'Dubai'],
+          ['ML Engineer', 'Beta', 'Abu Dhabi'],
+        ],
+      },
+    ]);
+    expect(f.inputs).toEqual([]); // notes and sheets never touch the screen
+    expect(f.questions[2]).toContain('Rows noted so far (2)');
+    expect(f.questions[2]).toContain('Feed has 2 job posts');
+    expect(f.questions[3]).toContain('saved 2 rows to C:/Docs/Clicky/LinkedIn jobs.xlsx');
+  });
+
+  it('asks for rows before saving an empty sheet', async () => {
+    const f = fakes(['{"action":"save_sheet","name":"x","columns":["a"]}', '{"action":"done"}']);
+    await runAgent('x', { ...f.deps, saveSheet: async () => 'never' });
+    expect(f.questions[1]).toContain('no rows to save yet');
+  });
+
+  it('retries a step whose model call failed', async () => {
+    const f = fakes(['{"action":"done","say":"ok"}']);
+    let calls = 0;
+    const flaky: VisionChatProvider = {
+      id: 'flaky',
+      async *stream(req) {
+        if (calls++ === 0) throw new Error('busy');
+        yield* f.deps.chat.stream(req);
+      },
+    };
+    const r = await runAgent('x', { ...f.deps, chat: flaky });
+    expect(r.outcome).toBe('done');
+    expect(calls).toBe(2);
+  });
+
+  it('puts skills and the briefing in front of the model', async () => {
+    let system = '';
+    const f = fakes([]);
+    const spy: VisionChatProvider = {
+      id: 'spy',
+      async *stream(req) {
+        system = req.system;
+        yield* f.deps.chat.stream(req);
+      },
+    };
+    await runAgent('merge PRs', {
+      ...f.deps,
+      chat: spy,
+      skills: 'Skill "GitHub": open /pulls',
+      briefing: '# Clicky briefing',
+    });
+    expect(system).toContain('# Clicky briefing');
+    expect(f.questions[0]).toContain('Skill "GitHub"');
+  });
+});
