@@ -104,6 +104,7 @@ export class Engine {
       agent: () => ({ enabled: settings().agentEnabled, confirm: settings().agentConfirm }),
       confirm: (text, signal) => this.confirm(text, signal),
       writeContext: () => this.writeContext(),
+      atCaret: () => this.post({ type: 'caretAnchor' }),
       tidyDictation: () => settings().tidyDictation,
       undoHint: () => {
         const k = settings().dictationKey;

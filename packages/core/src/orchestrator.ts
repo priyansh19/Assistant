@@ -12,7 +12,7 @@
  * nothing late from an old interaction can touch the new one.
  */
 
-import { agentGoal, runAgent, type AgentResult } from './agent.js';
+import { actionGoal, agentGoal, runAgent, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
@@ -80,6 +80,8 @@ export interface OrchestratorDeps {
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
   /** Write mode: the app in front and any selected text, read at key-up. */
   writeContext?(signal: AbortSignal): Promise<WriteContext>;
+  /** Move the companion to the text caret (agent typing steps). */
+  atCaret?(): void;
   /** Write mode: tidy plain dictation with the AI before typing it. */
   tidyDictation?(): boolean;
   /** Write mode: the hint shown after an insert, e.g. "Tap Right Alt to undo". */
@@ -552,8 +554,13 @@ export class Orchestrator {
     const agent = audio ? null : this.agentRequest(question);
     if (agent) {
       spec?.discard();
-      await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
-      return;
+      const go = !agent.ask || ((await this.deps.confirm?.(`Do this for you: ${agent.goal}`, signal)) ?? false);
+      if (signal.aborted) return;
+      if (go) {
+        await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
+        return;
+      }
+      // Not now: answer the question the usual way (guide and point).
     }
 
     let result: AnswerRunResult;
@@ -596,11 +603,14 @@ export class Orchestrator {
   }
 
   /** The task, if this question asks agent mode to do something and agent mode is on. */
-  private agentRequest(question: string): { goal: string; confirm: AgentConfirmMode } | null {
+  private agentRequest(question: string): { goal: string; confirm: AgentConfirmMode; ask: boolean } | null {
     const cfg = this.deps.agent?.();
     if (!cfg?.enabled) return null;
     const goal = agentGoal(question);
-    return goal ? { goal, confirm: cfg.confirm } : null;
+    if (goal) return { goal, confirm: cfg.confirm, ask: false };
+    // Phrased as a request but without "Agent": offer to do it, and only start once the user agrees.
+    const action = this.deps.confirm ? actionGoal(question) : null;
+    return action ? { goal: action, confirm: cfg.confirm, ask: true } : null;
   }
 
   private async dictate(run: Run, listen: ListenStage): Promise<void> {
@@ -824,6 +834,7 @@ export class Orchestrator {
         ...(userContext ? { userContext } : {}),
         ...(this.deps.log ? { log: this.deps.log } : {}),
         onStep: (say) => this.deps.overlay.caption?.(say),
+        ...(this.deps.atCaret ? { atCaret: () => this.deps.atCaret?.() } : {}),
       });
     } catch (e) {
       if (!signal.aborted) this.fail(run, e, 'answer');

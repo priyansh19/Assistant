@@ -548,3 +548,26 @@ describe('dictation and agent mode', () => {
     expect(r?.answer).toBe('Click Export. Then choose PDF.');
   });
 });
+
+describe('action requests without "Agent"', () => {
+  it('asks first, runs the agent on yes and answers normally on no', async () => {
+    const asked: string[] = [];
+    let allow = true;
+    const agentChat = fakeChat(['{"action":"done","say":"Opened it."}']);
+    const t = setup({
+      chat: () => (allow ? agentChat : fakeChat(['[POINT:none]', 'Press the Windows key and type Notepad.'])),
+      input: { run: async () => undefined },
+      agent: () => ({ enabled: true, confirm: 'risky' }),
+      confirm: async (text) => {
+        asked.push(text);
+        return allow;
+      },
+    });
+    const yes = await t.o.ask('can you open notepad for me', 'typed');
+    expect(asked).toEqual(['Do this for you: open notepad for me']);
+    expect(yes?.answer).toBe('Opened it.');
+    allow = false;
+    const no = await t.o.ask('can you open notepad for me', 'typed');
+    expect(no?.answer).toBe('Press the Windows key and type Notepad.');
+  });
+});

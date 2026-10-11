@@ -87,6 +87,13 @@ export class OverlayManager implements OverlayPort {
   state(state: InteractionState): void {
     this.current = state;
     this.broadcast(IPC.overlayState, state);
+    // Other always-on-top windows can end up above the overlay; put it back on top while working.
+    if (state === 'listening' || state === 'thinking')
+      for (const win of this.windows.values())
+        if (!win.isDestroyed()) {
+          win.setAlwaysOnTop(true, 'screen-saver');
+          win.moveTop();
+        }
     // A new question: the companion comes back to the pointer (unless it's sitting at the caret).
     if (state === 'listening' && !this.anchored) this.setOwner(null);
     // Mirrors the overlay: a point is let go a few seconds after the answer ends.
@@ -110,7 +117,8 @@ export class OverlayManager implements OverlayPort {
     const win = this.windows.get(target.displayId);
     if (!display || !win || win.isDestroyed()) return;
     const p: OverlayPoint = { x: target.local.x, y: target.local.y, label };
-    // The pointing display owns the companion for as long as the overlay holds the point (≤ 12 s).
+    // A click target takes the companion off the caret, then the pointing display owns it (≤ 12 s).
+    if (this.anchored) this.anchor(null);
     this.setOwner(target.displayId, 12500);
     win.webContents.send(IPC.overlayPoint, p);
   }

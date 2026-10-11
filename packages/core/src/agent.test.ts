@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentGoal, parseAgentAction, parseKeys, runAgent, type AgentDeps } from './agent.js';
+import { actionGoal, agentGoal, parseAgentAction, parseKeys, runAgent, type AgentDeps } from './agent.js';
 import type { CapturePort, InputAction, OverlayPort, ScreenCapture } from './ports.js';
 import type { VisionChatProvider } from './providers.js';
 
@@ -134,5 +134,24 @@ describe('runAgent', () => {
     const g = fakes(['{"action":"key","keys":"enter"}']);
     g.ac.abort();
     expect((await runAgent('x', g.deps)).outcome).toBe('stopped');
+  });
+});
+
+describe('actionGoal (asked first, no "Agent" prefix needed)', () => {
+  it('recognises requests to do something', () => {
+    expect(actionGoal('can you open linkedin and scroll through my feed')).toBe(
+      'open linkedin and scroll through my feed',
+    );
+    expect(actionGoal('Hey Clicky, please search for flights to Dubai')).toBe('search for flights to Dubai');
+    expect(actionGoal('Open Notepad and type hello')).toBe('Open Notepad and type hello');
+    expect(actionGoal('turn on dark mode')).toBe('turn on dark mode');
+  });
+
+  it('keeps questions as questions', () => {
+    expect(actionGoal('how do I open settings?')).toBeNull();
+    expect(actionGoal('where is the save button')).toBeNull();
+    expect(actionGoal('what type of chart is this')).toBeNull();
+    expect(actionGoal('open')).toBeNull();
+    expect(agentGoal('can you open linkedin')).toBeNull();
   });
 });

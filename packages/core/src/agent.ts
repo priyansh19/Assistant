@@ -36,6 +36,23 @@ export function agentGoal(question: string): string | null {
   return goal.length >= 3 ? goal : null;
 }
 
+/** Asking how or where is a question, even if an action verb follows ("how do I open…"). */
+const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|does|do|did|should|explain|tell me)\b/i;
+const ACTION_START =
+  /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
+
+/**
+ * A request to do something on the PC without the "Agent" prefix ("can you open LinkedIn and
+ * scroll my feed"). The caller asks the user before handing it to agent mode; questions about how
+ * to do something return null and are answered normally.
+ */
+export function actionGoal(question: string): string | null {
+  const q = question.trim().replace(/[?.!]+$/, '');
+  if (QUESTION_START.test(q.replace(/^(?:hey\s+)?clicky[\s,]+/i, ''))) return null;
+  const goal = ACTION_START.exec(q)?.[1]?.trim() ?? '';
+  return goal.split(/\s+/).length >= 2 ? goal : null;
+}
+
 const KEY_NAMES = new Set([
   'ctrl',
   'shift',
@@ -172,7 +189,9 @@ Rules:
   do that part themselves.
 - Look at the new screenshot to check that the previous step worked before going on. If it didn't,
   try a different way instead of repeating it.
-- Prefer reliable keyboard shortcuts and the Windows search (key "win", then type) to open apps.
+- Prefer reliable keyboard shortcuts. To open an app, use key "win+r", type its name (chrome,
+  msedge, notepad, explorer, outlook, excel…) and press "enter". To open a website, focus the
+  browser, press "ctrl+l", type the address and press "enter". Avoid the Start menu.
 - "say" is a few words for the user, like "Opening the File menu".`;
 
 function agentSystemPrompt(screens: ScreenCapture, userContext?: string): string {
@@ -203,6 +222,10 @@ export interface AgentDeps {
   onStep?(say: string): void;
   /** Pause between a step and the next screenshot so the UI can settle. */
   settleMs?: number;
+  /** Move the companion to the text caret before typing (the user sees where it types). */
+  atCaret?(): void;
+  /** How long the companion takes to fly to a target before the click (default 950 ms). */
+  flightMs?: number;
 }
 
 export interface AgentResult {
@@ -322,9 +345,11 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
               count: a.type === 'double_click' ? 2 : 1,
             };
     } else if (a.type === 'type') {
+      deps.atCaret?.();
       deps.overlay.message(say, 'info');
       input = { kind: 'type', text: a.text };
     } else if (a.type === 'key') {
+      deps.atCaret?.();
       deps.overlay.message(say, 'info');
       input = { kind: 'keys', keys: a.keys };
     }
@@ -333,7 +358,10 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       const ok = await deps.confirm(say, deps.signal);
       if (!ok || deps.signal.aborted) return stopped();
     } else if (input?.kind === 'click' || input?.kind === 'scroll') {
-      await delay(450); // let the flight land so the click doesn't look like it came from nowhere
+      // Let the companion land on the target and rest there a moment, so the user sees where it acts.
+      await delay(deps.flightMs ?? 950);
+    } else if (input) {
+      await delay(deps.flightMs === undefined ? 300 : 0); // it slides over to the caret first
     }
     if (deps.signal.aborted) return stopped();
     if (a.type === 'wait') await delay(a.ms);

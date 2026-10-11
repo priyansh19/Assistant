@@ -133,8 +133,8 @@ describe('Engine', () => {
     hook.h.down?.();
     hook.h.up?.();
     expect(posts.filter((p) => p.type === 'keyTest')).toEqual([
-      { type: 'keyTest', down: true },
-      { type: 'keyTest', down: false },
+      { type: 'keyTest', down: true, key: 'talk' },
+      { type: 'keyTest', down: false, key: 'talk' },
     ]);
   });
 

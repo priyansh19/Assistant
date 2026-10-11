@@ -12,8 +12,20 @@ export interface OpenAICompatibleOptions {
 export const OPENAI_BASE = 'https://api.openai.com/v1';
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENAI_DEFAULT_MODEL = 'gpt-4.1-mini';
-/** Fast multimodal default: sees the screenshot and can listen to the question audio directly. */
-export const OPENROUTER_DEFAULT_MODEL = 'google/gemini-3.8-flash';
+/**
+ * OpenRouter defaults are free models (owner's rule, 2026-10-11): a fast vision model for answers,
+ * writing and agent steps. Free models are rate-limited, so requests list other free vision models
+ * as fallbacks and OpenRouter moves to the next one when a model is busy. Paid models are used only
+ * when the user types one into the model setting.
+ */
+export const OPENROUTER_DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free';
+export const OPENROUTER_FREE_FALLBACKS = [
+  'google/gemma-4-31b-it:free',
+  'thinkingmachines/inkling-small:free',
+  'dots-studio/dots-3-note-preview:free',
+];
+/** Free models that also accept audio, for "the answer model listens" mode. */
+export const OPENROUTER_FREE_LISTEN_MODELS = ['thinkingmachines/inkling-small:free', 'thinkingmachines/inkling:free'];
 
 interface ChatChunk {
   choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
@@ -25,12 +37,15 @@ export class OpenAICompatibleChat implements VisionChatProvider {
   readonly id: string;
   private readonly base: string;
   readonly model: string;
+  /** No model chosen in settings: use the free defaults with fallbacks. */
+  private readonly freeDefaults: boolean;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly opts: OpenAICompatibleOptions) {
     this.id = opts.id;
     this.base = opts.id === 'openrouter' ? OPENROUTER_BASE : OPENAI_BASE;
     this.model = opts.model?.trim() || (opts.id === 'openrouter' ? OPENROUTER_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL);
+    this.freeDefaults = opts.id === 'openrouter' && !opts.model?.trim();
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
   }
 
@@ -49,8 +64,14 @@ export class OpenAICompatibleChat implements VisionChatProvider {
   }
 
   async *stream(req: VisionChatRequest): AsyncIterable<string> {
+    const free = this.freeDefaults
+      ? req.audio
+        ? OPENROUTER_FREE_LISTEN_MODELS
+        : [OPENROUTER_DEFAULT_MODEL, ...OPENROUTER_FREE_FALLBACKS]
+      : null;
     const body = {
-      model: this.model,
+      model: free?.[0] ?? this.model,
+      ...(free ? { models: free } : {}),
       stream: true,
       // OpenAI's newer models only accept max_completion_tokens; OpenRouter uses max_tokens.
       ...(this.id === 'openai' ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
