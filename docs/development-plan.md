@@ -57,6 +57,8 @@ Clicky is mostly OS integration. The parts that decide the stack:
 
 ## 3. Architecture
 
+The target process model, streaming pipeline, error model and trace are in [`architecture.md`](architecture.md) (approved 2026-10-11). This section keeps the package layout and the rules.
+
 ```
 packages/
   core/        # pure TS, no Electron/Node-OS imports:
