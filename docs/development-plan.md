@@ -42,7 +42,7 @@ Clicky is mostly OS integration. The parts that decide the stack:
 - **Runtime:** Electron (current stable, 44.x at time of writing), Node 22+, TypeScript strict.
 - **Build/dev:** electron-vite (main / preload / renderer bundles), Electron Forge or electron-builder for packaging (decide in Phase 6; Forge + Squirrel is what tekram uses).
 - **Package manager:** pnpm workspaces.
-- **Hold-to-talk:** `uiohook-napi` in the main process; Electron `globalShortcut` only for non-hold shortcuts.
+- **Hold-to-talk:** `uiohook-napi` in the engine `utilityProcess` (falls back to main, see `architecture.md` §4); Electron `globalShortcut` only for non-hold shortcuts.
 - **Mic:** `getUserMedia` + `AudioWorklet` in a hidden renderer, 16 kHz mono PCM16 frames over IPC/MessagePort to the STT client.
 - **Capture:** a `getUserMedia` desktop stream (source id from `desktopCapturer`) opened at key-down and sampled at key-up, plus the `screen` API for display geometry and scale factors. Phase 0 showed no native addon is needed (see `docs/reference-findings.md`).
 - **Overlay:** one transparent, frameless, `alwaysOnTop('screen-saver')`, click-through `BrowserWindow` per display, recreated on `display-added/removed/metrics-changed`. Canvas/CSS animation.
@@ -56,6 +56,8 @@ Clicky is mostly OS integration. The parts that decide the stack:
 - **Lint/format:** ESLint (typescript-eslint) + Prettier.
 
 ## 3. Architecture
+
+The target process model, streaming pipeline, error model and trace are in [`architecture.md`](architecture.md) (approved 2026-10-11). This section keeps the package layout and the rules.
 
 ```
 packages/
@@ -121,6 +123,17 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 | key-up → dot starts moving (when pointing) | < 1.2 s | < 2.0 s |
 
 **Benchmark:** `pnpm bench` replays a fixed set of recorded questions and screenshots through the real providers and reports p50/p95 per stage. In Phase 0 we also measure the original's pipeline shape (full response, then TTS) with the same providers, so "faster than official" is a number. A PR that makes the headline p50 more than 10% worse needs a stated reason.
+
+### 3.4 Decisions made while building Phase 2 (2026-10-11)
+
+- **Warm microphone (default on).** Opening a Windows audio device takes 0.5–1 s, which cut off the start of every question. The worker keeps the device open between presses and forwards frames only while the key is held, plus a ~200 ms pre-roll. Measured key-down → recording: ~1 s cold, under 10 ms warm. It can be turned off in General > Microphone; `docs/privacy.md` explains the trade-off.
+- **Capture sources are cached.** `desktopCapturer.getSources` blocks the main process for ~200–300 ms on Windows; calling it at key-down delayed the microphone by the same amount. Sources are fetched at startup and on display changes only.
+- ~~**Deviation (TTS transport):** one streaming HTTP request per sentence instead of the ElevenLabs WebSocket.~~ Reversed by the architecture redesign (step 4, 2026-10-11): ElevenLabs now uses the WebSocket input stream, opened at key-down, as §3.3 point 4 says. OpenAI voices and the ElevenLabs fallback still use one HTTP stream per sentence. See [`architecture.md`](architecture.md) §6.6.
+- Speed features from the redesign (eager first clause, speculative answer start, Anthropic cache warm-up, backup Windows voice) are settings under AI and voice > Speed, all on by default (architecture §6.3–6.7).
+- **Default answer model:** `claude-opus-5-5` with `effort: low` and server-side refusal fallbacks. The model field in AI and voice accepts any model id (e.g. `claude-haiku-5-5`); pick by measured time-to-first-token once `pnpm bench` exists.
+- **Typed questions and saved actions** reuse the same answer path without the microphone, which also makes the loop testable without speaking.
+- **History is text only** (question, answer, pointed-at label, timing) and opt-out; it feeds follow-up context and saved actions.
+- **`CLICKY_DEMO=1`** swaps in offline providers so the full loop (mic, capture, overlay flight, voice, history) can be smoke-tested on the laptop without keys.
 
 ## 4. Phases
 

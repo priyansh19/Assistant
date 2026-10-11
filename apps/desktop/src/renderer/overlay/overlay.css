@@ -6,34 +6,12 @@ body {
   background: transparent;
   overflow: hidden;
   pointer-events: none;
+  user-select: none;
 }
 
-#dot {
+#stage {
   position: fixed;
-  left: 0;
-  top: 0;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  border-radius: 50%;
-  background: #1aa3ff;
-  box-shadow: 0 0 10px rgba(26, 163, 255, 0.8);
-  opacity: 0;
-  transition:
-    background 120ms ease,
-    box-shadow 120ms ease,
-    opacity 120ms ease;
-  will-change: transform;
-}
-
-#dot.visible {
-  opacity: 1;
-}
-
-/* Capture is active: the user is holding the key (AGENTS.md privacy rule). */
-body.listening #dot {
-  background: #ff5a1f;
-  box-shadow:
-    0 0 0 6px rgba(255, 90, 31, 0.25),
-    0 0 16px rgba(255, 90, 31, 0.9);
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }

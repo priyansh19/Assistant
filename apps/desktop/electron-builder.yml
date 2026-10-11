@@ -1,5 +1,8 @@
 appId: dev.clicky.desktop
 productName: Clicky
+# The workspace package name (@clicky/desktop) would otherwise become the install folder name.
+extraMetadata:
+  name: clicky
 directories:
   output: release
   buildResources: resources
@@ -9,7 +12,19 @@ files:
   - package.json
 asarUnpack:
   - '**/*.node'
+  # The local speech engine loads its DLLs from its own folder.
+  - '**/node_modules/sherpa-onnx-win-x64/**'
 win:
   target: nsis
-  icon: resources/tray.png
-  signAndEditExecutable: false
+  icon: resources/icon.png
+  # Keep icon/name editing of Clicky.exe; there is no code-signing certificate (personal build).
+  signExecutable: false
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Clicky
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: Clicky-Setup-${version}.${ext}

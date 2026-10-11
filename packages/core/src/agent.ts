@@ -1,0 +1,551 @@
+/**
+ * Agent mode (feature parity with the official app's "agents"): Clicky carries out a task with
+ * the mouse and keyboard. Each step sends fresh screenshots plus the steps so far, and the model
+ * replies with exactly one JSON action. The loop is bounded, every step can be cancelled with Esc
+ * (the interaction signal), and risky steps wait for the user's go-ahead.
+ */
+
+import { mapPointToDisplay } from './coordinates.js';
+import { StageError } from './errors.js';
+import { delay, withTimeout } from './pipeline/budget.js';
+import type { CapturePort, InputAction, InputPort, OverlayPort, ScreenCapture } from './ports.js';
+import type { VisionChatProvider } from './providers.js';
+import type { AgentConfirmMode } from './settings.js';
+
+export type AgentAction =
+  | {
+      type: 'click' | 'double_click' | 'right_click';
+      x: number;
+      y: number;
+      screen: number | null;
+      target: string;
+      say: string;
+      risky: boolean;
+    }
+  | { type: 'type'; text: string; say: string; risky: boolean }
+  | { type: 'key'; keys: string[]; say: string; risky: boolean }
+  | { type: 'scroll'; x: number; y: number; screen: number | null; amount: number; say: string; risky: boolean }
+  | { type: 'wait'; ms: number; say: string; risky: boolean }
+  | { type: 'done' | 'fail'; say: string; risky: boolean };
+
+/** The model's verdict on its previous step, judged from the new screenshot. */
+export type StepCheck = 'worked' | 'failed' | null;
+
+/** Asking how or where is a question, even if an action verb follows ("how do I open…"). */
+const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|does|do|did|should|explain|tell me)\b/i;
+/**
+ * The agent-mode trigger is the assistant's name (owner's choice, 2026-10-11): "Clickey, open VS
+ * Code" or "Clicky, can you open Chrome". Speech recognition spellings ("click y", "klicky") and the
+ * older "Agent"/"Agents" work too. A question after the name ("Clicky, where is Save?") is still
+ * answered normally.
+ */
+const TRIGGER =
+  /^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:clickey|clicky|clicki|click\s+y|klicky|klickey|agents?)\b[\s,:.!-]*(.*)$/is;
+
+/** The task when the request starts with the trigger word; null otherwise (including questions). */
+export function agentGoal(question: string): string | null {
+  const m = TRIGGER.exec(question);
+  if (!m) return null;
+  const rest = (m[1] ?? '').trim().replace(/[.!]+$/, '');
+  if (rest.length < 3 || QUESTION_START.test(rest)) return null;
+  return rest;
+}
+
+const ACTION_START =
+  /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
+
+/**
+ * A request to do something on the PC without the "Agent" prefix ("can you open LinkedIn and
+ * scroll my feed"). The caller asks the user before handing it to agent mode; questions about how
+ * to do something return null and are answered normally.
+ */
+export function actionGoal(question: string): string | null {
+  const q = question.trim().replace(/[?.!]+$/, '');
+  if (QUESTION_START.test(q.replace(/^(?:hey\s+)?clicky[\s,]+/i, ''))) return null;
+  const goal = ACTION_START.exec(q)?.[1]?.trim() ?? '';
+  return goal.split(/\s+/).length >= 2 ? goal : null;
+}
+
+const KEY_NAMES = new Set([
+  'ctrl',
+  'shift',
+  'alt',
+  'win',
+  'enter',
+  'tab',
+  'esc',
+  'backspace',
+  'delete',
+  'space',
+  'up',
+  'down',
+  'left',
+  'right',
+  'home',
+  'end',
+  'pageup',
+  'pagedown',
+  ...Array.from({ length: 12 }, (_, i) => `f${i + 1}`),
+]);
+const KEY_ALIASES: Record<string, string> = {
+  control: 'ctrl',
+  return: 'enter',
+  escape: 'esc',
+  del: 'delete',
+  windows: 'win',
+  cmd: 'win',
+  meta: 'win',
+  pgup: 'pageup',
+  pgdn: 'pagedown',
+  arrowup: 'up',
+  arrowdown: 'down',
+  arrowleft: 'left',
+  arrowright: 'right',
+};
+
+/** "Ctrl + Shift + S" → ['ctrl', 'shift', 's']; null if any part isn't a key we can press. */
+export function parseKeys(combo: string): string[] | null {
+  const parts = combo
+    .toLowerCase()
+    .split('+')
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .map((k) => KEY_ALIASES[k] ?? k);
+  if (!parts.length || parts.length > 4) return null;
+  return parts.every((k) => KEY_NAMES.has(k) || /^[a-z0-9]$/.test(k)) ? parts : null;
+}
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const str = (v: unknown, max = 200): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+/** Parse the model's reply (one JSON object, possibly wrapped in prose or a code fence). */
+export function parseStepCheck(reply: string): StepCheck {
+  const m = /"check"\s*:\s*"(worked|failed)"/i.exec(reply);
+  return m?.[1] ? (m[1].toLowerCase() as StepCheck) : null;
+}
+
+export function parseAgentAction(reply: string): { ok: true; action: AgentAction } | { ok: false; error: string } {
+  const start = reply.indexOf('{');
+  const end = reply.lastIndexOf('}');
+  if (start === -1 || end <= start) return { ok: false, error: 'no JSON object in the reply' };
+  let o: Record<string, unknown>;
+  try {
+    const v: unknown = JSON.parse(reply.slice(start, end + 1));
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return { ok: false, error: 'not a JSON object' };
+    o = v as Record<string, unknown>;
+  } catch (e) {
+    return { ok: false, error: `invalid JSON (${e instanceof Error ? e.message : String(e)})` };
+  }
+  const type = str(o['action'] ?? o['type']).toLowerCase();
+  const say = str(o['say'], 160);
+  const risky = o['risky'] === true;
+  const screen = num(o['screen']);
+  const scr = screen !== null && screen >= 1 ? Math.round(screen) : null;
+  switch (type) {
+    case 'click':
+    case 'double_click':
+    case 'right_click': {
+      const x = num(o['x']);
+      const y = num(o['y']);
+      if (x === null || y === null) return { ok: false, error: `${type} needs numeric x and y` };
+      return { ok: true, action: { type, x, y, screen: scr, target: str(o['target'], 80), say, risky } };
+    }
+    case 'type': {
+      const text = typeof o['text'] === 'string' ? o['text'].slice(0, 2000) : '';
+      if (!text) return { ok: false, error: 'type needs text' };
+      return { ok: true, action: { type, text, say, risky } };
+    }
+    case 'key': {
+      const keys = parseKeys(str(o['keys'] ?? o['key'], 60));
+      if (!keys) return { ok: false, error: `unknown key "${str(o['keys'] ?? o['key'], 60)}"` };
+      return { ok: true, action: { type, keys, say, risky } };
+    }
+    case 'scroll': {
+      const x = num(o['x']);
+      const y = num(o['y']);
+      const amount = num(o['amount']);
+      if (x === null || y === null || amount === null || amount === 0)
+        return { ok: false, error: 'scroll needs x, y and a non-zero amount' };
+      return {
+        ok: true,
+        action: { type, x, y, screen: scr, amount: Math.max(-30, Math.min(30, Math.round(amount))), say, risky },
+      };
+    }
+    case 'wait':
+      return { ok: true, action: { type, ms: Math.max(200, Math.min(5000, num(o['ms']) ?? 1000)), say, risky } };
+    case 'done':
+    case 'fail':
+      return { ok: true, action: { type, say: say || (type === 'done' ? 'Done.' : "I couldn't do that."), risky } };
+    default:
+      return { ok: false, error: `unknown action "${type}"` };
+  }
+}
+
+const AGENT_PROMPT = `You are Clicky's agent. You operate the user's Windows PC with the mouse and keyboard to complete
+the task they asked for. Every turn you get fresh screenshots and the list of steps taken so far.
+
+Reply with ONLY one JSON object, no other text, describing the single next action. From the second
+step on, include "check": "worked" or "failed" saying whether your previous step had the effect you
+wanted, judged from the new screenshot. Examples:
+{"action":"click","x":412,"y":88,"target":"Save button","say":"Clicking Save"}
+{"action":"type","text":"quarterly report","say":"Typing the file name","check":"worked"}
+{"action":"key","keys":"ctrl+s","say":"Saving"}
+
+Actions:
+- click, double_click, right_click: x,y are the centre of the element in screenshot pixels (origin
+  top-left). Add "screen":N if it is not on the first screenshot. Always include "target".
+- type: {"text": "..."} types into the focused field. Click the field first if it isn't focused.
+- key: {"keys": "..."} one key or shortcut, e.g. "enter", "esc", "ctrl+l", "alt+tab", "win".
+- scroll: {"x":..,"y":..,"amount":N} N notches, positive scrolls down, negative up.
+- wait: {"ms":N} when something is still loading.
+- done: {"say":"..."} when the task is complete. "say" is one short spoken sentence about what you did.
+- fail: {"say":"..."} when the task is impossible or unsafe; say why in one short sentence.
+
+Rules:
+- Add "risky": true to any step that sends a message or email, posts, buys or pays, deletes,
+  submits a form, installs software, or changes account, privacy or security settings. The user
+  will be asked to allow it.
+- Never type passwords, card numbers, one-time codes or other secrets. Use fail and ask the user to
+  do that part themselves.
+- Look at the new screenshot to check that the previous step worked before going on. If it didn't,
+  try a different way instead of repeating it. Never click the same thing twice in a row.
+- Stop as soon as the task is done: if the last step achieved it (the menu is open, the box is
+  focused, the page is showing), reply done right away. Most tasks take one to three steps.
+- If the task was to open or focus something the user will type into (a search box, a message
+  field) and they didn't say what to type, reply done with a question as "say", e.g. "The search
+  box is open. What would you like to search for?"
+- Ignore Clicky's own bar at the top of the screen and its triangle; they are not part of the app.
+- Use what's on screen first. To open an app, click its icon if it's visible (taskbar, desktop,
+  an open window). Open exactly the app named: Comet is not Chrome, Edge is not Chrome.
+- Only if the app isn't visible anywhere: key "win+r", type its program name and press "enter".
+  To open a website, focus the browser, press "ctrl+l", type the address and press "enter".
+- Follow "Things the user told you" and "What worked before" when they apply; they come from the
+  user's own corrections and earlier runs.
+- "say" is a few words for the user, like "Opening the File menu".`;
+
+function agentSystemPrompt(screens: ScreenCapture, userContext?: string): string {
+  const lines = [AGENT_PROMPT, '', 'Screenshots in this message:'];
+  screens.images.forEach((img, i) =>
+    lines.push(
+      `- screen${i + 1}: ${img.width}x${img.height} px${i + 1 === screens.cursorScreen ? ' (the mouse is on this screen)' : ''}`,
+    ),
+  );
+  const ctx = userContext?.trim();
+  if (ctx) lines.push('', `About the user: ${ctx.slice(0, 500)}`);
+  return lines.join('\n');
+}
+
+export interface AgentDeps {
+  chat: VisionChatProvider;
+  capture: CapturePort;
+  input: InputPort;
+  overlay: OverlayPort;
+  /** Ask the user to allow a step; resolves false if they decline or don't answer. */
+  confirm(text: string, signal: AbortSignal): Promise<boolean>;
+  confirmMode: AgentConfirmMode;
+  signal: AbortSignal;
+  maxSteps?: number;
+  userContext?: string;
+  log?(message: string): void;
+  /** Called with a short description as each step starts, for captions and history. */
+  onStep?(say: string): void;
+  /** Pause between a step and the next screenshot so the UI can settle. */
+  settleMs?: number;
+  /** Move the companion to the text caret before typing (the user sees where it types). */
+  atCaret?(): void;
+  /** How long the companion takes to fly to a target before the click (default 950 ms). */
+  flightMs?: number;
+  /** The app in front, if it's on the user's never-touch list (checked before every step). */
+  blockedApp?(): Promise<string | null>;
+  /** Resolves when the user isn't holding the run paused (Pause button). */
+  whilePaused?(signal: AbortSignal): Promise<void>;
+  /** True if the user used the mouse or keyboard themselves since the last step. */
+  userInterrupted?(): boolean;
+  /** The user took over: wait (shown on the task bar) until they stop or press Resume. */
+  waitForUser?(signal: AbortSignal): Promise<void>;
+  /** Lessons from earlier successful runs of similar tasks, shown to the model as hints. */
+  hints?: string;
+  /** Progress for the step strip. */
+  onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
+}
+
+export interface AgentResult {
+  outcome: 'done' | 'failed' | 'stopped';
+  /** What to say to the user at the end. */
+  summary: string;
+  steps: string[];
+  /** Each step with the model's check of whether it worked (for the run log and learning). */
+  checked?: { step: string; ok: boolean | null }[];
+}
+
+/**
+ * Only a safety ceiling for runaway loops, never shown: real tasks can take many steps. The guardrails
+ * that matter are the per-step check, the repeat and stall guards, risky-step approval and Esc.
+ */
+export const AGENT_MAX_STEPS = 200;
+/** Steps in a row that the model reports didn't work before Clicky gives up. */
+const MAX_FAILED_CHECKS = 4;
+const STEP_FIRST_TOKEN_MS = 20_000;
+const STEP_TOTAL_MS = 45_000;
+/** Consecutive unparseable replies before giving up. */
+const MAX_BAD_REPLIES = 2;
+
+async function ask(deps: AgentDeps, system: string, question: string, screens: ScreenCapture): Promise<string> {
+  const stream = deps.chat.stream({
+    system,
+    history: [],
+    question,
+    images: screens.images,
+    maxTokens: 400,
+    signal: deps.signal,
+  });
+  const it = stream[Symbol.asyncIterator]();
+  let text = '';
+  const started = Date.now();
+  try {
+    for (let first = true; ; first = false) {
+      const left = first ? STEP_FIRST_TOKEN_MS : Math.max(1, STEP_TOTAL_MS - (Date.now() - started));
+      const r = await withTimeout(it.next(), left, 'answer', 'the agent step', deps.signal);
+      if (r.done) break;
+      text += r.value;
+    }
+  } finally {
+    void it.return?.().catch(() => undefined);
+  }
+  return text;
+}
+
+/** Same kind of step on the same target (clicks within ~40 px count as the same spot). */
+function actionSignature(a: AgentAction): string | null {
+  switch (a.type) {
+    case 'click':
+    case 'double_click':
+    case 'right_click':
+      return `${a.type}:${a.target.toLowerCase() || `${Math.round(a.x / 40)},${Math.round(a.y / 40)}`}`;
+    case 'key':
+      return `key:${a.keys.join('+')}`;
+    case 'type':
+      return `type:${a.text}`;
+    default:
+      return null;
+  }
+}
+
+function describe(a: AgentAction): string {
+  switch (a.type) {
+    case 'click':
+    case 'double_click':
+    case 'right_click':
+      return `${a.type.replace('_', ' ')} on "${a.target || 'element'}" at ${a.x},${a.y}${a.screen ? ` (screen${a.screen})` : ''}`;
+    case 'type':
+      return `typed "${a.text.length > 60 ? `${a.text.slice(0, 60)}…` : a.text}"`;
+    case 'key':
+      return `pressed ${a.keys.join('+')}`;
+    case 'scroll':
+      return `scrolled ${a.amount > 0 ? 'down' : 'up'} ${Math.abs(a.amount)} at ${a.x},${a.y}`;
+    case 'wait':
+      return `waited ${a.ms} ms`;
+    default:
+      return a.type;
+  }
+}
+
+/** Run the task to completion, failure, cancellation or the step limit. Throws StageError on provider failure. */
+export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResult> {
+  const steps: string[] = [];
+  const max = deps.maxSteps ?? AGENT_MAX_STEPS;
+  let note = '';
+  let bad = 0;
+  let lastSig: string | null = null;
+  let repeats = 0;
+  let failedChecks = 0;
+  const checked: { step: string; ok: boolean | null }[] = [];
+  const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
+  for (let i = 0; i < max;) {
+    if (deps.signal.aborted) return stopped();
+    await deps.whilePaused?.(deps.signal);
+    if (deps.signal.aborted) return stopped();
+    // The user took over the mouse or keyboard: wait for them before doing anything else.
+    if (deps.userInterrupted?.()) {
+      deps.log?.('agent paused: the user is using the mouse or keyboard');
+      await deps.waitForUser?.(deps.signal);
+      if (deps.signal.aborted) return stopped();
+    }
+    const blocked = await deps.blockedApp?.();
+    if (blocked) {
+      deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
+      return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
+    }
+    const screens = await deps.capture.take(deps.signal);
+    if (deps.signal.aborted) return stopped();
+    const question = [
+      `Task: ${goal}`,
+      deps.hints ? `What worked before for similar tasks (use it if it fits):\n${deps.hints}` : '',
+      steps.length ? `Steps so far:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}` : 'No steps taken yet.',
+      note,
+      'What is the next action?',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    const reply = await ask(deps, agentSystemPrompt(screens, deps.userContext), question, screens);
+    if (deps.signal.aborted) return stopped();
+    const parsed = parseAgentAction(reply);
+    if (!parsed.ok) {
+      deps.log?.(`agent reply rejected: ${parsed.error}: ${reply.slice(0, 200)}`);
+      if (++bad > MAX_BAD_REPLIES)
+        throw new StageError('answer', 'bad-output', `the agent replies weren't valid actions (${parsed.error})`, {
+          provider: deps.chat.id,
+        });
+      note = `Your last reply was not a valid action (${parsed.error}). Reply with one JSON object only.`;
+      continue;
+    }
+    bad = 0;
+    note = '';
+    const a = parsed.action;
+    // The per-step check: did the previous step do what it should have?
+    const check = parseStepCheck(reply);
+    const prev = checked[checked.length - 1];
+    if (prev && prev.ok === null && check) {
+      prev.ok = check === 'worked';
+      deps.log?.(`agent check: "${prev.step}" ${check}`);
+      failedChecks = check === 'failed' ? failedChecks + 1 : 0;
+      if (failedChecks >= MAX_FAILED_CHECKS) {
+        deps.log?.('agent stopped: several steps in a row did not work');
+        return {
+          outcome: 'failed',
+          summary:
+            "Several steps in a row didn't work, so I stopped. Tell me what to do differently and I'll try again.",
+          steps,
+          checked,
+        };
+      }
+    }
+    const sig = actionSignature(a);
+    repeats = sig !== null && sig === lastSig ? repeats + 1 : 0;
+    lastSig = sig;
+    if (repeats >= 2) {
+      deps.log?.(`agent stopped: the same step three times (${describe(a)})`);
+      return {
+        outcome: 'failed',
+        summary: 'I kept trying the same step without it working, so I stopped. Try telling me exactly what to click.',
+        steps,
+      };
+    }
+    if (repeats === 1)
+      note =
+        'You just did this same step and it did not change anything. If the task is done, reply done; otherwise try a different way, such as a keyboard shortcut.';
+    if (a.type === 'done') {
+      deps.log?.(`agent done after ${steps.length} steps: ${a.say}`);
+      return { outcome: 'done', summary: a.say, steps, checked };
+    }
+    if (a.type === 'fail') {
+      deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
+      return { outcome: 'failed', summary: a.say, steps, checked };
+    }
+    i++;
+
+    const say = a.say || describe(a);
+    deps.log?.(`agent step ${i}: ${describe(a)}${a.say ? ` — "${a.say}"` : ''}${a.risky ? ' (risky)' : ''}`);
+    deps.onStep?.(say);
+    deps.onProgress?.({ goal, step: i, max, say });
+    let input: InputAction | null = null;
+    if (a.type === 'click' || a.type === 'double_click' || a.type === 'right_click' || a.type === 'scroll') {
+      const mapped = mapPointToDisplay(a, screens.geometry);
+      if (!mapped.ok) {
+        note = `That position was off the screenshot (${mapped.detail}). Use coordinates inside the image.`;
+        steps.push(`(skipped: ${describe(a)} was off screen)`);
+        continue;
+      }
+      // The companion flies to the target first, so the user sees where Clicky is about to act.
+      deps.overlay.point(mapped.point, a.type === 'scroll' ? say : a.target || say);
+      input =
+        a.type === 'scroll'
+          ? { kind: 'scroll', at: mapped.point, amount: a.amount }
+          : {
+              kind: 'click',
+              at: mapped.point,
+              button: a.type === 'right_click' ? 'right' : 'left',
+              count: a.type === 'double_click' ? 2 : 1,
+            };
+    } else if (a.type === 'type') {
+      deps.atCaret?.();
+      deps.overlay.message(say, 'info');
+      input = { kind: 'type', text: a.text };
+    } else if (a.type === 'key') {
+      deps.atCaret?.();
+      deps.overlay.message(say, 'info');
+      input = { kind: 'keys', keys: a.keys };
+    }
+
+    if (a.risky || deps.confirmMode === 'always') {
+      const ok = await deps.confirm(say, deps.signal);
+      if (!ok || deps.signal.aborted) return stopped();
+    } else if (input?.kind === 'click' || input?.kind === 'scroll') {
+      // Let the companion land on the target and rest there a moment, so the user sees where it acts.
+      await delay(deps.flightMs ?? 950);
+    } else if (input) {
+      await delay(deps.flightMs === undefined ? 300 : 0); // it slides over to the caret first
+    }
+    if (deps.signal.aborted) return stopped();
+    if (a.type === 'wait') await delay(a.ms);
+    else if (input) await deps.input.run(input, deps.signal);
+    steps.push(describe(a));
+    checked.push({ step: describe(a), ok: null });
+    await delay(deps.settleMs ?? 700);
+  }
+  return {
+    outcome: 'failed',
+    summary: `That took more than ${max} steps, so I stopped to be safe. You can ask me to continue.`,
+    steps,
+  };
+}
+
+/** A finished run that worked, kept so similar tasks go faster next time (text only, on this PC). */
+export interface AgentLesson {
+  goal: string;
+  /** The steps that worked, in order. */
+  steps: string[];
+  at: number;
+}
+
+const words = (s: string): Set<string> =>
+  new Set(
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2 && !['the', 'and', 'can', 'you', 'please', 'open', 'for', 'with'].includes(w)),
+  );
+
+/** Up to two earlier runs whose goal shares most of its words with this one, as prompt hints. */
+export function lessonHints(goal: string, lessons: readonly AgentLesson[]): string | undefined {
+  const g = words(goal);
+  if (!g.size) return undefined;
+  const scored = lessons
+    .map((l) => {
+      const w = words(l.goal);
+      const shared = [...g].filter((x) => w.has(x)).length;
+      return { l, score: shared / Math.max(g.size, w.size) };
+    })
+    .filter((x) => x.score >= 0.5 && x.l.steps.length)
+    .sort((a, b) => b.score - a.score || b.l.at - a.l.at)
+    .slice(0, 2);
+  if (!scored.length) return undefined;
+  return scored
+    .map(
+      ({ l }) =>
+        `Task "${l.goal}": ${l.steps
+          .slice(0, 12)
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('; ')}`,
+    )
+    .join('\n');
+}
+
+/** The lesson to keep from a run, or null if it didn't finish. Steps the model said failed are left out. */
+export function lessonFrom(goal: string, result: AgentResult, now: number): AgentLesson | null {
+  if (result.outcome !== 'done') return null;
+  const steps = (result.checked ?? result.steps.map((s) => ({ step: s, ok: null })))
+    .filter((c) => c.ok !== false)
+    .map((c) => c.step);
+  return steps.length ? { goal: goal.slice(0, 200), steps: steps.slice(0, 30), at: now } : null;
+}

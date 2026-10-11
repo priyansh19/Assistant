@@ -25,14 +25,33 @@ export interface VisionChatRequest {
   question: string;
   /** Screenshots in screen order: images[0] is screen1. */
   images: readonly ImageInput[];
+  /** The spoken question as audio, when the model listens directly instead of a transcript. */
+  audio?: { data: Uint8Array; format: 'wav' };
   maxTokens: number;
   signal: AbortSignal;
+  /**
+   * Mark the system prompt, history and screenshots as a cacheable prefix. Set when warmCache was
+   * called for the same prefix during the key press, so this request reads it from the cache.
+   */
+  cache?: boolean;
 }
+
+/** The part of a request that warmCache sends ahead: everything before the question. */
+export type CachePrefix = Pick<VisionChatRequest, 'system' | 'history' | 'images' | 'signal'>;
 
 export interface VisionChatProvider {
   readonly id: string;
+  /** The model id in use, for the latency trace. */
+  readonly model?: string;
+  /** The model that actually answered the last request (differs when a busy model fell back). */
+  readonly servedModel?: string | undefined;
   /** Open connections early (TLS, HTTP/2) so the real request starts warm. Safe to call often. */
   prewarm?(signal: AbortSignal): Promise<void>;
+  /**
+   * Optional: send the prompt prefix (system, history, screenshots) while the key is still held,
+   * so the provider has it in its prompt cache when the question arrives (architecture §7).
+   */
+  warmCache?(prefix: CachePrefix): Promise<void>;
   /** Stream text deltas as they arrive. Throws (or rejects the iterator) on failure or abort. */
   stream(request: VisionChatRequest): AsyncIterable<string>;
 }
@@ -51,6 +70,8 @@ export interface SttProvider {
   readonly id: string;
   /** Called at key-down so the connection is open before the user stops talking. */
   start(options: { sampleRate: 16000; signal: AbortSignal }): Promise<SttSession>;
+  /** Optional: get ready for the next start (e.g. fetch a session token) while idle. */
+  prewarm?(): void;
 }
 
 export interface TtsAudioChunk {

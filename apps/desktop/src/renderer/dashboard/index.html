@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Clicky</title>
+    <link rel="stylesheet" href="./dashboard.css" />
+  </head>
+  <body>
+    <nav class="sidebar" aria-label="Sections">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 3 L20 10.5 L12.2 12.2 L10.5 20 Z" /></svg
+        >Clicky
+      </div>
+      <button class="nav-item active" data-page="home">Today</button>
+      <button class="nav-item" data-page="history">History</button>
+      <button class="nav-item" data-page="actions">Actions</button>
+      <button class="nav-item" data-page="voice">Writes like me</button>
+      <button class="nav-item" data-page="playbooks">Playbooks</button>
+      <div class="nav-sep"></div>
+      <button class="nav-item" data-page="general">General</button>
+      <button class="nav-item" data-page="cursor">Cursor</button>
+      <button class="nav-item" data-page="ai">AI and voice</button>
+      <button class="nav-item" data-page="keys">API keys <span id="keys-badge" class="badge" hidden></span></button>
+      <button class="nav-item" data-page="about">About</button>
+    </nav>
+
+    <main>
+      <div id="missing-banner" class="banner warn" hidden>
+        <span><strong>Clicky can't answer yet.</strong> <span id="missing-text"></span></span>
+        <button class="primary small" data-goto="keys">Add keys</button>
+      </div>
+
+      <!-- Home -->
+      <section class="page active" id="page-home">
+        <h1 id="today-greeting">Today</h1>
+        <div class="banner error" id="last-error" hidden>
+          <span id="last-error-text"></span>
+          <button class="secondary small" id="last-error-fix" hidden></button>
+          <button class="link" id="last-error-dismiss">Dismiss</button>
+        </div>
+        <div class="card hero" id="status-card">
+          <div class="hero-mark" aria-hidden="true">
+            <svg class="tri" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 3 L20 10.5 L12.2 12.2 L10.5 20 Z" />
+            </svg>
+          </div>
+          <div class="hero-text">
+            <div class="hero-title" id="status-title">Ready</div>
+            <div class="desc" id="status-desc"></div>
+          </div>
+          <button class="primary" id="status-action" hidden></button>
+        </div>
+
+        <div class="card ask">
+          <form id="ask-form" class="row">
+            <input type="text" id="ask-input" placeholder="Type a question about your screen…" autocomplete="off" />
+            <button class="primary" type="submit" id="ask-btn">Ask</button>
+          </form>
+          <div class="desc ask-hint">Clicky minimises this window, looks at your screen and answers out loud.</div>
+        </div>
+
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-num" id="stat-count">0</div>
+            <div class="desc">Answers</div>
+          </div>
+          <div class="tile">
+            <div class="tile-num" id="stat-last">–</div>
+            <div class="desc">Last response</div>
+          </div>
+          <div class="tile">
+            <div class="tile-num" id="stat-p50">–</div>
+            <div class="desc">Typical response</div>
+          </div>
+        </div>
+        <p class="desc tile-note">Response time is from letting go of the key to hearing the first word.</p>
+        <details class="card speed" id="speed">
+          <summary>Where the time goes</summary>
+          <table class="speed-table">
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Typical</th>
+                <th>Slow</th>
+              </tr>
+            </thead>
+            <tbody id="speed-rows"></tbody>
+          </table>
+          <p class="desc">Over your last 20 answers. Steps overlap, so they don't add up to the total.</p>
+        </details>
+
+        <div class="section-head">
+          <h2>Tasks</h2>
+        </div>
+        <div class="card">
+          <form id="task-form" class="row">
+            <input
+              type="text"
+              id="task-input"
+              placeholder="Something for Clicky to do when you step away, e.g. tidy my Downloads folder by date"
+              maxlength="300"
+              autocomplete="off"
+            />
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <div class="desc ask-hint" id="task-hint">
+            Tasks run one at a time when you leave the mouse alone for a few seconds. You get a notification when one
+            starts, needs your OK, or finishes. Esc stops it.
+          </div>
+        </div>
+        <div class="card list" id="task-list"></div>
+
+        <div class="section-head">
+          <h2>Recent</h2>
+          <button class="link" data-goto="history">See all</button>
+        </div>
+        <div class="card list" id="recent-list"></div>
+      </section>
+
+      <!-- History -->
+      <section class="page" id="page-history">
+        <h1>History</h1>
+        <p class="intro">
+          Questions and answers are kept as text on this PC only. Screenshots and audio are never saved.
+        </p>
+        <div class="toolbar">
+          <input type="search" id="history-search" placeholder="Search history" autocomplete="off" />
+          <button class="secondary" id="history-clear">Clear all</button>
+        </div>
+        <div class="card list" id="history-list"></div>
+      </section>
+
+      <!-- Actions -->
+      <section class="page" id="page-actions">
+        <h1>Actions</h1>
+        <p class="intro">
+          An action is a saved question Clicky can re-ask about whatever is on your screen. Run it from here or from the
+          tray menu. Save any past question from History in one click.
+        </p>
+        <div class="card">
+          <form id="action-form" class="action-form">
+            <input type="hidden" id="action-id" />
+            <input type="text" id="action-name" placeholder="Name (optional)" maxlength="80" autocomplete="off" />
+            <input
+              type="text"
+              id="action-question"
+              placeholder="Question, e.g. “What's the next step in this form?”"
+              maxlength="1000"
+              autocomplete="off"
+            />
+            <div class="action-form-buttons">
+              <button class="primary" type="submit" id="action-save">Save action</button>
+              <button class="secondary" type="button" id="action-cancel" hidden>Cancel</button>
+            </div>
+          </form>
+          <div class="key-error" id="action-error" hidden></div>
+        </div>
+        <div class="card list" id="actions-list"></div>
+      </section>
+
+      <!-- Writes like me -->
+      <section class="page" id="page-voice">
+        <h1>Writes like me</h1>
+        <p class="intro">
+          Hold <b class="dict-key">Right Alt</b> in any text box and say what you want: "reply to this and thank her",
+          "make this more formal" with text selected, or just talk to dictate. Clicky reads the screen and writes as
+          you. What you enter here stays on this PC and goes to your AI provider only with your writing requests.
+        </p>
+        <h2>What Clicky has learned</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Learn how I write</div>
+              <div class="desc">
+                When you write with Clicky, it notices how you write in emails, chats and posts on your screen, and how
+                you talk when you dictate. Stored on this PC only.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="styleLearning" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Never learn in these apps</div>
+              <div class="desc">Comma-separated app or site names.</div>
+            </div>
+            <input type="text" id="styleExcludeApps" autocomplete="off" />
+          </div>
+          <div id="style-learned"></div>
+          <div class="row">
+            <div class="label"><div class="desc">Forget everything Clicky has learned about your writing.</div></div>
+            <button type="button" class="secondary small" id="style-clear">Clear</button>
+          </div>
+        </div>
+        <h2>Your details (optional)</h2>
+        <p class="intro">These always win over what Clicky learned.</p>
+        <div class="card">
+          <div class="row">
+            <div class="label"><div class="title">Your name</div></div>
+            <input type="text" id="profileName" maxlength="80" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Email sign-off</div>
+              <div class="desc">Exactly how you end an email, e.g. "Best," then your name.</div>
+            </div>
+            <textarea id="profileSignOff" rows="2" maxlength="200"></textarea>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Your tone</div>
+              <div class="desc">A few words, e.g. "friendly, direct, no jargon".</div>
+            </div>
+            <input type="text" id="profileTone" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Samples of your writing</div>
+              <div class="desc">Paste two or three messages you wrote. Clicky copies the voice, not the content.</div>
+            </div>
+            <textarea id="profileSamples" rows="7" maxlength="4000"></textarea>
+          </div>
+        </div>
+        <h2>Dictation</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Tidy up plain dictation</div>
+              <div class="desc">
+                Fixes punctuation and turns "first… second…" into a list. Without an AI key, words are typed as you said
+                them.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="tidyDictation" /><span></span></label>
+          </div>
+        </div>
+        <h2>Try it</h2>
+        <div class="card tips">
+          <ul>
+            <li><b>Write:</b> "Reply to this email, say thanks and ask what they use it for."</li>
+            <li><b>Rewrite:</b> right after, hold the key again and say "shorter" or "more formal".</li>
+            <li><b>Edit a selection:</b> select a paragraph, then say "fix the grammar" or "translate to Hindi".</li>
+            <li><b>Undo:</b> tap <b class="dict-key">Right Alt</b> once within 30 seconds.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Playbooks -->
+      <section class="page" id="page-playbooks">
+        <h1>Playbooks</h1>
+        <p class="intro">
+          Instructions Clicky follows when it answers, writes or runs a task. <b>Auto</b> playbooks switch on by
+          themselves in the apps you list; <b>Always</b> ones apply everywhere.
+        </p>
+        <div class="toolbar">
+          <button type="button" class="primary small" id="pb-new">New playbook</button>
+          <button type="button" class="secondary small" id="pb-folder">Open folder</button>
+        </div>
+        <div class="card" id="pb-editor" hidden>
+          <div class="row">
+            <div class="label"><div class="title">Name</div></div>
+            <input type="text" id="pb-name" maxlength="80" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">What it's for</div></div>
+            <input type="text" id="pb-desc" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Apps</div>
+              <div class="desc">Comma-separated app or site names, e.g. "outlook, gmail".</div>
+            </div>
+            <input type="text" id="pb-apps" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">When</div></div>
+            <select id="pb-mode">
+              <option value="auto">Auto, in those apps</option>
+              <option value="always">Always</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div class="row column">
+            <div class="label"><div class="title">Instructions</div></div>
+            <textarea id="pb-body" rows="9" maxlength="20000"></textarea>
+          </div>
+          <div class="row">
+            <div class="label"></div>
+            <div class="item-buttons">
+              <button type="button" class="secondary small" id="pb-cancel">Cancel</button>
+              <button type="button" class="primary small" id="pb-save">Save</button>
+            </div>
+          </div>
+        </div>
+        <div class="card list" id="playbook-list"></div>
+      </section>
+
+      <!-- General -->
+      <section class="page" id="page-general">
+        <h1>General</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Hold-to-talk key</div>
+              <div class="desc">Hold it, ask your question, let go. Esc stops an answer.</div>
+            </div>
+            <select id="holdKey"></select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Dictation key</div>
+              <div class="desc">
+                Hold it and talk: your words are typed wherever the text cursor is. Nothing is saved.
+              </div>
+            </div>
+            <select id="dictationKey"></select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Pause Clicky</div>
+              <div class="desc">Ignore the hold-to-talk key until you resume.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="paused" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Start with Windows</div>
+              <div class="desc">Clicky waits in the tray after you sign in.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="launchAtLogin" /><span></span></label>
+          </div>
+        </div>
+        <h2>Agent mode</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Let Clicky do tasks for you</div>
+              <div class="desc" id="agent-desc">
+                Start with "Clickey", for example "Clickey, open Notepad and write a shopping list". If you just ask it
+                to do something, it offers first. Clicky then uses your mouse and keyboard, flying to each spot before
+                it clicks. Press Esc to stop it at any time.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="agentEnabled" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Ask before acting</div>
+              <div class="desc">
+                Clicky never types passwords or card numbers. You confirm with your hold-to-talk key.
+              </div>
+            </div>
+            <select id="agentConfirm">
+              <option value="risky">Only for sending, buying, deleting and similar steps</option>
+              <option value="always">Before every step</option>
+            </select>
+          </div>
+        </div>
+        <h2>What Clicky remembers</h2>
+        <p class="intro">
+          Tell Clicky things to remember, like "Clickey, Comet is on my taskbar" or "remember my reports are in
+          D:\Reports". It uses them from then on. Stored on this PC.
+        </p>
+        <div class="card list" id="notes-list"></div>
+        <h2>Microphone</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Device</div>
+              <div class="desc">The microphone Clicky listens with.</div>
+            </div>
+            <select id="micDeviceId">
+              <option value="">Windows default</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the microphone ready</div>
+              <div class="desc">
+                Clicky starts listening the instant you press the key instead of about a second later. Windows shows the
+                microphone as in use; nothing is recorded or sent until you hold the key.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="micAlwaysReady" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Test</div>
+              <div class="desc" id="mic-test-desc">Speak and watch the meter move.</div>
+            </div>
+            <div class="meter-wrap">
+              <div class="meter"><div class="meter-fill" id="mic-meter"></div></div>
+              <button class="secondary" id="mic-test">Test</button>
+            </div>
+          </div>
+        </div>
+        <h2>Screenshots</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Include all displays</div>
+              <div class="desc">Off: only the screen your cursor is on. Faster and sends less.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="captureAllDisplays" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Detail</div>
+              <div class="desc">Higher detail helps with small text but answers a bit slower.</div>
+            </div>
+            <select id="captureMaxEdge">
+              <option value="960">Fast (960 px)</option>
+              <option value="1280">Balanced (1280 px)</option>
+              <option value="1600">Detailed (1600 px)</option>
+              <option value="1920">Maximum (1920 px)</option>
+            </select>
+          </div>
+        </div>
+        <h2>Memory</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Remember history</div>
+              <div class="desc">Keep questions and answers (text only) so you can search and reuse them.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="rememberHistory" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Follow-up questions</div>
+              <div class="desc">
+                Send the last few answers from the past 10 minutes so “and where's the other one?” works.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="useRecentContext" /><span></span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cursor -->
+      <section class="page" id="page-cursor">
+        <h1>Cursor</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Colour</div>
+              <div class="desc">The companion triangle next to your mouse pointer.</div>
+            </div>
+            <div class="swatches" id="swatches"></div>
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">Size</div></div>
+            <select id="cursorSize">
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Show labels</div>
+              <div class="desc">A small bubble names what Clicky is pointing at.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="showPointLabels" /><span></span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI and voice -->
+      <section class="page" id="page-ai">
+        <h1>AI and voice</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Answer model</div>
+              <div class="desc">Looks at your screen and writes the answer.</div>
+            </div>
+            <select id="chatProvider">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Model</div>
+              <div class="desc" id="model-desc">Leave empty to use the default.</div>
+            </div>
+            <div class="item-buttons">
+              <select id="chatModelPick" aria-label="Model"></select>
+              <input type="text" id="chatModel" spellcheck="false" autocomplete="off" hidden />
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Speech to text</div>
+              <div class="desc">Turns what you say into text while you hold the key.</div>
+            </div>
+            <select id="sttProvider">
+              <option value="local">On this PC (fastest, private, free)</option>
+              <option value="assemblyai">AssemblyAI (cloud, live)</option>
+              <option value="openai">OpenAI (cloud)</option>
+              <option value="model">The answer model listens (OpenRouter, no extra key)</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Voice</div>
+              <div class="desc">Reads the answer aloud.</div>
+            </div>
+            <select id="ttsProvider">
+              <option value="elevenlabs">ElevenLabs (natural)</option>
+              <option value="openai">OpenAI</option>
+              <option value="local">On this PC (natural Piper voices, free)</option>
+              <option value="system">Windows voice (free, offline)</option>
+            </select>
+          </div>
+          <div class="row" id="ttsVoiceRow">
+            <div class="label">
+              <div class="title">ElevenLabs voice ID</div>
+              <div class="desc">Leave empty for the default voice.</div>
+            </div>
+            <input type="text" id="ttsVoice" placeholder="Default voice" spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Choose a voice</div>
+              <div class="desc" id="voice-test-desc">Press ▶ to hear a voice; it becomes Clicky's voice.</div>
+            </div>
+            <div class="voice-grid" id="voice-picker"></div>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Speaking speed</div>
+              <div class="desc" id="speed-desc"></div>
+            </div>
+            <input type="range" id="localVoiceSpeed" min="0.7" max="2" step="0.05" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Preview</div>
+              <div class="desc">Hear the current voice at this speed.</div>
+            </div>
+            <button class="secondary" id="voice-test">Play sample</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Key sounds</div>
+              <div class="desc">A soft sound when you press and let go of the key.</div>
+            </div>
+            <div class="item-buttons">
+              <select id="cueSound">
+                <option value="soft">Soft</option>
+                <option value="bubble">Bubble</option>
+                <option value="glass">Glass</option>
+                <option value="off">Off</option>
+              </select>
+              <button type="button" class="secondary small" id="cue-test" aria-label="Play key sound">▶</button>
+            </div>
+          </div>
+        </div>
+        <h2>On-device speech</h2>
+        <p class="intro">
+          Speech recognition and voices that run on this PC: no key, no internet, and the fastest option. Measured on
+          this laptop: Moonshine turns a question into text in about 60 ms; a Piper voice speaks a sentence in under 0.2
+          s.
+        </p>
+        <div class="banner" id="openwhispr-note" hidden>
+          OpenWhispr is running, so Clicky can already use its speech recognition without downloading anything. A
+          downloaded model is still faster.
+        </div>
+        <div class="card">
+          <div class="row" id="localVoiceRow">
+            <div class="label">
+              <div class="title">Voice</div>
+              <div class="desc">Download a voice below, then pick it here.</div>
+            </div>
+            <select id="localVoice"></select>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Speech recognition model</div>
+              <div class="desc">Which downloaded model turns your voice into text.</div>
+            </div>
+            <select id="localSttModel">
+              <option value="auto">Fastest available</option>
+              <option value="moonshine-tiny">Moonshine Tiny</option>
+              <option value="parakeet-v3">Parakeet v3</option>
+            </select>
+          </div>
+        </div>
+        <div class="card list" id="local-models"></div>
+        <h2>Speed</h2>
+        <p class="intro">
+          These make Clicky answer faster and are all on by default. Turn one off to compare: "Where the time goes" on
+          the Home page shows the difference.
+        </p>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Start speaking sooner</div>
+              <div class="desc">Begin with the first phrase instead of waiting for the whole first sentence.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="eagerFirstClause" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Answer as you let go</div>
+              <div class="desc">
+                Send your question the moment you release the key, using what Clicky has heard so far. If the final
+                words differ it asks again, which costs one extra request.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="speculativeAnswer" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Send the screen early</div>
+              <div class="desc">
+                With Claude, upload the screenshot while you are still talking so the answer starts faster. The
+                screenshot is taken just after you press the key. Costs a little more per question.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="warmImageCache" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the voice connected</div>
+              <div class="desc">
+                With ElevenLabs, open one voice connection when you press the key and keep it for the whole answer.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="streamingVoice" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Backup voice</div>
+              <div class="desc">
+                If the online voice has not started after a moment, switch to the Windows voice for that answer.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="backupVoice" /><span></span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- API keys -->
+      <section class="page" id="page-keys">
+        <h1>API keys</h1>
+        <p class="intro">
+          Keys are encrypted by Windows for your user account and stay on this PC. Clicky never shows a saved key again;
+          to change one, paste a new key over it.
+        </p>
+        <div id="encryption-banner" class="banner error" hidden>
+          Windows encryption isn't available, so keys can't be saved safely right now.
+        </div>
+        <div class="card" id="keys-list"></div>
+      </section>
+
+      <!-- About -->
+      <section class="page" id="page-about">
+        <h1>About</h1>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Clicky</div>
+              <div class="desc" id="version"></div>
+            </div>
+            <button class="secondary" id="rerun-setup">Run setup again</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Privacy</div>
+              <div class="desc">
+                Clicky only listens and takes a screenshot while you hold the key. Audio goes to your speech-to-text
+                provider, the screenshot and question go to your answer model, and the answer text goes to your voice
+                provider. Screenshots and audio are never saved; history is text only and stays on this PC.
+              </div>
+            </div>
+          </div>
+        </div>
+        <h2>Troubleshooting</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Diagnostics</div>
+              <div class="desc">
+                Copies the app version, your provider choices, which keys are saved (never the keys), recent errors and
+                response times, ready to paste into a bug report.
+              </div>
+            </div>
+            <button class="secondary" id="copy-diagnostics">Copy diagnostics</button>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Log files</div>
+              <div class="desc">Clicky's own logs. They never contain audio, screenshots or your questions.</div>
+            </div>
+            <button class="secondary" id="open-logs">Open log folder</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- First-run setup wizard -->
+    <div id="agent-setup" class="wizard" hidden>
+      <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="agent-setup-title">
+        <div class="wizard-body">
+          <h1 id="agent-setup-title">Let Clicky do tasks for you</h1>
+          <p>
+            Say <b>"Clickey, …"</b> and Clicky does it with your mouse and keyboard while you watch, for example
+            "Clickey, open Notepad and write a shopping list". Before it starts, here's how it behaves:
+          </p>
+          <ul class="rules">
+            <li>
+              It shows every step first: the triangle flies to the spot, and a bar at the top shows what it's doing.
+            </li>
+            <li>It always asks before <b>sending, buying, deleting, posting or submitting</b> anything.</li>
+            <li>It never types passwords, card numbers or codes, and it stops at sign-in screens.</li>
+            <li>
+              <b>Esc</b> or the Stop button stops it at once. If you use the mouse or keyboard, it pauses and asks.
+            </li>
+            <li>It checks that every step worked before the next one, and never touches the apps you list below.</li>
+          </ul>
+          <div class="card">
+            <div class="row">
+              <div class="label"><div class="title">Ask before acting</div></div>
+              <select id="as-confirm">
+                <option value="risky">Only for sending, buying, deleting… (recommended)</option>
+                <option value="always">Before every step</option>
+              </select>
+            </div>
+            <div class="row column">
+              <div class="label">
+                <div class="title">Apps it must never touch</div>
+                <div class="desc">Comma-separated app names. Password managers are listed already.</div>
+              </div>
+              <textarea id="as-blocked" rows="2"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="wizard-foot">
+          <button class="link" id="as-cancel">Not now</button>
+          <div class="spacer"></div>
+          <button class="primary" id="as-accept">I understand, turn on agent mode</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wizard" class="wizard" hidden>
+      <div class="wizard-card" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+        <div class="wizard-steps" id="wizard-steps" aria-hidden="true"></div>
+        <div class="sr-only" id="wizard-progress" aria-live="polite"></div>
+        <div class="wizard-body" id="wizard-body"></div>
+        <div class="wizard-foot">
+          <button class="link" id="wizard-skip">Skip setup</button>
+          <div class="spacer"></div>
+          <button class="secondary" id="wizard-back">Back</button>
+          <button class="primary" id="wizard-next">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

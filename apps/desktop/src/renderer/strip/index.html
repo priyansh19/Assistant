@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Clicky task</title>
+    <style>
+      :root {
+        --accent: #2f8cff;
+        --amber: #f59e0b;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        font:
+          13px 'Segoe UI Variable Text',
+          'Segoe UI',
+          system-ui,
+          sans-serif;
+        color: #fafafa;
+        user-select: none;
+        overflow: hidden;
+      }
+      /* A notch hanging from the top edge of the screen: square top, round bottom corners. */
+      .notch {
+        box-sizing: border-box;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px 2px 14px;
+        background: #0e0f12;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-top: none;
+        border-radius: 0 0 20px 20px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        animation: drop 220ms ease-out;
+      }
+      @keyframes drop {
+        from {
+          transform: translateY(-100%);
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+      .notch.asking {
+        border-color: var(--amber);
+      }
+      .mark {
+        flex: none;
+        width: 14px;
+        height: 14px;
+        animation: spin 1.4s linear infinite;
+      }
+      .paused .mark {
+        animation: none;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .mark path {
+        fill: var(--accent);
+      }
+      .asking .mark path {
+        fill: var(--amber);
+      }
+      .text {
+        flex: 1;
+        min-width: 0;
+        line-height: 1.25;
+      }
+      .goal,
+      .now {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .goal {
+        font-weight: 600;
+      }
+      .now {
+        color: rgba(250, 250, 250, 0.68);
+        font-size: 12px;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        color: #fafafa;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        padding: 4px 11px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.16);
+      }
+      button.allow {
+        background: var(--amber);
+        border-color: var(--amber);
+        color: #111;
+        font-weight: 600;
+      }
+      button.stop {
+        border-color: rgba(255, 120, 100, 0.55);
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="notch" id="strip">
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12 L6 20.7 L6 3.3 Z" /></svg>
+      <div class="text">
+        <div class="goal" id="goal">Working…</div>
+        <div class="now" id="now"></div>
+      </div>
+      <button class="allow" id="allow" hidden>Allow</button>
+      <button id="pause">Pause</button>
+      <button class="stop" id="stop" title="Esc also stops it">Stop</button>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
