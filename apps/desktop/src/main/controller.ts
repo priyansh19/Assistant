@@ -1,5 +1,6 @@
 import { app, screen } from 'electron';
 import { join } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
 import {
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
@@ -129,6 +130,7 @@ export class Controller {
     this.engine.start();
     this.tasks.start();
     this.inventory.start();
+    void this.checkAltGr();
     this.skills.start();
   }
 
@@ -360,6 +362,32 @@ export class Controller {
   }
 
   private keyRecorded: ((key: string | null) => void) | null = null;
+
+  /**
+   * Right Alt is AltGr on many keyboards (Italian, German, French: it types @ and €), so holding it
+   * to write clashes with typing. Checked once: the writing key moves to a key that's free.
+   */
+  private async checkAltGr(): Promise<void> {
+    const marker = join(app.getPath('userData'), '.altgr-checked');
+    if (existsSync(marker)) return;
+    const s = this.settings.get();
+    try {
+      const altGr = await this.input.usesAltGr();
+      writeFileSync(marker, String(altGr));
+      const uses = (k: string): boolean => s.holdKey === k || s.dictationKey === k;
+      if (!altGr || !uses('RightAlt')) return;
+      const free = !uses('RightCtrl') ? 'RightCtrl' : 'F9';
+      if (s.dictationKey === 'RightAlt') this.settings.update({ dictationKey: free });
+      else this.settings.update({ holdKey: free });
+      this.overlays.message(
+        `Right Alt types characters on your keyboard (AltGr), so Clicky now uses ${holdKeyLabel(free)} instead. Change it in Settings.`,
+        'info',
+      );
+      log.info(`AltGr keyboard: moved Right Alt to ${free}`);
+    } catch (e) {
+      log.warn('could not check the keyboard layout', String(e));
+    }
+  }
 
   /** Settings "Record keys": the next key combination pressed, or null (Esc or nothing pressed). */
   recordKeys(): Promise<string | null> {

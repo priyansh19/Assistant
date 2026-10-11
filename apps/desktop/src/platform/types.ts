@@ -66,6 +66,8 @@ export interface InputDriver {
   maximizeNew(before: string, ms: number): Promise<void>;
   /** Ask a window to close, as its X button would (the app may ask to save first). */
   closeWindow(handle: string): Promise<void>;
+  /** True if the keyboard layout types characters with AltGr (Right Alt). */
+  usesAltGr(): Promise<boolean>;
   /** The text caret in physical screen pixels, when the app exposes it. */
   caret(): Promise<{ x: number; y: number; height: number } | null>;
   /** Press together and release in reverse, e.g. ['ctrl', 's']. 'mask' is a no-op key. */

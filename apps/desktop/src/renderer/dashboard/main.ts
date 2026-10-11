@@ -1168,6 +1168,8 @@ function renderWizard(): void {
     focusTarget = card.querySelector<HTMLInputElement>('#about-name');
   } else {
     const result = el('div', { className: 'try-result desc', id: 'try-result' });
+    // Not "all set" until Clicky has actually answered once.
+    const title = h1('Last step: try it');
     const tryBtn = button('Try it now', 'primary', async () => {
       if (snap.missing.length) {
         result.className = 'try-result key-error';
@@ -1180,6 +1182,7 @@ function renderWizard(): void {
       if (!r) return;
       if (r.outcome === 'answered') {
         result.className = 'try-result key-ok';
+        title.textContent = "You're all set";
         const secs = setupStartedAt ? Math.round((Date.now() - setupStartedAt) / 1000) : 0;
         result.textContent = `✓ “${r.answer}”${r.pointLabel ? ` (pointed at ${r.pointLabel})` : ''}${secs ? ` Your first answer came ${secs} s after you started setup.` : ''}`;
       } else {
@@ -1191,7 +1194,7 @@ function renderWizard(): void {
       }
     });
     body.replaceChildren(
-      h1("You're all set"),
+      title,
       el('p', {
         text: 'Try a typed question first: Clicky hides this window, looks at your screen, answers out loud and points, then comes back here. Then try your voice:',
       }),

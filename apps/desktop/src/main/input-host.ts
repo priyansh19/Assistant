@@ -106,6 +106,10 @@ export class InputHost {
   }
 
   /** The app in front (never-touch check for agent mode). */
+  async usesAltGr(): Promise<boolean> {
+    return (await this.driver?.usesAltGr().catch(() => false)) ?? false;
+  }
+
   /** Open windows for the agent, front first: "Title — app". */
   async windows(): Promise<string[]> {
     const list = (await this.driver?.windows().catch(() => [])) ?? [];

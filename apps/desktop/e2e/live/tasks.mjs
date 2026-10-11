@@ -10,6 +10,7 @@ const notepads = (n) =>
 export const TASKS = [
   {
     id: 'W01',
+    destructive: true,
     say: 'Clicky, minimise this window.',
     setup: [
       "Start-Process notepad; Start-Sleep 2; [LiveWin]::Front() | Set-Content (Join-Path $env:TEMP 'clicky-w01.txt')",
@@ -20,15 +21,17 @@ export const TASKS = [
   },
   {
     id: 'W03',
+    destructive: true,
     say: 'Clicky, close all my windows.',
     setup: [notepads(5), 'Start-Sleep 1'],
-    allow: 'allow',
+    allow: /notepad/i,
     maxMinutes: 6,
     check: "(Get-AppWindows | Where-Object { $_ -like 'notepad|*' }).Count",
     pass: (out) => out.trim() === '0' || out.trim() === '',
   },
   {
     id: 'W10',
+    destructive: true,
     say: 'Clicky, close all windows.',
     setup: ['(New-Object -ComObject Shell.Application).MinimizeAll(); Start-Sleep 1'],
     allow: 'decline',
@@ -45,6 +48,7 @@ export const TASKS = [
   },
   {
     id: 'W12',
+    destructive: true,
     say: 'Clicky, bring back all my minimised windows.',
     setup: [notepads(4), '(New-Object -ComObject Shell.Application).MinimizeAll(); Start-Sleep 1'],
     maxMinutes: 5,

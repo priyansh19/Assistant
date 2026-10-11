@@ -1,3 +1,4 @@
+import { applyInstructionPack } from './instruction-pack';
 import { app, Notification } from 'electron';
 import { holdKeyLabel, type Settings } from '@clicky/core';
 import type { OverlayConfig } from '../shared/overlay-protocol';
@@ -41,6 +42,8 @@ if (!app.requestSingleInstanceLock()) {
     void worker.start().catch((e: unknown) => log.error('worker failed to start', String(e)));
     overlays = new OverlayManager(platform, overlayConfig(settings.get()));
     overlays.start();
+    // The shipped instruction pack (agents.md, skills, learned routes) before the stores read them.
+    applyInstructionPack();
     controller = new Controller(platform, settings, credentials, history, overlays, worker);
     const dashboard = new DashboardWindow(settings, credentials, history, controller, worker);
     const ctl = controller;

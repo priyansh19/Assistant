@@ -161,6 +161,18 @@ public static class ClickyInput {
     }
     return "";
   }
+  [DllImport("user32.dll")] static extern short VkKeyScanEx(char ch, IntPtr layout);
+  [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+  // True if the keyboard layout types common characters with AltGr (Right Alt), as Italian,
+  // German or French layouts do: then Right Alt can't be a hold key.
+  public static bool UsesAltGr() {
+    uint pid; var layout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), out pid));
+    foreach (var ch in "@#[]{}\\|~\u20ac") {
+      short v = VkKeyScanEx(ch, layout);
+      if (v != -1 && ((v >> 8) & 6) == 6) return true;
+    }
+    return false;
+  }
   public static long ForegroundHandle() { return GetForegroundWindow().ToInt64(); }
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   public static void CloseWindow(long h) { PostMessage(new IntPtr(h), 0x0010, IntPtr.Zero, IntPtr.Zero); }
@@ -311,6 +323,7 @@ while ($true) {
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
       'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       'windows' { $out = [ClickyInput]::Windows() }
+      'altgr'   { $out = [ClickyInput]::UsesAltGr() }
       'fgh'     { $out = [ClickyInput]::ForegroundHandle() }
       'maxnew'  { $out = [ClickyInput]::MaximizeNew([long]$p[2], [int]$p[3]) }
       'closewin' { [ClickyInput]::CloseWindow([long]$p[2]) }
@@ -497,6 +510,7 @@ export function createWin32InputDriver(): InputDriver {
     foregroundHandle: async () => (await send('fgh')).trim(),
     maximizeNew: async (before, ms) =>
       void (await send(`maxnew ${/^\d+$/.test(before) ? before : '0'} ${Math.max(200, Math.min(8000, int(ms)))}`)),
+    usesAltGr: async () => (await send('altgr')).trim().toLowerCase() === 'true',
     closeWindow: (handle) => done(send(`closewin ${/^\d+$/.test(handle) ? handle : '0'}`)),
     openFolder: (path) => done(send(`folder ${Buffer.from(path, 'utf8').toString('base64')}`)),
     caret: async () => {

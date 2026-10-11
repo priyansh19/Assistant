@@ -63,7 +63,10 @@ const logFrom = (offset) => {
 };
 
 const results = [];
-for (const t of TASKS.filter((x) => !only || only.includes(x.id))) {
+// Tasks that close or minimise windows touch the user's own apps: only with --destructive, when
+// the user said the PC is free for it.
+const destructive = process.argv.includes('--destructive');
+for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructive || !x.destructive))) {
   say(`--- ${t.id}: ${t.say}`);
   for (const s of t.setup ?? []) say(`setup: ${ps(s).slice(0, 200)}`);
   const wav = path.join(outDir, `${t.id}.wav`);
@@ -82,8 +85,10 @@ for (const t of TASKS.filter((x) => !only || only.includes(x.id))) {
     const asks = log.match(/asking to allow: .*/g) ?? [];
     if (asks.length > answered) {
       answered = asks.length;
-      say(`${asks.at(-1)} -> ${t.allow === 'allow' ? 'allow' : 'leave it (declined)'}`);
-      if (t.allow === 'allow') {
+      // Allow only what the task scopes it to (e.g. the Notepads it opened itself).
+      const ok = t.allow instanceof RegExp ? t.allow.test(asks.at(-1)) : t.allow === 'allow';
+      say(`${asks.at(-1)} -> ${ok ? 'allow' : 'leave it (declined)'}`);
+      if (ok) {
         await wait(800);
         ps('Invoke-Tap');
       }
