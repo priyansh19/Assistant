@@ -235,6 +235,9 @@ function renderControls(s: Settings): void {
   set('ttsProvider', s.ttsProvider);
   set('ttsVoice', s.ttsVoice);
   $('ttsVoiceRow').hidden = s.ttsProvider !== 'elevenlabs';
+  if (s.sttProvider === 'model' && s.chatProvider === 'anthropic') {
+    $('model-desc').textContent = "Claude can't listen to audio. Pick OpenRouter, or a speech-to-text service below.";
+  }
   for (const sw of document.querySelectorAll<HTMLElement>('.swatch')) {
     const on = sw.dataset['color'] === s.cursorColor;
     sw.classList.toggle('selected', on);
@@ -662,8 +665,14 @@ const PRESETS: Preset[] = [
   },
   {
     id: 'openrouter',
-    title: 'OpenRouter',
-    desc: 'Any model through OpenRouter, AssemblyAI for speech, Windows voice. 2 keys.',
+    title: 'Just OpenRouter (1 key)',
+    desc: 'A fast Gemini model sees your screen and hears your question directly; Windows voice reads the answer. No AssemblyAI needed.',
+    settings: { chatProvider: 'openrouter', sttProvider: 'model', ttsProvider: 'system' },
+  },
+  {
+    id: 'openrouter-live',
+    title: 'OpenRouter + live speech to text',
+    desc: 'OpenRouter answers, AssemblyAI transcribes while you talk, Windows voice. 2 keys.',
     settings: { chatProvider: 'openrouter', sttProvider: 'assemblyai', ttsProvider: 'system' },
   },
 ];

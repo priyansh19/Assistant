@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { VisionChatProvider, VisionChatRequest } from '@clicky/core';
+import { ConfigError, type VisionChatProvider, type VisionChatRequest } from '@clicky/core';
 import { prewarmOrigin, toBase64, type FetchLike } from './http.js';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5-5';
@@ -39,6 +39,10 @@ export class AnthropicChat implements VisionChatProvider {
   }
 
   async *stream(req: VisionChatRequest): AsyncIterable<string> {
+    if (req.audio)
+      throw new ConfigError(
+        "Claude can't listen to audio directly. In Clicky > AI and voice, choose a speech-to-text service.",
+      );
     const messages: Anthropic.Beta.BetaMessageParam[] = req.history.map((t) => ({ role: t.role, content: t.text }));
     messages.push({
       role: 'user',

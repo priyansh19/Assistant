@@ -60,7 +60,10 @@ if (!app.requestSingleInstanceLock()) {
     history.onChange(() => tray?.refresh());
     credentials.onChange(() => tray?.refresh());
     ctl.hooks = {
-      beforeListen: () => dashboard.minimizeIfFocused(),
+      beforeListen: () => {
+        if (dashboard.minimizeIfFocused())
+          overlays?.message('Clicky hid its window to see your screen. It comes back after the answer.', 'info');
+      },
       needKeys: () => dashboard.open('keys'),
     };
 

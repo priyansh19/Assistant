@@ -25,6 +25,8 @@ export interface VisionChatRequest {
   question: string;
   /** Screenshots in screen order: images[0] is screen1. */
   images: readonly ImageInput[];
+  /** The spoken question as audio, when the model listens directly instead of a transcript. */
+  audio?: { data: Uint8Array; format: 'wav' };
   maxTokens: number;
   signal: AbortSignal;
 }

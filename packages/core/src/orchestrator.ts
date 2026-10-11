@@ -11,13 +11,21 @@
  * nothing late from an old interaction can touch the new one.
  */
 
+import { HeardTagFilter, joinFrames, pcmToWav } from './audio.js';
 import { mapPointToDisplay, type CaptureGeometry, type MappedPoint } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
 import { LatencyRecorder, type LatencySummary } from './latency.js';
 import { PointStreamParser, type PointTarget } from './point-parser.js';
 import { buildSystemPrompt } from './prompt.js';
-import type { ChatTurn, ImageInput, SttProvider, SttSession, VisionChatProvider } from './providers.js';
+import type {
+  ChatTurn,
+  ImageInput,
+  SttProvider,
+  SttSession,
+  VisionChatProvider,
+  VisionChatRequest,
+} from './providers.js';
 import { SentenceChunker } from './sentence-chunker.js';
 import type { SpeechFactory, SpeechOutput } from './speech.js';
 
@@ -70,6 +78,8 @@ export interface OrchestratorDeps {
   mic: MicPort;
   overlay: OverlayPort;
   recentTurns(): ChatTurn[];
+  /** True when the answer model listens to the recorded audio itself (no speech-to-text service). */
+  listensDirectly?(): boolean;
   record(entry: Omit<HistoryEntry, 'id' | 'at'>): void;
   onLatency?(summary: LatencySummary): void;
   /** Called for every state change, for logging and the tray. */
@@ -100,6 +110,9 @@ export const MIC_TAIL_MS = 80;
 
 /** A key held longer than this is treated as a missed key-up (e.g. Windows switched desktops). */
 export const MAX_LISTEN_MS = 60_000;
+
+/** Recordings shorter than this have no question in them. */
+const MIN_AUDIO_S = 0.3;
 
 /** Hold shorter than this is treated as an accidental tap. */
 export const MIN_HOLD_MS = 250;
@@ -144,7 +157,26 @@ export function describeError(e: unknown): string {
         : '';
   if (/credit|quota|billing|insufficient|\b402\b/i.test(msg))
     return 'An AI account is out of credit. Add billing with the provider, then try again.';
-  if (status === 'auth') return 'An API key was rejected. Check your keys in Settings.';
+  if (status === 'auth') {
+    // Name the provider and its own reason when we have them, e.g. "openrouter 401: User not found."
+    const m = /^(anthropic|openrouter|openai|assemblyai|elevenlabs)\b[^:]*:\s*(.+)$/i.exec(msg);
+    const names: Record<string, string> = {
+      anthropic: 'Anthropic',
+      openrouter: 'OpenRouter',
+      openai: 'OpenAI',
+      assemblyai: 'AssemblyAI',
+      elevenlabs: 'ElevenLabs',
+    };
+    if (m?.[1]) {
+      const who = names[m[1].toLowerCase()] ?? m[1];
+      const why = (m[2] ?? '').slice(0, 80);
+      if (/user not found/i.test(why) && who === 'OpenRouter') {
+        return "Your OpenRouter key can't run models (it may be a management key). Create a normal key at openrouter.ai/keys.";
+      }
+      return `Your ${who} key was rejected (${why}). Check it in Clicky > API keys.`;
+    }
+    return 'An API key was rejected. Check your keys in Clicky > API keys.';
+  }
   if (status === 'rate') return 'The AI service is rate limiting requests. Wait a moment and try again.';
   if (status === 'server') return 'The AI service had a problem. Please try again.';
   if (/fetch failed|network|ENOTFOUND|ECONN|socket/i.test(msg))
@@ -255,15 +287,19 @@ export class Orchestrator {
           if (!signal.aborted) this.fail(run, e);
         },
       );
-    let stt: SttProvider;
-    try {
-      stt = this.deps.stt();
-    } catch (e) {
-      this.fail(run, e);
-      return;
+    // Listening directly: frames just accumulate and go to the answer model with the screenshot.
+    const direct = this.deps.listensDirectly?.() ?? false;
+    let stt: SttProvider | null = null;
+    if (!direct) {
+      try {
+        stt = this.deps.stt();
+      } catch (e) {
+        this.fail(run, e);
+        return;
+      }
     }
-    run.sttSession = stt.start({ sampleRate: 16000, signal });
-    run.sttSession.then(
+    if (stt) run.sttSession = stt.start({ sampleRate: 16000, signal });
+    run.sttSession?.then(
       (session) => {
         // Flush audio recorded before the connection was ready, then stream directly.
         for (const f of run.micFrames.splice(0)) session.pushAudio(f);
@@ -352,6 +388,18 @@ export class Orchestrator {
     await new Promise((r) => setTimeout(r, MIC_TAIL_MS));
     if (this.run === run) this.deps.mic.stop();
     if (signal.aborted) return;
+    if (!run.sttSession) {
+      // The model listens: hand it the recording (16 kHz mono WAV, small enough to upload instantly).
+      const pcm = joinFrames(run.micFrames.splice(0));
+      if (pcm.length < 16000 * MIN_AUDIO_S) {
+        this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
+        this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
+        return;
+      }
+      run.latency.mark('transcriptFinal');
+      await this.answer(run, screens, '', { data: pcmToWav(pcm, 16000), format: 'wav' });
+      return;
+    }
     let transcript: string;
     try {
       if (!run.sttSession) throw new Error('speech-to-text did not start');
@@ -366,9 +414,14 @@ export class Orchestrator {
     await this.answer(run, screens, transcript);
   }
 
-  private async answer(run: Run, screensP: Promise<ScreenCapture>, question: string): Promise<void> {
+  private async answer(
+    run: Run,
+    screensP: Promise<ScreenCapture>,
+    question: string,
+    audio?: VisionChatRequest['audio'],
+  ): Promise<void> {
     try {
-      await this.answerInner(run, screensP, question);
+      await this.answerInner(run, screensP, question, audio);
     } catch (e) {
       // Anything unexpected must end in a visible error, never a stuck "thinking".
       run.speech?.stop();
@@ -376,11 +429,17 @@ export class Orchestrator {
     }
   }
 
-  private async answerInner(run: Run, screensP: Promise<ScreenCapture>, question: string): Promise<void> {
+  private async answerInner(
+    run: Run,
+    screensP: Promise<ScreenCapture>,
+    question: string,
+    audio?: VisionChatRequest['audio'],
+  ): Promise<void> {
     const { signal } = run.interaction;
     if (signal.aborted) return;
     run.latency.mark('transcriptFinal');
-    const t = this.machine.dispatch({ type: 'transcriptFinal', text: question });
+    // With audio the question text comes back from the model ([HEARD:...]); the machine only needs non-empty.
+    const t = this.machine.dispatch({ type: 'transcriptFinal', text: audio ? '(voice)' : question });
     if (!t || t.to !== 'thinking') {
       // Empty transcript → the machine cancelled. Tell the user why instead of silently resetting.
       if (t?.to === 'cancelled') this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
@@ -416,6 +475,7 @@ export class Orchestrator {
         hasCursor: i + 1 === screens.cursorScreen,
       })),
       ...(this.deps.userContext?.() ? { userContext: this.deps.userContext() as string } : {}),
+      ...(audio ? { audioQuestion: true } : {}),
     });
 
     const speech = speechFactory.create(signal);
@@ -431,6 +491,13 @@ export class Orchestrator {
     });
 
     const parser = new PointStreamParser();
+    const heard = audio ? new HeardTagFilter() : null;
+    const feed = (text: string): ReturnType<PointStreamParser['push']> => {
+      if (!heard) return parser.push(text);
+      const out = heard.push(text);
+      if (heard.heard && !run.question) run.question = heard.heard;
+      return out ? parser.push(out) : [];
+    };
     const chunker = new SentenceChunker();
     const handleText = (text: string): void => {
       run.answer += text;
@@ -449,8 +516,9 @@ export class Orchestrator {
       const stream = chat.stream({
         system,
         history: this.deps.recentTurns(),
-        question,
+        question: audio ? 'Answer the question in the audio.' : question,
         images: screens.images,
+        ...(audio ? { audio } : {}),
         maxTokens: this.deps.maxTokens ?? 1500,
         signal,
       });
@@ -465,12 +533,26 @@ export class Orchestrator {
           run.latency.mark('firstToken');
           first = false;
         }
-        handleEvents(parser.push(next.value));
+        handleEvents(feed(next.value));
+      }
+      if (heard) {
+        const rest = heard.end();
+        if (rest) handleEvents(parser.push(rest));
+        if (heard.heard && !run.question) run.question = heard.heard;
       }
       handleEvents(parser.end());
       for (const sentence of chunker.end()) speech.say(sentence);
       speech.end();
-      if (!run.answer.trim()) throw new Error('The AI returned an empty answer.');
+      if (!run.answer.trim()) {
+        if (audio && !run.question) {
+          // The model heard no speech in the recording.
+          speech.stop();
+          this.deps.overlay.message("I didn't catch that. Hold the key and try again.", 'info');
+          this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
+          return;
+        }
+        throw new Error('The AI returned an empty answer.');
+      }
       await withTimeout(speech.done, SPEAKING_TIMEOUT_MS, 'playing the answer', signal);
     } catch (e) {
       speech.stop();
@@ -543,7 +625,11 @@ export class Orchestrator {
       (s) => s.close(),
       () => undefined,
     );
-    if (!run.finished)
-      this.finish(run, this.machine.state === 'error' ? 'error' : 'cancelled', run.interaction.endReason ?? undefined);
+    if (!run.finished) {
+      // run.interaction is a snapshot; the live interaction has the end reason.
+      const live = this.machine.interaction;
+      const reason = live?.id === run.interaction.id ? live.endReason : null;
+      this.finish(run, this.machine.state === 'error' ? 'error' : 'cancelled', reason ?? undefined);
+    }
   }
 }

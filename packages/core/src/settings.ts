@@ -10,7 +10,8 @@ export type CredentialId = (typeof CREDENTIAL_IDS)[number];
 export const CHAT_PROVIDERS = ['anthropic', 'openrouter', 'openai'] as const;
 export type ChatProviderId = (typeof CHAT_PROVIDERS)[number];
 
-export const STT_PROVIDERS = ['assemblyai', 'openai'] as const;
+/** 'model': the answer model listens to the recorded audio itself (e.g. Gemini via OpenRouter). */
+export const STT_PROVIDERS = ['assemblyai', 'openai', 'model'] as const;
 export type SttProviderId = (typeof STT_PROVIDERS)[number];
 
 export const TTS_PROVIDERS = ['elevenlabs', 'openai', 'system'] as const;
@@ -104,7 +105,8 @@ export const CAPTURE_EDGE_RANGE = { min: 640, max: 2560 } as const;
 
 /** Which credential each provider choice needs. `system` TTS needs none. */
 export function requiredCredentials(s: Settings): CredentialId[] {
-  const ids = new Set<CredentialId>([s.chatProvider, s.sttProvider]);
+  const ids = new Set<CredentialId>([s.chatProvider]);
+  if (s.sttProvider !== 'model') ids.add(s.sttProvider);
   if (s.ttsProvider !== 'system') ids.add(s.ttsProvider);
   return [...ids];
 }

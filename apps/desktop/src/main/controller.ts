@@ -65,6 +65,7 @@ export class Controller {
         (level) => this.overlays.level(level),
       ),
       overlay: this.overlays,
+      listensDirectly: () => !DEMO && this.settings.get().sttProvider === 'model',
       recentTurns: () => (this.settings.get().useRecentContext ? contextTurns(this.history.list(), Date.now()) : []),
       record: (entry) => this.history.add(entry, this.settings.get().rememberHistory),
       onLatency: (summary) => {

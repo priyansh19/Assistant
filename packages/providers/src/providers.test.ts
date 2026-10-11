@@ -97,6 +97,27 @@ describe('OpenAICompatibleChat completion', () => {
     ).rejects.toThrow(/cut off/);
   });
 
+  it('sends the question audio as input_audio', async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl: FetchLike = async (_u, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(streamOf(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n']));
+    };
+    const chat = new OpenAICompatibleChat({ id: 'openrouter', apiKey: 'k', fetch: fetchImpl });
+    await collect(
+      chat.stream({
+        system: '',
+        history: [],
+        question: 'q',
+        images: [],
+        audio: { data: new Uint8Array([1, 2]), format: 'wav' },
+        maxTokens: 7,
+        signal: signal(),
+      }),
+    );
+    expect(JSON.stringify(body['messages'])).toContain('"input_audio":{"data":"AQI=","format":"wav"}');
+  });
+
   it('sends max_completion_tokens to OpenAI', async () => {
     let body: Record<string, unknown> = {};
     const fetchImpl: FetchLike = async (_u, init) => {

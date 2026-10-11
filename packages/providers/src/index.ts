@@ -59,6 +59,8 @@ export function createChat(s: Settings, getKey: KeyLookup, fetchImpl?: FetchLike
 }
 
 export function createStt(s: Settings, getKey: KeyLookup): SttProvider {
+  if (s.sttProvider === 'model')
+    throw new ConfigError('The answer model listens directly; no speech-to-text service is used.');
   if (s.sttProvider === 'assemblyai') return new AssemblyAIStt({ apiKey: need(getKey, 'assemblyai') });
   return new OpenAIStt({ apiKey: need(getKey, 'openai') });
 }

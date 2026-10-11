@@ -1,5 +1,5 @@
 import type { VisionChatProvider, VisionChatRequest } from '@clicky/core';
-import { ensureOk, prewarmOrigin, sseData, toBase64, type FetchLike } from './http.js';
+import { ensureOk, prewarmOrigin, ProviderError, sseData, toBase64, type FetchLike } from './http.js';
 
 export interface OpenAICompatibleOptions {
   /** 'openai' or 'openrouter' (used in errors and defaults). */
@@ -12,7 +12,8 @@ export interface OpenAICompatibleOptions {
 export const OPENAI_BASE = 'https://api.openai.com/v1';
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENAI_DEFAULT_MODEL = 'gpt-4.1-mini';
-export const OPENROUTER_DEFAULT_MODEL = 'anthropic/claude-opus-5-5';
+/** Fast multimodal default: sees the screenshot and can listen to the question audio directly. */
+export const OPENROUTER_DEFAULT_MODEL = 'google/gemini-3.8-flash';
 
 interface ChatChunk {
   choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
@@ -60,6 +61,9 @@ export class OpenAICompatibleChat implements VisionChatProvider {
           role: 'user',
           content: [
             { type: 'text', text: req.question },
+            ...(req.audio
+              ? [{ type: 'input_audio', input_audio: { data: toBase64(req.audio.data), format: req.audio.format } }]
+              : []),
             ...req.images.map((img) => ({
               type: 'image_url',
               image_url: { url: `data:${img.mediaType};base64,${toBase64(img.data)}`, detail: 'high' },
@@ -106,5 +110,18 @@ export async function checkOpenAICompatibleKey(
 ): Promise<void> {
   // OpenRouter's /models is public, so use the key-specific endpoint there.
   const url = id === 'openrouter' ? `${OPENROUTER_BASE}/key` : `${OPENAI_BASE}/models`;
-  await ensureOk(id, await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}` } }));
+  const res = await ensureOk(id, await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}` } }));
+  if (id === 'openrouter') {
+    // Management/provisioning keys pass /key but can't run models ("401 User not found" on chat).
+    const info = (await res.json().catch(() => ({}))) as {
+      data?: { is_management_key?: boolean; is_provisioning_key?: boolean };
+    };
+    if (info.data?.is_management_key || info.data?.is_provisioning_key) {
+      throw new ProviderError(
+        'openrouter',
+        403,
+        'management key: this is a management (provisioning) key, which cannot run models. Create a normal API key at openrouter.ai/keys.',
+      );
+    }
+  }
 }

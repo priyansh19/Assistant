@@ -59,6 +59,12 @@ export function explainKeyError(id: CredentialId, msg: string): KeyFailure {
   if (/\b429\b|rate.?limit/i.test(msg)) {
     return failure('transient', 'The key works but is being rate limited right now. Try again in a minute.');
   }
+  if (/management key/i.test(msg)) {
+    return failure(
+      'invalid',
+      "This is an OpenRouter management (provisioning) key, which can't run models. Create a normal key at openrouter.ai/keys → Create Key, and paste that.",
+    );
+  }
   if (/\b(401|403)\b|unauthori[sz]ed|authentication|invalid.?(api.?)?key|invalid x-api-key/i.test(msg)) {
     return failure('invalid', 'The key was rejected. Check that you copied all of it, or create a new one.');
   }
@@ -284,8 +290,26 @@ export class DashboardWindow {
   }
 
   /** On a voice question: if the Clicky window is in front, minimise it so the screenshot shows the user's work. */
-  minimizeIfFocused(): void {
-    if (this.win && !this.win.isDestroyed() && this.win.isFocused() && !this.win.isMinimized()) this.win.minimize();
+  /**
+   * On a voice question: if the Clicky window is in front, minimise it so the screenshot shows the
+   * user's work, and bring it back when the answer ends (so it never looks like the app vanished).
+   * Returns true if it hid the window.
+   */
+  minimizeIfFocused(): boolean {
+    const win = this.win;
+    if (!win || win.isDestroyed() || !win.isFocused() || win.isMinimized()) return false;
+    win.minimize();
+    const mine = this.controller.orchestrator.machine.interaction?.id;
+    const off = this.controller.onState((state) => {
+      const o = this.controller.orchestrator;
+      if (o.machine.interaction?.id !== mine) return off(); // a newer question took over
+      if (!isResting(state)) return;
+      off();
+      setTimeout(() => {
+        if (!win.isDestroyed() && win.isMinimized() && o.machine.interaction?.id === mine) win.restore();
+      }, 1500);
+    });
+    return true;
   }
 
   get window(): BrowserWindow | null {

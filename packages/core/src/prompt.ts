@@ -17,6 +17,8 @@ export interface PromptOptions {
   screens: readonly ScreenDescription[];
   /** Optional user-provided context, e.g. "I'm a beginner". Kept short. */
   userContext?: string;
+  /** The question arrives as audio for the model to listen to, not as text. */
+  audioQuestion?: boolean;
 }
 
 const BASE = `You are Clicky, a friendly assistant that lives next to the user's mouse cursor.
@@ -40,6 +42,12 @@ export function buildSystemPrompt(options: PromptOptions): string {
   for (const s of options.screens) {
     lines.push(
       `- screen${s.index}: ${s.imageWidth}x${s.imageHeight} px${s.hasCursor ? ' (the cursor is on this screen)' : ''}`,
+    );
+  }
+  if (options.audioQuestion) {
+    lines.push(
+      '',
+      'The question is in the attached audio recording. Start your reply with [HEARD:the question as you heard it], then the POINT tag, then the spoken answer. If the audio has no speech, reply with [HEARD:] and nothing else.',
     );
   }
   const ctx = options.userContext?.trim();

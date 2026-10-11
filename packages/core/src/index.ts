@@ -1,3 +1,4 @@
+export * from './audio.js';
 export * from './coordinates.js';
 export * from './interaction.js';
 export * from './latency.js';

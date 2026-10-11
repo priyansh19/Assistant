@@ -297,4 +297,32 @@ describe('Orchestrator', () => {
     await settle(t.o);
     expect(t.o.state).toBe('error');
   });
+
+  it('lets the answer model listen to the recording directly', async () => {
+    const chat = fakeChat(['[HEARD: where is export?]', '[POINT:none]', 'It is in File.']);
+    const t = setup({
+      listensDirectly: () => true,
+      stt: () => {
+        throw new Error('STT must not be used');
+      },
+      chat: () => chat,
+      mic: {
+        start: async (onFrame) => {
+          for (let i = 0; i < 40; i++) onFrame(new Int16Array(320)); // 0.8 s
+        },
+        stop: () => undefined,
+      },
+    });
+    t.o.keyDown();
+    await tick();
+    t.advance(1000);
+    t.o.keyUp();
+    await settle(t.o);
+    expect(t.o.state).toBe('idle');
+    expect(chat.requests[0]?.audio?.format).toBe('wav');
+    expect(chat.requests[0]?.system).toContain('[HEARD:');
+    expect(t.speech.said.join(' ')).toBe('It is in File.');
+    await tick();
+    expect(t.history[0]).toMatchObject({ question: 'where is export?', outcome: 'answered' });
+  });
 });
