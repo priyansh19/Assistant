@@ -12,6 +12,7 @@
  */
 
 import type { ChatTurn } from './providers.js';
+import { splitWake } from './wake.js';
 
 export interface AppInfo {
   /** Process name without .exe, lower case, e.g. 'chrome', 'outlook', 'windowsterminal'. */
@@ -50,12 +51,10 @@ export type DictationPlan =
   | { kind: 'write'; instruction: string }
   | { kind: 'revise'; instruction: string };
 
-/** The assistant's name, including how speech recognition often hears it ("click here"). */
-const WAKE = /^\s*(?:hey|hi|okay|ok)?[\s,]*(?:clickey|clicky|click\s+here|klicky)\b[\s,:.!-]*/i;
 const REVISE =
   /^\s*(?:(?:please|can you|could you)\s+)?(?:make\s+(?:it|this|that)\s+)?(?:a\s+(?:bit|little)\s+)?(shorter|longer|more\s+\w+|less\s+\w+|simpler|friendlier|warmer|punchier|clearer|rewrite(?:\s+(?:it|this|that))?|try\s+again|redo(?:\s+(?:it|this|that))?|another\s+version|different(?:ly)?)\b/i;
 const VERBS =
-  /^\s*(?:(?:please|can you|could you|now)\s+)?(?:write|reply|respond|draft|type|compose|rewrite|rephrase|translate|summari[sz]e|fix|improve|correct|proofread|shorten|expand|answer|explain|continue|finish|turn|make|create|generate|give|suggest|polish|format|convert|tell)\b/i;
+  /^\s*(?:(?:please|can you|could you|now)\s+)?(?:write|right[\s,]+(?:a|an|me|him|her|them|back|to)|rite|reply|respond|draft|type|compose|rewrite|rephrase|translate|summari[sz]e|fix|improve|correct|proofread|shorten|expand|answer|explain|continue|finish|turn|make|create|generate|give|suggest|polish|format|convert|tell)\b/i;
 
 /** Decide what the user meant by what they said, before anything is typed. */
 export function planDictation(
@@ -63,11 +62,12 @@ export function planDictation(
   opts: { hasSelection: boolean; last: LastInsert | null; now: number },
 ): DictationPlan {
   const text = transcript.trim();
-  const woke = WAKE.test(text);
-  const body = text.replace(WAKE, '').trim();
+  const { woke, rest: body } = splitWake(text);
   if (opts.last && opts.now - opts.last.at <= REVISE_WINDOW_MS && REVISE.test(body) && body.split(/\s+/).length <= 12)
     return { kind: 'revise', instruction: body };
-  if (opts.hasSelection || VERBS.test(body)) return { kind: 'write', instruction: body || text };
+  if (opts.hasSelection || VERBS.test(body))
+    // Speech recognition often hears "write" as "right"; say what was meant.
+    return { kind: 'write', instruction: (body || text).replace(/^\s*(?:right|rite)\b[\s,]*/i, 'Write ') };
   if (woke)
     return body.replace(/[\s,.!?]+/g, '').length < 3 ? { kind: 'greet' } : { kind: 'assistant', question: body };
   return { kind: 'plain', text };
@@ -141,7 +141,7 @@ export function writeQuestion(o: WritePromptOptions): string {
   const sel = o.context.selection;
   if (sel)
     return `Selected text (your reply replaces it):\n"""\n${sel.slice(0, 8000)}\n"""\n\nInstruction: ${o.plan.instruction}`;
-  return `Instruction: ${o.plan.instruction}`;
+  return `Instruction (spoken, so it may contain misheard words such as "no" for "note"; write what they meant): ${o.plan.instruction}`;
 }
 
 /** No conversation history for writing: each insert stands alone apart from a rewrite. */

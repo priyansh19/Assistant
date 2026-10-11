@@ -1,0 +1,6 @@
+{
+  "name": "Both screens: capture covers every display",
+  "key": "talk",
+  "say": "What is on my other screen?",
+  "expect": { "heard": ["screen"], "answered": true, "allScreens": true }
+}

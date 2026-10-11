@@ -1,0 +1,6 @@
+{
+  "name": "Correction is remembered",
+  "key": "talk",
+  "say": "Clicky, remember that Comet is on my taskbar.",
+  "expect": { "said": ["remember"], "remembered": ["comet"], "noActions": true }
+}

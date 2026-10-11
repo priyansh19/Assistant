@@ -4,6 +4,35 @@ import { app } from 'electron';
 import type { InputDriver } from '../platform/types';
 import { log } from './log';
 
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0] ?? 0;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const up = prev[j] ?? 0;
+      prev[j] = Math.min(up + 1, (prev[j - 1] ?? 0) + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = up;
+    }
+  }
+  return prev[b.length] ?? 99;
+}
+
+function closest(name: string, apps: { name: string; id: string }[]): { name: string; id: string } | null {
+  const want = name.replace(/[^a-z0-9]/g, '');
+  if (want.length < 5) return null;
+  let best: { name: string; id: string } | null = null;
+  let bestD = 3;
+  for (const a of apps) {
+    const d = editDistance(want, a.name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (d < bestD) {
+      bestD = d;
+      best = a;
+    }
+  }
+  return best;
+}
+
 /** Rescan this often (apps get installed, projects appear). */
 const REFRESH_MS = 6 * 60 * 60_000;
 
@@ -54,6 +83,8 @@ export class Inventory {
             .includes(w),
         ),
       ) ??
+      // Misheard names ("note bed" → Notepad): the closest compact name within two letters.
+      closest(n, this.apps) ??
       null
     );
   }

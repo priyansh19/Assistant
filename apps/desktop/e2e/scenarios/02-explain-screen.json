@@ -1,0 +1,6 @@
+{
+  "name": "Explain: what am I looking at",
+  "key": "talk",
+  "say": "What am I looking at right now?",
+  "expect": { "heard": ["looking"], "answered": true }
+}

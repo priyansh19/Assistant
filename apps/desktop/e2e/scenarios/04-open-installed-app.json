@@ -1,0 +1,12 @@
+{
+  "name": "Open an installed app (Notepad)",
+  "key": "talk",
+  "say": "Clicky, open Notepad.",
+  "live": ["open"],
+  "expect": {
+    "heard": ["note"],
+    "actions": [{ "kind": "open", "app": "notepad" }],
+    "noStartMenu": true,
+    "actionsOrSaid": " open"
+  }
+}

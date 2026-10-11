@@ -1,0 +1,7 @@
+{
+  "name": "Misheard wake word: click here",
+  "key": "talk",
+  "say": "Click here, open Notepad.",
+  "live": ["open"],
+  "expect": { "actions": [{ "kind": "open", "app": "notepad" }], "actionsOrSaid": " open" }
+}

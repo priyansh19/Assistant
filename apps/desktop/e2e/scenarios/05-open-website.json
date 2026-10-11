@@ -1,0 +1,12 @@
+{
+  "name": "Open a website in the default browser",
+  "key": "talk",
+  "say": "Clicky, open the website example dot com.",
+  "live": ["open"],
+  "expect": {
+    "heard": ["example"],
+    "actions": [{ "kind": "open", "url": "example.com" }],
+    "noStartMenu": true,
+    "actionsOrSaid": " open"
+  }
+}

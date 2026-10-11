@@ -1,0 +1,6 @@
+{
+  "name": "Bare greeting gets a short reply",
+  "key": "talk",
+  "say": "Hey Clicky.",
+  "expect": { "said": ["yes"], "noActions": true }
+}

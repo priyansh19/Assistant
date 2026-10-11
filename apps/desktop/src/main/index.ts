@@ -45,7 +45,8 @@ if (!app.requestSingleInstanceLock()) {
     const dashboard = new DashboardWindow(settings, credentials, history, controller, worker);
     const ctl = controller;
     // Demo mode only: let the smoke-test harness drive the loop without a real keyboard.
-    if (DEMO) (globalThis as { __clicky?: unknown }).__clicky = { controller: ctl, dashboard, settings, history };
+    if (DEMO || process.env['CLICKY_TEST_HOOKS'] === '1')
+      (globalThis as { __clicky?: unknown }).__clicky = { controller: ctl, dashboard, settings, history };
 
     tray = new AppTray({
       openDashboard: (page) => dashboard.open(page),

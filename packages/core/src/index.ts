@@ -18,3 +18,4 @@ export * from './write.js';
 export * from './profile.js';
 export * from './style.js';
 export * from './memory.js';
+export * from './wake.js';
