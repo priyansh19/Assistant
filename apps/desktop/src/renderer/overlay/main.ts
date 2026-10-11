@@ -2,7 +2,7 @@
 // spins while it thinks, and flies along an arc to whatever it's pointing at, with a label bubble.
 import { CURSOR_COLOR_HEX, type InteractionState } from '@clicky/core';
 import type { OverlayApi } from '../../preload/overlay';
-import type { OverlayConfig, OverlayMessage, OverlayPoint } from '../../shared/overlay-protocol';
+import type { OverlayConfig, OverlayDrawing, OverlayMessage, OverlayPoint } from '../../shared/overlay-protocol';
 
 declare global {
   interface Window {
@@ -52,6 +52,12 @@ let lastFrame = performance.now();
 let idleSince = 0; // when the interaction finished, for dismissing the label
 let message: { text: string; kind: 'error' | 'info'; until: number } | null = null;
 let pendingPoint: { p: OverlayPoint; label: string } | null = null;
+/** Arrows, boxes and circles from the answer, with when each arrived. */
+let drawings: { d: OverlayDrawing; at: number }[] = [];
+/** How long a drawing stays up, and how long it takes to draw itself / fade out. */
+const DRAWING_MS = 14000;
+const DRAW_IN_MS = 450;
+const FADE_MS = 600;
 
 // ------------------------------------------------------------- geometry helpers
 
@@ -229,6 +235,71 @@ function wrap(text: string, maxW: number): string[] {
   return lines.slice(0, 5);
 }
 
+/** Draw every live drawing, revealing each stroke over DRAW_IN_MS and fading out at the end. */
+function drawShapes(now: number): void {
+  drawings = drawings.filter((x) => now - x.at < DRAWING_MS);
+  for (const { d, at } of drawings) {
+    const age = now - at;
+    const t = easeInOut(Math.min(1, age / DRAW_IN_MS));
+    const alpha = Math.min(1, (DRAWING_MS - age) / FADE_MS);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color();
+    ctx.fillStyle = color();
+    ctx.shadowColor = color();
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    let anchor: Pt | null = null;
+    const [a, b] = d.points;
+    if (d.kind === 'box' && a && b) {
+      const w = b.x - a.x;
+      const h = b.y - a.y;
+      const per = 2 * (Math.abs(w) + Math.abs(h));
+      ctx.setLineDash([per * t, per]);
+      roundRect(a.x - 4, a.y - 4, w + 8, h + 8, 8);
+      ctx.stroke();
+      anchor = { x: a.x, y: b.y + 4 };
+    } else if (d.kind === 'circle' && a) {
+      const r = (d.r ?? 20) + 4;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
+      ctx.stroke();
+      anchor = { x: a.x + r * 0.7, y: a.y + r * 0.7 };
+    } else if (d.kind === 'arrow' && a && b) {
+      const end = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      // A gentle curve reads as a gesture rather than a ruler line.
+      const mx = (a.x + end.x) / 2;
+      const my = (a.y + end.y) / 2;
+      const len = Math.hypot(end.x - a.x, end.y - a.y) || 1;
+      const c = { x: mx - ((end.y - a.y) / len) * len * 0.12, y: my + ((end.x - a.x) / len) * len * 0.12 };
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.quadraticCurveTo(c.x, c.y, end.x, end.y);
+      ctx.stroke();
+      if (t > 0.6) {
+        const ang = Math.atan2(end.y - c.y, end.x - c.x);
+        const head = 12;
+        ctx.beginPath();
+        ctx.moveTo(end.x, end.y);
+        ctx.lineTo(end.x - head * Math.cos(ang - 0.45), end.y - head * Math.sin(ang - 0.45));
+        ctx.lineTo(end.x - head * Math.cos(ang + 0.45), end.y - head * Math.sin(ang + 0.45));
+        ctx.closePath();
+        ctx.fill();
+      }
+      anchor = { x: a.x, y: a.y };
+    }
+    ctx.restore();
+    if (anchor && d.label && config.showLabels && t >= 1) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      drawBubble(d.label, anchor, 'label');
+      ctx.restore();
+    }
+  }
+}
+
 function drawTargetRing(at: Pt, since: number, now: number): void {
   const t = ((now - since) % 1400) / 1400;
   ctx.save();
@@ -313,6 +384,7 @@ function frame(now: number): void {
   }
   if (state === 'speaking' && mode.kind === 'follow') scale *= 1 + 0.05 * Math.sin(now / 180);
 
+  drawShapes(now);
   if (visible && pos) {
     drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1);
     if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
@@ -326,7 +398,7 @@ function frame(now: number): void {
     mode.kind === 'follow' &&
     (!visible || (pos !== null && target !== null && Math.hypot(target.x - pos.x, target.y - pos.y) < 0.3));
   // A message only keeps the loop alive while it's visible here (the cursor may be on another display).
-  if (!settled || !resting || (message !== null && pos !== null)) requestAnimationFrame(frame);
+  if (!settled || !resting || drawings.length > 0 || (message !== null && pos !== null)) requestAnimationFrame(frame);
   else running = false;
 }
 
@@ -372,12 +444,18 @@ window.clicky.onState((s) => {
   if (s === 'listening') {
     levels.fill(0);
     message = null;
+    drawings = [];
   }
   kick();
 });
 
 window.clicky.onPoint((p) => {
   startFlight({ x: p.x, y: p.y }, 'point', p.label);
+  kick();
+});
+
+window.clicky.onDraw((d) => {
+  drawings.push({ d, at: performance.now() });
   kick();
 });
 

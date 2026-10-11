@@ -13,7 +13,7 @@ const platform = getPlatform();
 const engine = new Engine({
   post: (msg) => parent.postMessage(msg),
   media,
-  createHoldKeyHook: (key) => platform.createHoldKeyHook(key),
+  createHoldKeyHook: (key, dictationKey) => platform.createHoldKeyHook(key, dictationKey),
 });
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {

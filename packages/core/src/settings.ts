@@ -37,6 +37,13 @@ export const HOLD_KEY_LABELS: Record<HoldKey, string> = {
   F10: 'F10',
 };
 
+/** The dictation key: hold it, talk, release, and the words are typed into the focused app. */
+export type DictationKey = HoldKey | 'off';
+
+/** When agent mode asks before acting: only for risky steps (send, buy, delete…) or every step. */
+export const AGENT_CONFIRM_MODES = ['risky', 'always'] as const;
+export type AgentConfirmMode = (typeof AGENT_CONFIRM_MODES)[number];
+
 export const CURSOR_COLORS = ['blue', 'purple', 'green', 'orange', 'pink'] as const;
 export type CursorColor = (typeof CURSOR_COLORS)[number];
 
@@ -66,6 +73,11 @@ export interface Settings {
   /** Local voice speed, 0.7–1.5. */
   localVoiceSpeed: number;
   holdKey: HoldKey;
+  /** Second hold key for dictation; 'off' disables it. Never the same as holdKey. */
+  dictationKey: DictationKey;
+  /** Questions that start with "agent" are carried out with the mouse and keyboard. */
+  agentEnabled: boolean;
+  agentConfirm: AgentConfirmMode;
   /** Long edge of the screenshot sent to the model, in pixels. */
   captureMaxEdge: number;
   captureAllDisplays: boolean;
@@ -115,6 +127,9 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   localVoice: 'piper:en_US-lessac',
   localVoiceSpeed: 1.1,
   holdKey: 'RightCtrl',
+  dictationKey: 'RightAlt',
+  agentEnabled: true,
+  agentConfirm: 'risky',
   captureMaxEdge: 1280,
   captureAllDisplays: false,
   launchAtLogin: false,
@@ -158,6 +173,8 @@ function shortString(value: unknown, fallback: string, max = 200): string {
 
 export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTINGS): Settings {
   const o = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+  const holdKey = oneOf(HOLD_KEYS, o['holdKey'], base.holdKey);
+  const dictation = oneOf<DictationKey>([...HOLD_KEYS, 'off'], o['dictationKey'], base.dictationKey);
   const edge =
     typeof o['captureMaxEdge'] === 'number' && Number.isFinite(o['captureMaxEdge'])
       ? o['captureMaxEdge']
@@ -176,7 +193,10 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
       typeof o['localVoiceSpeed'] === 'number' && Number.isFinite(o['localVoiceSpeed'])
         ? Math.min(1.5, Math.max(0.7, o['localVoiceSpeed']))
         : base.localVoiceSpeed,
-    holdKey: oneOf(HOLD_KEYS, o['holdKey'], base.holdKey),
+    holdKey,
+    dictationKey: dictation === holdKey ? 'off' : dictation,
+    agentEnabled: bool(o['agentEnabled'], base.agentEnabled),
+    agentConfirm: oneOf(AGENT_CONFIRM_MODES, o['agentConfirm'], base.agentConfirm),
     captureMaxEdge: Math.round(Math.min(Math.max(edge, CAPTURE_EDGE_RANGE.min), CAPTURE_EDGE_RANGE.max)),
     captureAllDisplays:
       typeof o['captureAllDisplays'] === 'boolean' ? o['captureAllDisplays'] : base.captureAllDisplays,

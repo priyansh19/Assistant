@@ -3,15 +3,26 @@ import type { BrowserWindow, Rectangle } from 'electron';
 
 /** A global key that reports both press and release (hold-to-talk). */
 export interface HoldKeyHook {
-  /** `onCancel` fires on Esc, so an answer can be stopped from anywhere. */
-  start(handlers: { onDown: () => void; onUp: () => void; onCancel?: () => void }): void;
+  /**
+   * `onCancel` fires on Esc, so an answer can be stopped from anywhere. The dictation handlers fire
+   * for the second key passed to createHoldKeyHook, if any.
+   */
+  start(handlers: {
+    onDown: () => void;
+    onUp: () => void;
+    onCancel?: () => void;
+    onDictateDown?: () => void;
+    onDictateUp?: () => void;
+  }): void;
   stop(): void;
 }
 
 export interface Platform {
   readonly name: 'win32' | 'darwin' | 'linux';
   /** Hook for the hold-to-talk key chosen in settings. */
-  createHoldKeyHook(key: HoldKey): HoldKeyHook;
+  createHoldKeyHook(key: HoldKey, dictationKey?: HoldKey | null): HoldKeyHook;
+  /** Mouse and keyboard injection; null where the OS doesn't allow it. */
+  createInputDriver(): InputDriver | null;
   /** Make a freshly created overlay window cover `bounds` exactly, working around OS quirks. */
   fitOverlayToDisplay(win: BrowserWindow, bounds: Rectangle): void;
   /**
@@ -19,4 +30,17 @@ export interface Platform {
    * can be kept physically constant. Empty when the OS can't tell.
    */
   monitorWidthsCm(): Promise<number[]>;
+}
+
+/** Mouse and keyboard injection (agent mode, dictation). Coordinates are physical screen pixels. */
+export interface InputDriver {
+  /** Start the helper ahead of first use. */
+  warm(): void;
+  click(x: number, y: number, button: 'left' | 'right', count: 1 | 2): Promise<void>;
+  /** Positive scrolls down. */
+  scroll(x: number, y: number, amount: number): Promise<void>;
+  type(text: string): Promise<void>;
+  /** Press together and release in reverse, e.g. ['ctrl', 's']. 'mask' is a no-op key. */
+  keys(keys: string[]): Promise<void>;
+  dispose(): void;
 }

@@ -1,4 +1,5 @@
 import {
+  HOLD_KEY_LABELS,
   cloudSpeech,
   contextTurns,
   hedgedSpeech,
@@ -6,6 +7,7 @@ import {
   Orchestrator,
   type CredentialId,
   type HoldKey,
+  type InputAction,
   type SpeechFactory,
   type SttProvider,
   type TtsProvider,
@@ -25,12 +27,18 @@ export interface EngineOptions {
   /** Engine → main. */
   post(msg: EngineToMain): void;
   media: MediaChannel;
-  createHoldKeyHook(key: HoldKey): HoldKeyHook;
+  createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null): HoldKeyHook;
   now?(): number;
 }
 
 /** How long main may take to answer a capture plan request before the question fails. */
 const PLAN_TIMEOUT_MS = 3000;
+/** A mouse or keyboard request main hasn't answered in this long has failed. */
+const INPUT_TIMEOUT_MS = 25_000;
+/** How long agent mode waits for the user to allow a risky step. */
+const CONFIRM_TIMEOUT_MS = 30_000;
+/** Esc presses this soon after Clicky itself typed are its own keys, not the user cancelling. */
+const OWN_KEYS_MS = 300;
 
 /**
  * The data plane (architecture §4): hold-to-talk hook, orchestrator and providers. It runs in
@@ -53,6 +61,13 @@ export class Engine {
   private keyTest = false;
   private nextPlanId = 1;
   private readonly plans = new Map<number, { resolve: (p: CapturePlan) => void; reject: (e: Error) => void }>();
+  private readonly inputs = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
+  /** Until then, an Esc may be one Clicky typed itself. */
+  private ownKeysUntil = 0;
+  /** Agent mode is waiting for the user to allow a step with the hold key. */
+  private pendingConfirm: ((ok: boolean) => void) | null = null;
+  /** The hold-key press that answered a confirmation; its release must not end anything. */
+  private swallowUp = false;
 
   constructor(private readonly opts: EngineOptions) {
     const settings = () => this.cfg().settings;
@@ -65,6 +80,7 @@ export class Engine {
       overlay: {
         state: (state) => this.post({ type: 'overlay', overlay: { op: 'state', state } }),
         point: (target, label) => this.post({ type: 'overlay', overlay: { op: 'point', target, label } }),
+        draw: (shape) => this.post({ type: 'overlay', overlay: { op: 'draw', shape } }),
         message: (text, kind) => this.post({ type: 'overlay', overlay: { op: 'message', text, kind } }),
         caption: (text) => this.post({ type: 'overlay', overlay: { op: 'caption', text } }),
       },
@@ -78,6 +94,12 @@ export class Engine {
         if (isResting(state)) this.prewarm();
       },
       log: (message) => this.post({ type: 'log', level: 'info', message }),
+      input: { run: (action, signal) => this.input(action, signal) },
+      dictationStt: () =>
+        // When the answer model listens itself there is no speech-to-text service: dictate on this PC.
+        settings().sttProvider === 'model' ? this.localStt() : (this.providers.stt ??= this.createStt()),
+      agent: () => ({ enabled: settings().agentEnabled, confirm: settings().agentConfirm }),
+      confirm: (text, signal) => this.confirm(text, signal),
       speed: () => {
         const s = settings();
         return {
@@ -181,7 +203,13 @@ export class Engine {
           !sameKeys(prev, msg.config)
         )
           this.providers = {};
-        if (prev && prev.settings.holdKey !== msg.config.settings.holdKey && this.hook) this.startHoldKey();
+        if (
+          prev &&
+          this.hook &&
+          (prev.settings.holdKey !== msg.config.settings.holdKey ||
+            prev.settings.dictationKey !== msg.config.settings.dictationKey)
+        )
+          this.startHoldKey();
         return;
       }
       case 'holdKey.start':
@@ -208,6 +236,14 @@ export class Engine {
         return;
       case 'prewarm':
         return this.prewarm();
+      case 'input.reply': {
+        const p = this.inputs.get(msg.id);
+        if (!p) return;
+        this.inputs.delete(msg.id);
+        if (msg.error) p.reject(new Error(msg.error));
+        else p.resolve();
+        return;
+      }
       case 'capturePlan.reply': {
         const p = this.plans.get(msg.id);
         if (!p) return;
@@ -230,14 +266,25 @@ export class Engine {
     this.stopHoldKey();
     if (!this.config) return;
     try {
-      const hook = this.opts.createHoldKeyHook(this.config.settings.holdKey);
+      const s = this.config.settings;
+      const hook = this.opts.createHoldKeyHook(s.holdKey, s.dictationKey === 'off' ? null : s.dictationKey);
       hook.start({
         onDown: () => this.keyDown(),
         onUp: () => {
           if (this.keyTest) return this.post({ type: 'keyTest', down: false });
+          if (this.swallowUp) {
+            this.swallowUp = false;
+            return;
+          }
           this.orchestrator.keyUp();
         },
-        onCancel: () => this.orchestrator.cancel('escape'),
+        onCancel: () => {
+          if (Date.now() < this.ownKeysUntil) return;
+          this.pendingConfirm?.(false);
+          this.orchestrator.cancel('escape');
+        },
+        onDictateDown: () => this.dictateDown(),
+        onDictateUp: () => this.orchestrator.keyUp(),
       });
       this.hook = hook;
     } catch (e) {
@@ -247,6 +294,12 @@ export class Engine {
 
   private keyDown(): void {
     if (this.keyTest) return this.post({ type: 'keyTest', down: true });
+    if (this.pendingConfirm) {
+      // Agent mode asked "press the key to allow": this press is the answer, not a new question.
+      this.swallowUp = true;
+      this.pendingConfirm(true);
+      return;
+    }
     const cfg = this.config;
     if (!cfg || cfg.settings.paused) return;
     if (cfg.missing.length) {
@@ -261,6 +314,68 @@ export class Engine {
     // The mic and capture start first; moving windows can wait a millisecond.
     this.orchestrator.keyDown();
     this.post({ type: 'listening' });
+  }
+
+  private dictateDown(): void {
+    if (this.keyTest || this.pendingConfirm) return;
+    const cfg = this.config;
+    if (!cfg || cfg.settings.paused) return;
+    // Releasing Alt on its own opens the menu bar in many apps; a no-op key while it's held stops that.
+    if (cfg.settings.dictationKey === 'RightAlt')
+      void this.input({ kind: 'keys', keys: ['mask'] }, new AbortController().signal).catch(() => undefined);
+    this.orchestrator.dictateDown();
+  }
+
+  /** Ask main to press keys or use the mouse, and wait until it has. */
+  private input(action: InputAction, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(new Error('cancelled'));
+    const id = this.nextPlanId++;
+    if (action.kind === 'keys' || action.kind === 'type') this.ownKeysUntil = Date.now() + 60_000;
+    return new Promise<void>((resolve, reject) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        this.inputs.delete(id);
+        this.ownKeysUntil = Math.min(this.ownKeysUntil, Date.now() + OWN_KEYS_MS);
+      };
+      const timer = setTimeout(() => {
+        done();
+        reject(new Error('Windows did not accept the mouse or keyboard input in time.'));
+      }, INPUT_TIMEOUT_MS);
+      this.inputs.set(id, {
+        resolve: () => {
+          done();
+          resolve();
+        },
+        reject: (e) => {
+          done();
+          reject(e);
+        },
+      });
+      this.post({ type: 'input', id, action });
+    });
+  }
+
+  /** Agent mode: show what's about to happen and wait for a hold-key press (allow) or Esc (stop). */
+  private confirm(text: string, signal: AbortSignal): Promise<boolean> {
+    const key = HOLD_KEY_LABELS[this.cfg().settings.holdKey];
+    const prompt = `${text}? Press ${key} to allow, or Esc to stop.`;
+    const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
+    return new Promise<boolean>((resolve) => {
+      show();
+      const again = setInterval(show, 8000); // overlay messages fade; keep the question up
+      const timer = setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS);
+      const onAbort = (): void => finish(false);
+      const finish = (ok: boolean): void => {
+        clearInterval(again);
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        if (this.pendingConfirm === finish) this.pendingConfirm = null;
+        resolve(ok);
+      };
+      if (signal.aborted) return finish(false);
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pendingConfirm = finish;
+    });
   }
 
   private stopHoldKey(): void {

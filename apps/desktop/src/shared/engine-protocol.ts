@@ -7,9 +7,11 @@ import type {
   CredentialId,
   DisplayGeometry,
   HistoryEntry,
+  InputAction,
   InteractionState,
   LatencySummary,
   MappedPoint,
+  MappedShape,
   Settings,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
@@ -47,6 +49,7 @@ export type MainToEngine =
   | { type: 'speakSample'; id: number; text: string }
   | { type: 'prewarm' }
   | { type: 'capturePlan.reply'; id: number; plan?: CapturePlan; error?: string }
+  | { type: 'input.reply'; id: number; error?: string }
   /** The media renderer died; a new port follows once it's back. */
   | { type: 'media.crashed' }
   | { type: 'shutdown' };
@@ -54,6 +57,7 @@ export type MainToEngine =
 export type OverlayOp =
   | { op: 'state'; state: InteractionState }
   | { op: 'point'; target: MappedPoint; label: string }
+  | { op: 'draw'; shape: MappedShape }
   | { op: 'message'; text: string; kind: 'error' | 'info' }
   | { op: 'caption'; text: string };
 
@@ -72,4 +76,6 @@ export type EngineToMain =
   | { type: 'askResult'; id: number; result: AskResult | null }
   | { type: 'speakSampleResult'; id: number; error?: string }
   | { type: 'capturePlan'; id: number; allDisplays: boolean }
+  /** Agent mode or dictation: press keys or use the mouse (main owns screen coordinates). */
+  | { type: 'input'; id: number; action: InputAction }
   | { type: 'holdKey.failed'; message: string };

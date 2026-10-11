@@ -35,7 +35,15 @@ Pointing:
   coordinates of the element's centre in the screenshot image (origin top-left).
 - If the element is on another screen than the first image, add :screenN, e.g. [POINT:412,88:Save:screen2].
 - If there is nothing useful to point at, use [POINT:none].
-- Never mention the tag or coordinates in the spoken text.`;
+- Never mention the tag or coordinates in the spoken text.
+
+Drawing (optional):
+- To show the way, you may draw up to three marks right after the POINT tag, using the same pixel
+  coordinates: [BOX:x,y,width,height:label] around an area (x,y is its top-left corner),
+  [ARROW:x1,y1,x2,y2:label] from one place to another, [CIRCLE:x,y,radius:label] around a spot.
+- Add :screenN for another screen, like POINT. Labels are optional and at most three words.
+- Use them only when they make the answer clearer, such as a sequence of steps or an area to look
+  at. Most answers need none. Never mention them in the spoken text.`;
 
 export function buildSystemPrompt(options: PromptOptions): string {
   const lines = [BASE, '', 'Screenshots in this message:'];

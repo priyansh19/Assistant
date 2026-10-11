@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { InteractionState } from '@clicky/core';
 import type { IpcChannel } from '../shared/ipc';
-import type { OverlayConfig, OverlayCursor, OverlayMessage, OverlayPoint } from '../shared/overlay-protocol';
+import type {
+  OverlayConfig,
+  OverlayCursor,
+  OverlayDrawing,
+  OverlayMessage,
+  OverlayPoint,
+} from '../shared/overlay-protocol';
 
 // Channel names are inlined (type-checked against IpcChannel): sandboxed preloads can't share
 // runtime modules, see electron.vite.config.ts.
@@ -13,6 +19,7 @@ const api = {
   onCursor: (fn: (c: OverlayCursor) => void) => on('overlay:cursor', fn),
   onState: (fn: (s: InteractionState) => void) => on('overlay:state', fn),
   onPoint: (fn: (p: OverlayPoint) => void) => on('overlay:point', fn),
+  onDraw: (fn: (d: OverlayDrawing) => void) => on('overlay:draw', fn),
   onMessage: (fn: (m: OverlayMessage) => void) => on('overlay:message', fn),
   onLevel: (fn: (level: number) => void) => on('overlay:level', fn),
   onConfig: (fn: (c: OverlayConfig) => void) => on('overlay:config', fn),

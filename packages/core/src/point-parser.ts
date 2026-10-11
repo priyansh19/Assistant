@@ -4,11 +4,14 @@
  *   [POINT:x,y:label]            point on the screen the image came from
  *   [POINT:x,y:label:screenN]    point on screen N (1-based, in the order images were sent)
  *   [POINT:none]                 nothing to point at
+ *   [BOX:…] [ARROW:…] [CIRCLE:…] drawings, see shapes.ts
  *
  * Text arrives as LLM tokens split at arbitrary positions. The parser releases text that is
  * safe to speak and holds back anything that could still turn into a tag, so tag text never
  * reaches TTS. Tags may appear anywhere; the prompt asks for one at the start.
  */
+
+import { parseDrawTag, type DrawShape } from './shapes.js';
 
 export interface PointTarget {
   kind: 'point';
@@ -29,11 +32,13 @@ export type PointTag = PointTarget | NoPoint;
 export type ParserEvent =
   | { type: 'text'; text: string }
   | { type: 'point'; tag: PointTag }
+  | { type: 'draw'; shape: DrawShape }
   /** Something that started like a tag but did not parse. It is dropped, never spoken. */
   | { type: 'invalid-tag'; raw: string };
 
-const OPEN = '[POINT:';
-const OPEN_RE = /\[POINT:/i;
+/** Tag openings the parser holds back from speech. */
+const OPENERS = ['[POINT:', '[BOX:', '[ARROW:', '[CIRCLE:'];
+const OPEN_RE = /\[(?:POINT|BOX|ARROW|CIRCLE):/i;
 /** A tag longer than this is not a tag; release it as text so a stray "[POINT:" can't swallow the answer. */
 export const MAX_TAG_LENGTH = 160;
 
@@ -53,13 +58,24 @@ export function parsePointTag(raw: string): PointTag | null {
   return { kind: 'point', x, y, label: (m[4] ?? '').trim(), screen };
 }
 
-/** Length of the longest suffix of `s` that is a prefix of "[POINT:" (case-insensitive). */
+/** Length of the longest suffix of `s` that is a prefix of a tag opening (case-insensitive). */
 function partialOpenSuffix(s: string): number {
-  const max = Math.min(s.length, OPEN.length - 1);
-  for (let n = max; n > 0; n--) {
-    if (s.slice(s.length - n).toUpperCase() === OPEN.slice(0, n)) return n;
+  let best = 0;
+  for (const open of OPENERS) {
+    for (let n = Math.min(s.length, open.length - 1); n > best; n--) {
+      if (s.slice(s.length - n).toUpperCase() === open.slice(0, n)) {
+        best = n;
+        break;
+      }
+    }
   }
-  return 0;
+  return best;
+}
+
+/** Length of the tag opening at the start of `s` (the buffer always starts with one here). */
+function openLength(s: string): number {
+  const head = s.slice(0, 8).toUpperCase();
+  return (OPENERS.find((o) => head.startsWith(o)) ?? OPENERS[0] ?? '').length;
 }
 
 export class PointStreamParser {
@@ -103,23 +119,28 @@ export class PointStreamParser {
       if (close === -1) {
         if (this.buffer.length > MAX_TAG_LENGTH || final) {
           // Never closed: this was prose, not a tag. Release the opening and keep scanning after it.
-          emitText(this.buffer.slice(0, OPEN.length));
-          this.buffer = this.buffer.slice(OPEN.length);
+          emitText(this.buffer.slice(0, openLength(this.buffer)));
+          this.buffer = this.buffer.slice(openLength(this.buffer));
           continue;
         }
         return events; // wait for more input
       }
 
       if (close + 1 > MAX_TAG_LENGTH) {
-        // Too long to be a tag: prose with a "[POINT:" in it. Release the opening and keep scanning.
-        emitText(this.buffer.slice(0, OPEN.length));
-        this.buffer = this.buffer.slice(OPEN.length);
+        // Too long to be a tag: prose with a tag opening in it. Release the opening and keep scanning.
+        emitText(this.buffer.slice(0, openLength(this.buffer)));
+        this.buffer = this.buffer.slice(openLength(this.buffer));
         continue;
       }
       const raw = this.buffer.slice(0, close + 1);
       this.buffer = this.buffer.slice(close + 1);
-      const tag = parsePointTag(raw);
-      events.push(tag ? { type: 'point', tag } : { type: 'invalid-tag', raw });
+      if (/^\[POINT:/i.test(raw)) {
+        const tag = parsePointTag(raw);
+        events.push(tag ? { type: 'point', tag } : { type: 'invalid-tag', raw });
+      } else {
+        const shape = parseDrawTag(raw);
+        events.push(shape ? { type: 'draw', shape } : { type: 'invalid-tag', raw });
+      }
     }
   }
 }

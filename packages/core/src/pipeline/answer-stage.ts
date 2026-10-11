@@ -7,12 +7,14 @@
 import { HeardTagFilter } from '../audio.js';
 import { PointStreamParser, type ParserEvent, type PointTarget } from '../point-parser.js';
 import type { VisionChatProvider, VisionChatRequest } from '../providers.js';
+import type { DrawShape } from '../shapes.js';
 import { withTimeout } from './budget.js';
 
 export type AnswerEvent =
   | { type: 'text'; text: string }
   /** `tag` is null for [POINT:none]. */
   | { type: 'point'; tag: PointTarget | null }
+  | { type: 'draw'; shape: DrawShape }
   /** Something that looked like a tag but didn't parse; dropped, never spoken. */
   | { type: 'invalid-tag'; raw: string }
   /** What the model heard, when it listened to the recording itself. */
@@ -34,6 +36,7 @@ function* fromParser(events: ParserEvent[]): Generator<AnswerEvent> {
   for (const ev of events) {
     if (ev.type === 'text') yield ev;
     else if (ev.type === 'point') yield { type: 'point', tag: ev.tag.kind === 'point' ? ev.tag : null };
+    else if (ev.type === 'draw') yield ev;
     else yield { type: 'invalid-tag', raw: ev.raw };
   }
 }

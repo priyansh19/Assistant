@@ -12,17 +12,19 @@
  * nothing late from an old interaction can touch the new one.
  */
 
+import { agentGoal, runAgent, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
-import { classifyFailure, userMessage, type Stage } from './errors.js';
+import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
 import { LatencyRecorder, type LatencySummary } from './latency.js';
 import { answerSystemPrompt, runAnswer, type AnswerRunInput, type AnswerRunResult } from './pipeline/answer-runner.js';
-import { delay } from './pipeline/budget.js';
+import { delay, withTimeout } from './pipeline/budget.js';
 import { ListenStage } from './pipeline/listen-stage.js';
 import { HeldTrace, sameQuestion, worthSpeculating, type AnswerTrace } from './pipeline/speculation.js';
-import type { CapturePort, MicPort, OverlayPort, ScreenCapture } from './ports.js';
+import type { CapturePort, InputPort, MicPort, OverlayPort, ScreenCapture } from './ports.js';
 import type { ChatTurn, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
+import type { AgentConfirmMode } from './settings.js';
 import type { SpeechFactory } from './speech.js';
 
 /** How a typed question or action ended, for UI that waits on it. */
@@ -54,6 +56,14 @@ export interface OrchestratorDeps {
   timeouts?: Partial<Timeouts>;
   /** Speed features to use for the next question (architecture §7). All off when absent. */
   speed?(): SpeedOptions;
+  /** Mouse and keyboard, for dictation and agent mode. Both are unavailable without it. */
+  input?: InputPort;
+  /** Speech-to-text for dictation, when it differs from stt() (e.g. the model listens directly). */
+  dictationStt?(): SttProvider;
+  /** Agent mode settings; agent requests are answered normally when absent or disabled. */
+  agent?(): { enabled: boolean; confirm: AgentConfirmMode };
+  /** Ask the user to allow an agent step. */
+  confirm?(text: string, signal: AbortSignal): Promise<boolean>;
 }
 
 export interface SpeedOptions {
@@ -106,6 +116,8 @@ interface Speculation {
 }
 
 interface Run {
+  /** 'dictate': the transcript is typed into the focused app; no screenshot, no AI, no history. */
+  mode: 'answer' | 'dictate';
   interaction: Interaction;
   latency: LatencyRecorder;
   source: HistoryEntry['source'];
@@ -151,11 +163,17 @@ export class Orchestrator {
     return this.machine.state;
   }
 
-  private newRun(interaction: Interaction, source: HistoryEntry['source'], question: string): Run {
+  private newRun(
+    interaction: Interaction,
+    source: HistoryEntry['source'],
+    question: string,
+    mode: Run['mode'] = 'answer',
+  ): Run {
     const latency = new LatencyRecorder(interaction.id, this.now);
     latency.mark('keyDown');
     latency.setMeta('source', source);
     const run: Run = {
+      mode,
       interaction,
       latency,
       source,
@@ -175,11 +193,21 @@ export class Orchestrator {
 
   /** Hold-to-talk key pressed. */
   keyDown(): void {
+    this.press('answer');
+  }
+
+  /** Dictation key pressed: listen only, then type the words into the focused app at key-up. */
+  dictateDown(): void {
+    this.press('dictate');
+  }
+
+  private press(mode: Run['mode']): void {
     const t = this.machine.dispatch({ type: 'keyDown' });
     if (!t) return;
     const interaction = this.machine.interaction;
     if (!interaction) return;
-    const run = this.newRun(interaction, 'voice', '');
+    const run = this.newRun(interaction, 'voice', '', mode);
+    const dictating = mode === 'dictate';
     const { signal } = interaction;
     run.listenTimer = setTimeout(() => {
       if (this.run === run && this.machine.state === 'listening') {
@@ -191,9 +219,9 @@ export class Orchestrator {
     // Everything here runs in parallel while the user is still talking. Listening directly: frames
     // just accumulate and go to the answer model with the screenshot.
     let stt: SttProvider | null = null;
-    if (!(this.deps.listensDirectly?.() ?? false)) {
+    if (dictating || !(this.deps.listensDirectly?.() ?? false)) {
       try {
-        stt = this.deps.stt();
+        stt = dictating ? (this.deps.dictationStt?.() ?? this.deps.stt()) : this.deps.stt();
         run.latency.setMeta('stt', stt.id);
       } catch (e) {
         this.fail(run, e, 'stt');
@@ -213,6 +241,7 @@ export class Orchestrator {
       onSttReady: () => run.latency.mark('sttReady'),
       now: this.now,
     });
+    if (dictating) return; // nothing to capture or warm up: the words go straight to the keyboard
     try {
       this.deps.capture.begin(signal);
     } catch (e) {
@@ -316,6 +345,7 @@ export class Orchestrator {
     const { signal } = run.interaction;
     const listen = run.listen;
     if (!listen) return;
+    if (run.mode === 'dictate') return this.dictate(run, listen);
     // With a warm-up, the answer uses that screenshot (if taking it failed, take one now).
     const screens = run.earlyScreens
       ? run.earlyScreens.catch(() => this.deps.capture.take(signal))
@@ -324,7 +354,10 @@ export class Orchestrator {
     // The interim transcript often already holds the whole question: start answering it now.
     const partial = listen.partial;
     const spec =
-      run.speed.speculate && !listen.direct && worthSpeculating(partial, this.now() - listen.partialAt)
+      run.speed.speculate &&
+      !listen.direct &&
+      !this.agentRequest(partial) &&
+      worthSpeculating(partial, this.now() - listen.partialAt)
         ? this.speculate(run, screens, partial)
         : null;
     // Let the last few frames through before stopping the mic and finalising the transcript.
@@ -435,6 +468,7 @@ export class Orchestrator {
       ...(run.cacheWarmed ? { cache: true } : {}),
       hooks: {
         point: (target, label) => this.deps.overlay.point(target, label),
+        draw: (shape) => this.deps.overlay.draw?.(shape),
         caption: (text) => {
           run.answer = text;
           this.deps.overlay.caption?.(text);
@@ -490,6 +524,13 @@ export class Orchestrator {
     if (chat.model) run.latency.setMeta('model', chat.model);
     if (speech.id) run.latency.setMeta('voice', speech.id);
 
+    const agent = audio ? null : this.agentRequest(question);
+    if (agent) {
+      spec?.discard();
+      await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
+      return;
+    }
+
     let result: AnswerRunResult;
     try {
       if (spec) {
@@ -529,6 +570,107 @@ export class Orchestrator {
     this.finish(run, 'answered');
   }
 
+  /** The task, if this question asks agent mode to do something and agent mode is on. */
+  private agentRequest(question: string): { goal: string; confirm: AgentConfirmMode } | null {
+    const cfg = this.deps.agent?.();
+    if (!cfg?.enabled) return null;
+    const goal = agentGoal(question);
+    return goal ? { goal, confirm: cfg.confirm } : null;
+  }
+
+  private async dictate(run: Run, listen: ListenStage): Promise<void> {
+    const { signal } = run.interaction;
+    await delay(MIC_TAIL_MS);
+    if (this.run === run) listen.stopMic();
+    if (signal.aborted) return;
+    let text: string;
+    try {
+      text = (await listen.transcript(this.timeouts.transcriptMs)).trim();
+    } catch (e) {
+      if (!signal.aborted) this.fail(run, e, 'stt');
+      return;
+    }
+    if (signal.aborted) return;
+    run.latency.mark('transcriptFinal');
+    const t = this.machine.dispatch({ type: 'transcriptFinal', text });
+    if (!t || t.to !== 'thinking') {
+      if (t?.to === 'cancelled') this.deps.overlay.message(NO_SPEECH, 'info');
+      this.finish(run, 'cancelled', 'no speech detected');
+      return;
+    }
+    const input = this.deps.input;
+    if (!input) return this.fail(run, new ConfigError('Typing into other apps is not available here.'), 'config');
+    try {
+      // A trailing space so the next dictation continues the sentence naturally.
+      await input.run({ kind: 'type', text: `${text} ` }, signal);
+    } catch (e) {
+      if (!signal.aborted) this.fail(run, e, 'app');
+      return;
+    }
+    if (signal.aborted) return;
+    this.machine.dispatch({ type: 'firstAudio' });
+    run.latency.mark('done');
+    this.machine.dispatch({ type: 'speechDone' });
+    this.finish(run, 'answered');
+  }
+
+  private async runAgentTask(
+    run: Run,
+    chat: VisionChatProvider,
+    speech: SpeechFactory,
+    goal: string,
+    confirmMode: AgentConfirmMode,
+  ): Promise<void> {
+    const { signal } = run.interaction;
+    const { input, confirm } = this.deps;
+    if (!input || !confirm) return this.fail(run, new ConfigError('Agent mode is not available here.'), 'config');
+    run.latency.setMeta('agent', true);
+    const userContext = this.deps.userContext?.();
+    let result: AgentResult;
+    try {
+      result = await runAgent(goal, {
+        chat,
+        capture: this.deps.capture,
+        input,
+        overlay: this.deps.overlay,
+        confirm,
+        confirmMode,
+        signal,
+        ...(userContext ? { userContext } : {}),
+        ...(this.deps.log ? { log: this.deps.log } : {}),
+        onStep: (say) => this.deps.overlay.caption?.(say),
+      });
+    } catch (e) {
+      if (!signal.aborted) this.fail(run, e, 'answer');
+      return;
+    }
+    if (signal.aborted) return;
+    this.deps.log?.(`agent ${result.outcome} after ${result.steps.length} steps`);
+    run.answer = result.summary;
+    const out = speech.create(signal);
+    out.onFirstAudio(() => {
+      if (this.run === run && this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
+    });
+    out.say(result.summary);
+    out.end();
+    try {
+      await withTimeout(out.done, 30_000, 'speech', 'saying the result', signal);
+    } catch (e) {
+      out.stop();
+      if (!signal.aborted) this.fail(run, e, 'speech');
+      return;
+    }
+    if (signal.aborted) return;
+    if (this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
+    run.latency.mark('done');
+    this.machine.dispatch({ type: 'speechDone' });
+    this.finish(
+      run,
+      result.outcome === 'done' ? 'answered' : 'error',
+      result.outcome === 'done' ? undefined : result.summary,
+    );
+  }
+
   private fail(run: Run, e: unknown, stage: Stage): void {
     if (run.finished) return;
     const err = classifyFailure(e, stage);
@@ -557,7 +699,8 @@ export class Orchestrator {
 
   private persist(run: Run, outcome: HistoryEntry['outcome'], summary: LatencySummary, detail?: string): void {
     this.deps.onLatency?.(summary);
-    if (run.question || run.answer) {
+    // Dictated text is the user's own writing: it is typed, not kept.
+    if (run.mode !== 'dictate' && (run.question || run.answer)) {
       this.deps.record({
         question: run.question,
         answer: run.answer.trim(),

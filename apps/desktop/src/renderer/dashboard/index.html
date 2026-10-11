@@ -153,6 +153,15 @@
           </div>
           <div class="row">
             <div class="label">
+              <div class="title">Dictation key</div>
+              <div class="desc">
+                Hold it and talk: your words are typed wherever the text cursor is. Nothing is saved.
+              </div>
+            </div>
+            <select id="dictationKey"></select>
+          </div>
+          <div class="row">
+            <div class="label">
               <div class="title">Pause Clicky</div>
               <div class="desc">Ignore the hold-to-talk key until you resume.</div>
             </div>
@@ -164,6 +173,31 @@
               <div class="desc">Clicky waits in the tray after you sign in.</div>
             </div>
             <label class="toggle"><input type="checkbox" id="launchAtLogin" /><span></span></label>
+          </div>
+        </div>
+        <h2>Agent mode</h2>
+        <div class="card">
+          <div class="row">
+            <div class="label">
+              <div class="title">Let Clicky do tasks for you</div>
+              <div class="desc" id="agent-desc">
+                Start a question with "Agent", for example "Agent, open Notepad and write a shopping list". Clicky then
+                uses your mouse and keyboard, showing each step. Press Esc to stop it at any time.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="agentEnabled" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Ask before acting</div>
+              <div class="desc">
+                Clicky never types passwords or card numbers. You confirm with your hold-to-talk key.
+              </div>
+            </div>
+            <select id="agentConfirm">
+              <option value="risky">Only for sending, buying, deleting and similar steps</option>
+              <option value="always">Before every step</option>
+            </select>
           </div>
         </div>
         <h2>Microphone</h2>

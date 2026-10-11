@@ -496,3 +496,56 @@ describe('Orchestrator', () => {
     });
   });
 });
+
+describe('dictation and agent mode', () => {
+  it('dictation types the transcript, takes no screenshot and keeps no history', async () => {
+    const typed: unknown[] = [];
+    const t = setup({
+      stt: () => fakeStt('ignored'),
+      dictationStt: () => fakeStt('Dear team, the report is ready'),
+      input: { run: async (a) => void typed.push(a) },
+    });
+    t.o.dictateDown();
+    t.advance(MIN_HOLD_MS + 50);
+    t.o.keyUp();
+    await settle(t.o);
+    expect(typed).toEqual([{ kind: 'type', text: 'Dear team, the report is ready ' }]);
+    expect(t.deps.capture.begin).not.toHaveBeenCalled();
+    expect(t.chat.requests).toHaveLength(0);
+    await tick();
+    expect(t.history).toEqual([]);
+    expect(t.o.state).toBe('idle');
+  });
+
+  it('dictation without an input port fails visibly', async () => {
+    const t = setup({ dictationStt: () => fakeStt('hello') });
+    t.o.dictateDown();
+    t.advance(MIN_HOLD_MS + 50);
+    t.o.keyUp();
+    await settle(t.o);
+    expect(t.o.state).toBe('error');
+    expect(t.messages.at(-1)).toMatch(/Typing into other apps/);
+  });
+
+  it('a question starting with "agent" runs the agent and speaks its summary', async () => {
+    const actions: unknown[] = [];
+    const chat = fakeChat(['{"action":"done","say":"All done."}']);
+    const t = setup({
+      chat: () => chat,
+      input: { run: async (a) => void actions.push(a) },
+      agent: () => ({ enabled: true, confirm: 'risky' }),
+      confirm: async () => true,
+    });
+    const r = await t.o.ask('Agent, close this window', 'typed');
+    expect(r?.outcome).toBe('answered');
+    expect(r?.answer).toBe('All done.');
+    expect(t.speech.said).toEqual(['All done.']);
+    expect(chat.requests[0]?.question).toContain('Task: close this window');
+  });
+
+  it('agent requests are answered normally when agent mode is off', async () => {
+    const t = setup({ agent: () => ({ enabled: false, confirm: 'risky' }), input: { run: async () => undefined } });
+    const r = await t.o.ask('Agent, close this window', 'typed');
+    expect(r?.answer).toBe('Click Export. Then choose PDF.');
+  });
+});

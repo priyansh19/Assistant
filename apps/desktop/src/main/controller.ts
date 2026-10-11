@@ -14,6 +14,7 @@ import type { Platform } from '../platform';
 import { CapturePlanner } from './capture-planner';
 import type { CredentialStore } from './credential-store';
 import { EngineHost } from './engine-host';
+import { InputHost } from './input-host';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -51,6 +52,7 @@ export class Controller {
   hooks: ControllerHooks = {};
   /** On-device speech model downloads. The models themselves run in the engine. */
   readonly local = { store: new ModelStore() };
+  private readonly input: InputHost;
 
   constructor(
     platform: Platform,
@@ -61,6 +63,7 @@ export class Controller {
     private readonly worker: WorkerHost,
   ) {
     this.engine = new EngineHost(platform, worker);
+    this.input = new InputHost(platform.createInputDriver());
     this.engine.onMessage((msg) => this.onEngine(msg));
     // The overlay waveform: levels come from the media renderer through main, only while listening.
     worker.on((e) => {
@@ -113,6 +116,7 @@ export class Controller {
         const o = msg.overlay;
         if (o.op === 'state') this.overlays.state(o.state);
         else if (o.op === 'point') this.overlays.point(o.target, o.label);
+        else if (o.op === 'draw') this.overlays.draw(o.shape);
         else if (o.op === 'message') this.overlays.message(o.text, o.kind);
         return;
       }
@@ -151,6 +155,13 @@ export class Controller {
               id: msg.id,
               error: e instanceof Error ? e.message : String(e),
             }),
+        );
+        return;
+      case 'input':
+        this.input.run(msg.action).then(
+          () => this.engine.send({ type: 'input.reply', id: msg.id }),
+          (e: unknown) =>
+            this.engine.send({ type: 'input.reply', id: msg.id, error: e instanceof Error ? e.message : String(e) }),
         );
         return;
       case 'holdKey.failed':
@@ -202,6 +213,8 @@ export class Controller {
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   prewarm(): void {
     this.engine.send({ type: 'prewarm' });
+    const s = this.settings.get();
+    if (s.dictationKey !== 'off' || s.agentEnabled) this.input.warm();
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */
@@ -270,5 +283,6 @@ export class Controller {
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
     this.engine.stop();
+    this.input.dispose();
   }
 }

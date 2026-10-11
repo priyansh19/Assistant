@@ -120,7 +120,7 @@ export class EngineHost {
     this.inproc = new Engine({
       post: (msg) => this.emit(msg),
       media: this.worker,
-      createHoldKeyHook: (key) => this.platform.createHoldKeyHook(key),
+      createHoldKeyHook: (key, dictationKey) => this.platform.createHoldKeyHook(key, dictationKey),
     });
     for (const m of this.replay.values()) this.inproc.handle(m);
     for (const m of this.queued.splice(0)) this.inproc.handle(m);

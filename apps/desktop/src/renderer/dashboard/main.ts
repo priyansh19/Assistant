@@ -210,6 +210,10 @@ function renderControls(s: Settings): void {
     $<HTMLInputElement>(id).checked = v;
   };
   set('holdKey', s.holdKey);
+  set('dictationKey', s.dictationKey);
+  check('agentEnabled', s.agentEnabled);
+  set('agentConfirm', s.agentConfirm);
+  $<HTMLSelectElement>('agentConfirm').disabled = !s.agentEnabled;
   check('paused', s.paused);
   check('launchAtLogin', s.launchAtLogin);
   check('captureAllDisplays', s.captureAllDisplays);
@@ -375,7 +379,10 @@ function renderHome(): void {
   } else {
     card.classList.add('ok');
     title.textContent = 'Ready';
-    desc.textContent = `Hold ${key}, ask about anything on your screen, and let go.`;
+    const tips = [`Hold ${key}, ask about anything on your screen, and let go.`];
+    if (s.dictationKey !== 'off') tips.push(`Hold ${HOLD_KEY_LABELS[s.dictationKey]} to dictate into any app.`);
+    if (s.agentEnabled) tips.push('Start with "Agent" to have Clicky do it for you.');
+    desc.textContent = tips.join(' ');
   }
 
   const err = lastError();
@@ -1120,6 +1127,9 @@ async function refresh(): Promise<void> {
 async function init(): Promise<void> {
   const holdKey = $<HTMLSelectElement>('holdKey');
   for (const k of HOLD_KEYS) holdKey.add(new Option(HOLD_KEY_LABELS[k], k));
+  const dictationKey = $<HTMLSelectElement>('dictationKey');
+  dictationKey.add(new Option('Off', 'off'));
+  for (const k of HOLD_KEYS) dictationKey.add(new Option(HOLD_KEY_LABELS[k], k));
   const swatches = $('swatches');
   for (const c of CURSOR_COLORS) {
     const sw = el('button', { className: 'swatch', title: c });
@@ -1141,6 +1151,9 @@ async function init(): Promise<void> {
   });
 
   bindSelect('holdKey');
+  bindSelect('dictationKey');
+  bindToggle('agentEnabled');
+  bindSelect('agentConfirm');
   bindToggle('paused');
   bindToggle('launchAtLogin');
   bindToggle('captureAllDisplays');

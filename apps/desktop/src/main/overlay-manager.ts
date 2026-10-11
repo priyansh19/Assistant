@@ -1,9 +1,15 @@
 import { join } from 'node:path';
 import { BrowserWindow, screen, type Display } from 'electron';
-import type { InteractionState, MappedPoint, OverlayPort } from '@clicky/core';
+import type { InteractionState, MappedPoint, MappedShape, OverlayPort } from '@clicky/core';
 import type { Platform } from '../platform';
 import { IPC } from '../shared/ipc';
-import type { OverlayConfig, OverlayCursor, OverlayMessage, OverlayPoint } from '../shared/overlay-protocol';
+import type {
+  OverlayConfig,
+  OverlayCursor,
+  OverlayDrawing,
+  OverlayMessage,
+  OverlayPoint,
+} from '../shared/overlay-protocol';
 
 const CURSOR_INTERVAL_MS = 16;
 /** Mic level updates are throttled; the waveform doesn't need more than ~30 fps. */
@@ -82,6 +88,18 @@ export class OverlayManager implements OverlayPort {
     if (!display || !win || win.isDestroyed()) return;
     const p: OverlayPoint = { x: target.local.x, y: target.local.y, label };
     win.webContents.send(IPC.overlayPoint, p);
+  }
+
+  draw(shape: MappedShape): void {
+    const win = this.windows.get(shape.displayId);
+    if (!win || win.isDestroyed()) return;
+    const d: OverlayDrawing = {
+      kind: shape.kind,
+      points: shape.points,
+      label: shape.label,
+      ...(shape.r !== undefined ? { r: shape.r } : {}),
+    };
+    win.webContents.send(IPC.overlayDraw, d);
   }
 
   message(text: string, kind: 'error' | 'info'): void {

@@ -15,6 +15,7 @@ export const IPC = {
   overlayCursor: 'overlay:cursor',
   overlayState: 'overlay:state',
   overlayPoint: 'overlay:point',
+  overlayDraw: 'overlay:draw',
   overlayMessage: 'overlay:message',
   overlayLevel: 'overlay:level',
   overlayConfig: 'overlay:config',

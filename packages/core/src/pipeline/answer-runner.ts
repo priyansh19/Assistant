@@ -13,6 +13,7 @@ import { mapPointToDisplay } from '../coordinates.js';
 import type { MappedPoint } from '../coordinates.js';
 import { classifyFailure, StageError, type Stage } from '../errors.js';
 import type { PointTarget } from '../point-parser.js';
+import { mapShapeToDisplay, type DrawShape, type MappedShape } from '../shapes.js';
 import type { ScreenCapture } from '../ports.js';
 import { buildSystemPrompt } from '../prompt.js';
 import type { ChatTurn, VisionChatProvider, VisionChatRequest } from '../providers.js';
@@ -76,6 +77,8 @@ export function answerSystemPrompt(screens: ScreenCapture, opts: { userContext?:
 
 export interface AnswerRunHooks {
   point(target: MappedPoint, label: string): void;
+  /** Draw an arrow, box or circle on the screen (optional UI). */
+  draw?(shape: MappedShape): void;
   caption?(answerSoFar: string): void;
   /** What the model heard, as soon as it says (direct listening only). */
   heard?(question: string): void;
@@ -103,6 +106,7 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
   const result: AnswerRunResult = { outcome: 'answered', answer: '', heard: null, pointLabel: null };
   let stage: Stage = 'capture';
   let speech: SpeechStage | null = null;
+  const drawn = { count: 0 };
   try {
     const screens = await input.screens;
     trace.mark('captureReady');
@@ -180,6 +184,8 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         speech.push(ev.text);
       } else if (ev.type === 'point') {
         pointAt(ev.tag, screens, result, input);
+      } else if (ev.type === 'draw') {
+        drawShape(ev.shape, screens, drawn, input);
       } else if (ev.type === 'heard') {
         result.heard = ev.text;
         input.hooks.heard?.(ev.text);
@@ -205,6 +211,20 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
     if (signal.aborted) return result;
     throw classifyFailure(e, stage);
   }
+}
+
+/** At most this many drawings per answer, so a confused model can't cover the screen. */
+export const MAX_DRAWINGS = 4;
+
+function drawShape(shape: DrawShape, screens: ScreenCapture, drawn: { count: number }, input: AnswerRunInput): void {
+  if (drawn.count >= MAX_DRAWINGS || !input.hooks.draw) return;
+  const mapped = mapShapeToDisplay(shape, screens.geometry);
+  if (!mapped.ok) {
+    input.hooks.log?.(`${shape.kind} drawing skipped: ${mapped.detail}`);
+    return;
+  }
+  drawn.count++;
+  input.hooks.draw(mapped.shape);
 }
 
 function pointAt(

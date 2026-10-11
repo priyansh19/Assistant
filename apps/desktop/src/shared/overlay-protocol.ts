@@ -10,6 +10,14 @@ export interface OverlayPoint {
   label: string;
 }
 
+/** A drawing in DIP relative to this overlay's display (see MappedShape in @clicky/core). */
+export interface OverlayDrawing {
+  kind: 'box' | 'arrow' | 'circle';
+  points: { x: number; y: number }[];
+  r?: number;
+  label: string;
+}
+
 export interface OverlayMessage {
   text: string;
   kind: 'error' | 'info';

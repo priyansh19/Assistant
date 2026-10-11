@@ -2,11 +2,7 @@
 
 Checked 2026-10-11 against two sources: the open-source app (github.com/farzaa/clicky README) and the hosted product page (heyclicky.com). The README says new development is now private, so the hosted app may have features neither page describes.
 
-**Short answer:** we match everything the open-source Clicky does, and we add a settings app, memory, saved actions, on-device speech, and faster answers. Three features from the newer paid app are still missing:
-
-- **Agents**: Clicky does tasks for you, started by saying "heyclicky agent".
-- **Dictation**: speech typed into any app.
-- **Drawing on the screen**: shapes beyond the pointer.
+**Short answer:** we match everything the open-source Clicky does, and as of 2026-10-11 also the three features from the newer paid app that were missing: agents, dictation and drawing on the screen. On top of that we have a settings app, memory, saved actions, on-device speech and faster answers.
 
 Like the official app, ours teaches by talking and pointing. It does not click or type for you.
 
@@ -35,10 +31,10 @@ Legend: ✅ done · 🟡 partial · ❌ missing
 |---|---|---|---|
 | Teaches any tool / walks you through being stuck | ✅ | ✅ | The same mechanism: conversational answers plus pointing. Neither app has structured lessons. |
 | Memory ("basic text summaries" for context) | ✅ | ✅ | Text-only history; recent turns are fed back as context. Both can be turned off, and screenshots are never stored. |
-| **Agents**: "heyclicky agent" does tasks for you | ✅ | ❌ | We don't click, type or run tasks. This is the biggest gap, and it needs the input-automation layer we haven't built. |
-| **Dictation** into any app | ✅ | ❌ | We already have fast on-device STT (about 60 ms), so this is mostly a "type the transcript into the focused window" mode. It's the cheapest gap to close. |
-| Draws on your screen | ✅ | 🟡 | We show a pointer, a target ring and a label. We can't draw arrows, boxes or paths. |
-| Wake word ("heyclicky agent") | ✅ | ❌ | Hotkey only. |
+| **Agents**: "heyclicky agent" does tasks for you | ✅ | ✅ | Start a question with "Agent". Clicky clicks, types, presses shortcuts and scrolls, flying the cursor to each target first. Sending, buying, deleting and similar steps wait for your hold key (or every step, if you choose). Esc stops it, it never types passwords, and it stops after 25 steps. |
+| **Dictation** into any app | ✅ | ✅ | Hold the dictation key (Right Alt by default) and talk; the words are typed where the text cursor is. It uses the on-device speech model when available and is never saved to history. |
+| Draws on your screen | ✅ | ✅ | Besides the pointer, answers can draw up to three arrows, boxes and circles with labels. They draw themselves in and fade after about 14 seconds. |
+| Wake word ("heyclicky agent") | ✅ | 🟡 | Saying "agent" starts agent mode, but only while the hold key is down. There's no always-listening wake word. |
 | Accounts, plans, message limits | ✅ Free/Pro/Max | n/a | Not needed: it's your own keys, so there are no limits. |
 | Delete all data | ✅ | ✅ | Clear history in the dashboard. Keys are removable per provider. |
 | Platforms | macOS (Windows waitlist) | Windows | This is the Windows version the official app doesn't have yet. |
@@ -52,8 +48,7 @@ Legend: ✅ done · 🟡 partial · ❌ missing
 - **Settings app**: hold key, microphone choice, always-ready mic, cursor colour and size, labels on or off, pause, presets, key testing with clear errors, diagnostics and an "open logs" button.
 - **Privacy controls**: history and recent-context toggles, plus a written privacy doc.
 
-## Suggested next steps, cheapest first
+## Suggested next steps
 
-1. **Dictation mode**: a second hotkey that types the on-device transcript into the focused app.
-2. **Screen drawing**: arrows and boxes from a richer tag (for example `[BOX:x,y,w,h]`).
-3. **Agent mode**: clicking and typing for you via Windows UI Automation, with a confirm step before each action.
+1. **Always-listening wake word**: "hey Clicky" without holding a key, using a small on-device keyword model.
+2. **Agent memory**: save a finished agent task as a saved action, so it can be repeated with one click.

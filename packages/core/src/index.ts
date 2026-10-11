@@ -12,3 +12,5 @@ export * from './settings.js';
 export * from './history.js';
 export * from './orchestrator.js';
 export * from './speech.js';
+export * from './shapes.js';
+export * from './agent.js';

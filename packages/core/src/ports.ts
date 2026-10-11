@@ -5,6 +5,7 @@
 
 import type { CaptureGeometry, MappedPoint } from './coordinates.js';
 import type { InteractionState } from './interaction.js';
+import type { MappedShape } from './shapes.js';
 import type { ImageInput } from './providers.js';
 
 export interface ScreenCapture {
@@ -31,8 +32,23 @@ export interface MicPort {
 export interface OverlayPort {
   state(state: InteractionState): void;
   point(target: MappedPoint, label: string): void;
+  /** Draw an arrow, box or circle on the screen (optional UI). */
+  draw?(shape: MappedShape): void;
   /** A short message near the cursor, e.g. an error the user can act on. */
   message(text: string, kind: 'error' | 'info'): void;
   /** Live caption of the answer as it streams (optional UI). */
   caption?(text: string): void;
+}
+
+/** Something agent mode or dictation does with the mouse or keyboard. Points are on a display. */
+export type InputAction =
+  | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2 }
+  | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
+  | { kind: 'type'; text: string }
+  /** A key or shortcut, e.g. ['ctrl', 's'] or ['enter']. */
+  | { kind: 'keys'; keys: string[] };
+
+export interface InputPort {
+  /** Resolves when the OS has received the input. */
+  run(action: InputAction, signal: AbortSignal): Promise<void>;
 }
