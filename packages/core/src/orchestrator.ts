@@ -14,7 +14,7 @@
 
 import { actionGoal, agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
-import { memoryNote } from './memory.js';
+import { bareGreeting, memoryNote } from './memory.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
@@ -580,6 +580,11 @@ export class Orchestrator {
     if (speech.id) run.latency.setMeta('voice', speech.id);
 
     // "Comet is on my taskbar", "remember…": keep it for next time instead of answering.
+    if (!audio && bareGreeting(question)) {
+      spec?.discard();
+      await this.sayOnly(run, speech, 'Yes? What can I help with?');
+      return;
+    }
     const note = audio || !this.deps.remember ? null : memoryNote(question);
     if (note) {
       spec?.discard();

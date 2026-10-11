@@ -981,3 +981,202 @@ input[type='search'] {
 #agent-setup {
   z-index: 1000;
 }
+
+/* =====================================================================================
+   Clicky look (2026-10-11): warm "paper" surfaces, retro app-window cards, lowercase
+   headings, pill buttons, and the user's cursor colour as the one accent. Inspired by the
+   playful desktop feel of the original, drawn entirely in our own style (no mascots).
+   ===================================================================================== */
+:root {
+  --bg: #f4efe6;
+  --text: #211e1a;
+  --text-2: #6d665c;
+  --card: #fffdf8;
+  --card-border: rgba(33, 30, 26, 0.14);
+  --divider: rgba(33, 30, 26, 0.09);
+  --hover: rgba(33, 30, 26, 0.05);
+  --input: #ffffff;
+  --input-border: rgba(33, 30, 26, 0.2);
+  --accent: var(--cursor, #2f8cff);
+  --accent-text: #ffffff;
+  --ink-shadow: 3px 3px 0 rgba(33, 30, 26, 0.12);
+  --chrome: #efe7da;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141317;
+    --text: #f6f3ee;
+    --text-2: #aaa39a;
+    --card: #1e1c22;
+    --card-border: rgba(246, 243, 238, 0.12);
+    --divider: rgba(246, 243, 238, 0.08);
+    --hover: rgba(246, 243, 238, 0.06);
+    --input: #18171b;
+    --input-border: rgba(246, 243, 238, 0.16);
+    --accent: var(--cursor, #4ca3ff);
+    --accent-text: #ffffff;
+    --ink-shadow: 3px 3px 0 rgba(0, 0, 0, 0.45);
+    --chrome: #26242b;
+  }
+}
+
+body {
+  background: var(--bg);
+}
+
+.sidebar {
+  background: transparent;
+  padding: 18px 10px;
+}
+
+.brand {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+}
+
+.nav-item {
+  border-radius: 999px;
+  padding: 8px 14px;
+  text-transform: lowercase;
+  cursor: pointer;
+}
+
+.nav-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+
+.nav-item.active::before {
+  display: none;
+}
+
+h1,
+h2 {
+  text-transform: lowercase;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-weight: 700;
+}
+
+.intro {
+  color: var(--text-2);
+}
+
+/* Cards look like little app windows: a soft ink outline and an offset shadow. */
+.card {
+  background: var(--card);
+  border: 1.5px solid var(--card-border);
+  border-radius: 14px;
+  box-shadow: var(--ink-shadow);
+}
+
+/* The status card and the setup window get a title bar with three dots. */
+.card.hero,
+.wizard-card {
+  position: relative;
+  padding-top: 34px;
+}
+
+.card.hero::before,
+.wizard-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 24px;
+  border-bottom: 1.5px solid var(--card-border);
+  border-radius: 12px 12px 0 0;
+  background:
+    radial-gradient(circle at 16px 12px, #ff6b5b 4px, transparent 4.5px),
+    radial-gradient(circle at 32px 12px, #ffbd3e 4px, transparent 4.5px),
+    radial-gradient(circle at 48px 12px, #2bc840 4px, transparent 4.5px), var(--chrome);
+}
+
+.wizard-card {
+  background: var(--card);
+  border: 1.5px solid var(--card-border);
+  border-radius: 16px;
+  box-shadow: 6px 6px 0 rgba(33, 30, 26, 0.16);
+}
+
+button.primary,
+button.secondary {
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-weight: 600;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 70%, #000);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 45%, #000);
+}
+
+button.primary:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--accent) 45%, #000);
+}
+
+button.primary:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0 transparent;
+}
+
+button.secondary {
+  background: var(--card);
+  border: 1.5px solid var(--input-border);
+  color: var(--text);
+}
+
+button.secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+select,
+input[type='text'],
+input[type='password'],
+input[type='search'],
+textarea {
+  border-radius: 10px;
+  border: 1.5px solid var(--input-border);
+}
+
+select:focus,
+textarea:focus,
+input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.toggle input:checked + span {
+  background: var(--accent);
+}
+
+.tile {
+  border-radius: 14px;
+}
+
+.voice-chip,
+.learned .chip,
+.pill {
+  border-radius: 999px;
+}
+
+.voice-chip.selected {
+  border-color: var(--accent);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+#task-form input,
+#ask-form input {
+  flex: 1;
+}
+
+#task-hint {
+  padding: 0 16px 12px;
+}

@@ -50,7 +50,13 @@ Drawing (optional):
   at. Most answers need none. Never mention them in the spoken text.`;
 
 export function buildSystemPrompt(options: PromptOptions): string {
-  const lines = [BASE, '', 'Screenshots in this message:'];
+  const lines = [
+    BASE,
+    '',
+    'Earlier turns, if any, are only context for follow-ups. Answer the newest question only; never repeat or continue an earlier answer unless asked.',
+    '',
+    'Screenshots in this message:',
+  ];
   for (const s of options.screens) {
     lines.push(
       `- screen${s.index}: ${s.imageWidth}x${s.imageHeight} px${s.hasCursor ? ' (the cursor is on this screen)' : ''}`,

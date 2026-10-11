@@ -296,7 +296,7 @@ describe('Orchestrator', () => {
 
   it('fails on an empty model answer instead of going silent', async () => {
     const t = setup({ chat: () => fakeChat(['[POINT:none]']) });
-    await t.o.ask('hello', 'typed');
+    await t.o.ask('what is this', 'typed');
     await settle(t.o);
     expect(t.o.state).toBe('error');
   });
