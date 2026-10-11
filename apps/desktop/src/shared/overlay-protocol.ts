@@ -21,6 +21,8 @@ export interface OverlayConfig {
   showLabels: boolean;
   /** Hold-to-talk paused from the tray: the cursor dims. */
   paused: boolean;
+  /** CSS pixels per physical centimetre on this overlay's display (set per window). */
+  pxPerCm?: number;
 }
 
 export type OverlayStateMsg = InteractionState;

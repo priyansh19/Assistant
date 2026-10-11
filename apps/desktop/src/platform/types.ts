@@ -14,4 +14,9 @@ export interface Platform {
   createHoldKeyHook(key: HoldKey): HoldKeyHook;
   /** Make a freshly created overlay window cover `bounds` exactly, working around OS quirks. */
   fitOverlayToDisplay(win: BrowserWindow, bounds: Rectangle): void;
+  /**
+   * Physical width in centimetres of each active monitor, in display order, so on-screen distances
+   * can be kept physically constant. Empty when the OS can't tell.
+   */
+  monitorWidthsCm(): Promise<number[]>;
 }

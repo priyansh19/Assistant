@@ -15,7 +15,18 @@ const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
 
 const SIZES = { small: 16, medium: 22, large: 30 } as const;
 /** Where the triangle sits relative to the real pointer while following. */
-const FOLLOW_OFFSET = { x: 22, y: 18 };
+/** Gap kept between the real pointer and the companion, in physical centimetres. */
+const GAP_CM = 1;
+/** Rough extent of the Windows arrow pointer below/right of its hotspot, in CSS px. */
+const POINTER_BODY = { x: 12, y: 19 };
+
+/** Centre of the companion relative to the pointer hotspot: past the arrow, then ~1 cm further out. */
+function followOffset(): { x: number; y: number } {
+  const gap = GAP_CM * (config.pxPerCm ?? 96 / 2.54);
+  const half = SIZES[config.size] / 2;
+  const d = gap / Math.SQRT2; // along the down-right diagonal
+  return { x: POINTER_BODY.x + d + half, y: POINTER_BODY.y + d + half };
+}
 
 let config: OverlayConfig = { color: 'blue', size: 'medium', showLabels: true, paused: false };
 let state: InteractionState = 'idle';
@@ -78,7 +89,9 @@ function arcControl(from: Pt, to: Pt): Pt {
 }
 
 function followTarget(): Pt | null {
-  return cursor ? { x: cursor.x + FOLLOW_OFFSET.x, y: cursor.y + FOLLOW_OFFSET.y } : null;
+  if (!cursor) return null;
+  const o = followOffset();
+  return { x: cursor.x + o.x, y: cursor.y + o.y };
 }
 
 function startFlight(to: Pt, then: 'point' | 'follow', label = ''): void {

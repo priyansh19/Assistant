@@ -25,6 +25,10 @@ export class OverlayManager implements OverlayPort {
 
   start(): void {
     this.rebuild();
+    void this.platform.monitorWidthsCm().then((w) => {
+      this.widthsCm = w;
+      this.setConfig(this.config);
+    });
     screen.on('display-added', this.scheduleRebuild);
     screen.on('display-removed', this.scheduleRebuild);
     screen.on('display-metrics-changed', this.onMetrics);
@@ -42,7 +46,26 @@ export class OverlayManager implements OverlayPort {
 
   setConfig(config: OverlayConfig): void {
     this.config = config;
-    this.broadcast(IPC.overlayConfig, config);
+    for (const [id, win] of this.windows)
+      if (!win.isDestroyed()) win.webContents.send(IPC.overlayConfig, this.configFor(id));
+  }
+
+  /** Physical monitor widths, used to keep the companion's gap from the pointer ~1 cm on any screen. */
+  private widthsCm: number[] = [];
+
+  private configFor(displayId: number): OverlayConfig {
+    const displays = screen.getAllDisplays();
+    const i = displays.findIndex((d) => d.id === displayId);
+    const d = displays[i];
+    // Match by order when the counts agree; otherwise fall back to Windows' nominal 96 DPI.
+    const cm =
+      displays.length === this.widthsCm.length
+        ? this.widthsCm[i]
+        : displays.length === 1
+          ? this.widthsCm[0]
+          : undefined;
+    const pxPerCm = d && cm ? d.bounds.width / cm : 96 / 2.54;
+    return { ...this.config, pxPerCm };
   }
 
   // ---- OverlayPort
@@ -132,7 +155,7 @@ export class OverlayManager implements OverlayPort {
     win.setVisibleOnAllWorkspaces(true);
     this.platform.fitOverlayToDisplay(win, bounds);
     win.webContents.once('did-finish-load', () => {
-      win.webContents.send(IPC.overlayConfig, this.config);
+      win.webContents.send(IPC.overlayConfig, this.configFor(display.id));
       win.webContents.send(IPC.overlayState, this.current);
       this.lastCursor = '';
     });
