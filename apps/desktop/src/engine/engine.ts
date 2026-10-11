@@ -4,6 +4,7 @@ import {
   buildUserContext,
   lessonFrom,
   lessonHints,
+  shortestRoute,
   makeComboKey,
   ApprovalMemory,
   matchSkills,
@@ -155,7 +156,26 @@ export class Engine {
       inventory: () => this.cfg().inventory,
       agentRunFinished: (goal, result) => {
         const lesson = lessonFrom(goal, result, Date.now());
-        if (lesson) this.post({ type: 'agentLesson', lesson });
+        // Every run is reviewed afterwards (a standing rule): could it have taken fewer steps? A
+        // shorter route for a task that worked becomes the lesson next time.
+        void shortestRoute(this.agentChat(), goal, result, AbortSignal.timeout(45_000))
+          .catch(() => null)
+          .then((route) => {
+            const took = result.steps.length;
+            this.post({
+              type: 'log',
+              level: 'info',
+              message: route
+                ? `agent step review: took ${took} steps, ${route.steps.length} would do: ${route.steps.join('; ').slice(0, 400)} (${route.why})`
+                : `agent step review: took ${took} steps, no shorter route found`,
+            });
+            if (route && result.outcome === 'done')
+              this.post({
+                type: 'agentLesson',
+                lesson: { goal: goal.slice(0, 200), steps: route.steps, at: Date.now() },
+              });
+            else if (lesson) this.post({ type: 'agentLesson', lesson });
+          });
       },
       learnFromScreen: (screens, app) => void this.learnFromScreen(screens, app),
       learnFromDictation: (text, app) => {
@@ -663,6 +683,7 @@ export class Engine {
       this.post({ type: 'log', level: 'info', message: `allowed (like a step allowed before): ${text}` });
       return Promise.resolve(true);
     }
+    this.post({ type: 'log', level: 'info', message: `asking to allow: ${text}` });
     const key = holdKeyLabel(this.cfg().settings.holdKey);
     const prompt = `${text}? Press ${key} to allow, or Esc to stop.`;
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });

@@ -863,3 +863,53 @@ export function lessonFrom(goal: string, result: AgentResult, now: number): Agen
     .map((c) => c.step);
   return steps.length ? { goal: goal.slice(0, 200), steps: steps.slice(0, 30), at: now } : null;
 }
+
+const ROUTE_PROMPT = `You review how an assistant did a task on a Windows PC, to make the next run shorter.
+You get the task and every step it took (with the ones that did not work marked). Write the
+shortest sequence of steps that would have done the same task, in the same words the steps use
+(for example: opened https://…, pressed ctrl+l, typed "…", closed the window "…", noted …).
+Prefer direct URLs, the open action, keyboard shortcuts and close_window over clicking around.
+Reply with ONLY one JSON object: {"steps": ["…", "…"], "why": "one short sentence"}.`;
+
+/**
+ * After every run: trace back the steps and work out the shortest route that would have done the
+ * task, so the next similar task can follow it. Null if the review failed or found nothing shorter.
+ */
+export async function shortestRoute(
+  chat: VisionChatProvider,
+  goal: string,
+  result: AgentResult,
+  signal: AbortSignal,
+): Promise<{ steps: string[]; why: string } | null> {
+  const taken = result.checked ?? result.steps.map((s) => ({ step: s, ok: null }));
+  if (taken.length < 2) return null;
+  let text = '';
+  for await (const t of chat.stream({
+    system: ROUTE_PROMPT,
+    history: [],
+    question: [
+      `Task: ${goal}`,
+      `How it ended: ${result.outcome}: ${result.summary}`,
+      `Steps taken (${taken.length}):\n${taken
+        .map((c, n) => `${n + 1}. ${c.step}${c.ok === false ? ' (did not work)' : ''}`)
+        .join('\n')}`,
+    ].join('\n\n'),
+    images: [],
+    maxTokens: 600,
+    signal,
+  }))
+    text += t;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try {
+    const o = JSON.parse(text.slice(start, end + 1)) as { steps?: unknown; why?: unknown };
+    const steps = Array.isArray(o.steps)
+      ? o.steps.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).map((s) => s.slice(0, 200))
+      : [];
+    if (!steps.length || steps.length >= taken.length) return null;
+    return { steps: steps.slice(0, 30), why: typeof o.why === 'string' ? o.why.slice(0, 200) : '' };
+  } catch {
+    return null;
+  }
+}

@@ -188,6 +188,24 @@ public static class ClickyInput {
     foreach (var t in want) if (n.Contains(t)) return true;
     return false;
   }
+  // A strong match for a control found elsewhere on screen: its name is short and fully wanted
+  // ("Minimize"), or it shares at least two words with the target ("Comet browser").
+  static bool Strong(System.Windows.Automation.AutomationElement e, string[] want) {
+    string n;
+    try { n = (e.Current.Name ?? "").ToLowerInvariant(); } catch { return false; }
+    var have = Tokens(n);
+    if (have.Length == 0) return false;
+    int hits = 0;
+    foreach (var t in want) if (n.Contains(t)) hits++;
+    int named = 0;
+    foreach (var h in have) if (Array.IndexOf(want, h) >= 0) named++;
+    return hits >= 2 || (named == have.Length && have.Length <= 2);
+  }
+  static bool Small(System.Windows.Automation.AutomationElement e) {
+    try { var b = e.Current.BoundingRectangle; return !b.IsEmpty && b.Width <= 420 && b.Height <= 160; } catch { return false; }
+  }
+  // How far (physical px) a control may have moved and still be the one the model meant.
+  const double MaxShift = 220;
   static string Center(System.Windows.Automation.AutomationElement e) {
     var r = e.Current.BoundingRectangle;
     if (r.IsEmpty || r.Width < 1) return "";
@@ -202,7 +220,9 @@ public static class ClickyInput {
     try {
       var e = System.Windows.Automation.AutomationElement.FromPoint(new System.Windows.Point(x, y));
       for (int i = 0; e != null && i < 6; i++) {
-        if (Matches(e, want)) { var c = Center(e); if (c != "") return c; }
+        // Only a control-sized element: a window or pane that merely contains the word ("Claude"
+        // in "the Minimize button of the Claude window") would move the click to its middle.
+        if (Matches(e, want) && Small(e)) { var c = Center(e); if (c != "") return c; }
         e = System.Windows.Automation.TreeWalker.ControlViewWalker.GetParent(e);
       }
     } catch { }
@@ -221,10 +241,10 @@ public static class ClickyInput {
         int seen = 0;
         foreach (System.Windows.Automation.AutomationElement el in all) {
           if (++seen > 4000) break;
-          if (!Matches(el, want)) continue;
+          if (!Strong(el, want) || !Small(el)) continue;
           var c = Center(el); if (c == "") continue;
           var p = c.Split(' '); double dx = int.Parse(p[0]) - x, dy = int.Parse(p[1]) - y; double d = dx * dx + dy * dy;
-          if (d < bestD) { bestD = d; best = c; }
+          if (d < bestD && d <= MaxShift * MaxShift) { bestD = d; best = c; }
         }
       } catch { }
     }
