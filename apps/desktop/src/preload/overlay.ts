@@ -22,6 +22,8 @@ const api = {
   onPoint: (fn: (p: OverlayPoint) => void) => on('overlay:point', fn),
   onDraw: (fn: (d: OverlayDrawing) => void) => on('overlay:draw', fn),
   onAnchor: (fn: (a: OverlayAnchor) => void) => on('overlay:anchor', fn),
+  /** The display whose overlay shows the companion right now; null means wherever the pointer is. */
+  onOwner: (fn: (displayId: number | null) => void) => on('overlay:owner', fn),
   onMessage: (fn: (m: OverlayMessage) => void) => on('overlay:message', fn),
   onLevel: (fn: (level: number) => void) => on('overlay:level', fn),
   onConfig: (fn: (c: OverlayConfig) => void) => on('overlay:config', fn),

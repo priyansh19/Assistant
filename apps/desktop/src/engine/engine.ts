@@ -295,7 +295,7 @@ export class Engine {
       hook.start({
         onDown: () => this.keyDown(),
         onUp: () => {
-          if (this.keyTest) return this.post({ type: 'keyTest', down: false });
+          if (this.keyTest) return this.post({ type: 'keyTest', down: false, key: 'talk' });
           if (this.swallowUp) {
             this.swallowUp = false;
             return;
@@ -308,7 +308,10 @@ export class Engine {
           this.orchestrator.cancel('escape');
         },
         onDictateDown: () => this.dictateDown(),
-        onDictateUp: () => this.orchestrator.keyUp(),
+        onDictateUp: () => {
+          if (this.keyTest) return this.post({ type: 'keyTest', down: false, key: 'dictate' });
+          this.orchestrator.keyUp();
+        },
       });
       this.hook = hook;
     } catch (e) {
@@ -317,7 +320,7 @@ export class Engine {
   }
 
   private keyDown(): void {
-    if (this.keyTest) return this.post({ type: 'keyTest', down: true });
+    if (this.keyTest) return this.post({ type: 'keyTest', down: true, key: 'talk' });
     if (this.pendingConfirm) {
       // Agent mode asked "press the key to allow": this press is the answer, not a new question.
       this.swallowUp = true;
@@ -341,7 +344,8 @@ export class Engine {
   }
 
   private dictateDown(): void {
-    if (this.keyTest || this.pendingConfirm) return;
+    if (this.keyTest) return this.post({ type: 'keyTest', down: true, key: 'dictate' });
+    if (this.pendingConfirm) return;
     const cfg = this.config;
     if (!cfg || cfg.settings.paused) return;
     // Releasing Alt on its own opens the menu bar in many apps; a no-op key while it's held stops that.

@@ -40,6 +40,10 @@ let cursor: { x: number; y: number } | null = null;
 let level = 0;
 /** While dictating, the companion sits beside the text caret instead of the pointer. */
 let anchor: OverlayAnchor = null;
+/** Another display shows the companion right now: this one stays empty. */
+let owner: number | null = null;
+/** Rotation while working, like the original Clicky; the tracing light rides on top. */
+let spinAngle = 0;
 /** Smoothed mic level for the pulse. */
 let pulseLevel = 0;
 
@@ -417,14 +421,23 @@ function frame(now: number): void {
   if (state === 'thinking' || state === 'transcribing') {
     spin += dt * (state === 'thinking' ? 0.0011 : 0.0007);
     trace = spin % 1;
+    // Spin while working, as the original does; when it settles again it eases back to its heading.
+    spinAngle += dt * (state === 'thinking' ? 0.0085 : 0.0055);
+    if (mode.kind === 'follow') heading = angle + spinAngle;
   } else {
     spin = 0;
+    spinAngle = 0;
   }
   pulseLevel += (Math.min(1, level * 1.6) - pulseLevel) * Math.min(1, dt / 90);
   if (state === 'listening') scale *= 1 + 0.08 * pulseLevel;
   if (state === 'speaking' && mode.kind === 'follow') scale *= 1 + 0.05 * Math.sin(now / 180);
 
   drawShapes(now);
+  // Only one companion on screen: hide here while another display is pointing or at the caret.
+  if (owner !== null && config.displayId !== undefined && owner !== config.displayId) {
+    visible = false;
+    pos = null;
+  }
   if (visible && pos) {
     if (state === 'listening' && mode.kind === 'follow') drawPulse(pos, now);
     drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1, trace);
@@ -490,6 +503,11 @@ window.clicky.onState((s) => {
 
 window.clicky.onPoint((p) => {
   startFlight({ x: p.x, y: p.y }, 'point', p.label);
+  kick();
+});
+
+window.clicky.onOwner((id) => {
+  owner = id;
   kick();
 });
 

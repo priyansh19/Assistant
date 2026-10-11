@@ -31,7 +31,14 @@ export function demoChat(): VisionChatProvider {
         const tidy = req.system.startsWith('You clean');
         const parts = tidy
           ? ['Today I have to ship three things:\n', '1. Skills\n2. Memory\n', '3. The dictation bug']
-          : ['Hi Sam,\n\n', 'Thanks so much for this, ', 'I really appreciate it. ', 'Quick question: what do you mainly use it for?', '\n\nBest,\nPriyansh', '\n[SAY:I wrote a short thank-you reply.]'];
+          : [
+              'Hi Sam,\n\n',
+              'Thanks so much for this, ',
+              'I really appreciate it. ',
+              'Quick question: what do you mainly use it for?',
+              '\n\nBest,\nPriyansh',
+              '\n[SAY:I wrote a short thank-you reply.]',
+            ];
         for (const p of parts) {
           await new Promise((r) => setTimeout(r, 150));
           if (req.signal.aborted) throw new Error('aborted');

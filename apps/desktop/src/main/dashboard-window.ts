@@ -187,8 +187,8 @@ export class DashboardWindow {
     handle(IPC.dashHoldKeyTest, (on) => {
       this.controller.setKeyTest(
         on
-          ? (down) => {
-              if (this.win && !this.win.isDestroyed()) this.win.webContents.send(IPC.dashHoldKey, down);
+          ? (down, key) => {
+              if (this.win && !this.win.isDestroyed()) this.win.webContents.send(IPC.dashHoldKey, down, key);
             }
           : null,
       );

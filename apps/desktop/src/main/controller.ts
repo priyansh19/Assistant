@@ -47,7 +47,7 @@ export class Controller {
   private readonly stateListeners = new Set<StateListener>();
   private current: { state: InteractionState; interactionId: string | null } = { state: 'idle', interactionId: null };
   /** While set (setup wizard "press your key"), key presses are reported here instead of asking. */
-  private keyTest: ((down: boolean) => void) | null = null;
+  private keyTest: ((down: boolean, key: 'talk' | 'dictate') => void) | null = null;
   private nextId = 1;
   private readonly asks = new Map<number, (r: AskResult | null) => void>();
   private readonly samples = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
@@ -144,7 +144,7 @@ export class Controller {
         this.overlays.anchor(null);
         return this.hooks.beforeListen?.();
       case 'keyTest':
-        return this.keyTest?.(msg.down);
+        return this.keyTest?.(msg.down, msg.key);
       case 'askResult': {
         const done = this.asks.get(msg.id);
         this.asks.delete(msg.id);
@@ -239,7 +239,7 @@ export class Controller {
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */
-  setKeyTest(fn: ((down: boolean) => void) | null): void {
+  setKeyTest(fn: ((down: boolean, key: 'talk' | 'dictate') => void) | null): void {
     this.keyTest = fn;
     this.engine.send({ type: 'keyTest', on: fn !== null });
   }

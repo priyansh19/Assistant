@@ -34,6 +34,8 @@ export interface OverlayConfig {
   paused: boolean;
   /** CSS pixels per physical centimetre on this overlay's display (set per window). */
   pxPerCm?: number;
+  /** This overlay's display, to compare with the owner (set per window). */
+  displayId?: number;
 }
 
 export type OverlayStateMsg = InteractionState;

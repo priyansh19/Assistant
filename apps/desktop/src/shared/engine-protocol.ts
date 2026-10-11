@@ -77,7 +77,7 @@ export type EngineToMain =
   | { type: 'needKeys' }
   /** A voice question started (main moves the dashboard out of the screenshot). */
   | { type: 'listening' }
-  | { type: 'keyTest'; down: boolean }
+  | { type: 'keyTest'; down: boolean; key: 'talk' | 'dictate' }
   | { type: 'askResult'; id: number; result: AskResult | null }
   | { type: 'speakSampleResult'; id: number; error?: string }
   | { type: 'capturePlan'; id: number; allDisplays: boolean }

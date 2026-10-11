@@ -24,6 +24,13 @@ export class OverlayManager implements OverlayPort {
   private lastCursor = '';
   private lastLevelAt = 0;
   private rebuildTimer: NodeJS.Timeout | null = null;
+  /**
+   * There is only ever one companion. While it points at something or sits at the text caret on one
+   * display, every other display hides its follower, even if the mouse moves there.
+   */
+  private owner: number | null = null;
+  private ownerTimer: NodeJS.Timeout | null = null;
+  private anchored = false;
 
   constructor(
     private readonly platform: Platform,
@@ -72,7 +79,7 @@ export class OverlayManager implements OverlayPort {
           ? this.widthsCm[0]
           : undefined;
     const pxPerCm = d && cm ? d.bounds.width / cm : 96 / 2.54;
-    return { ...this.config, pxPerCm };
+    return { ...this.config, pxPerCm, displayId };
   }
 
   // ---- OverlayPort
@@ -80,6 +87,21 @@ export class OverlayManager implements OverlayPort {
   state(state: InteractionState): void {
     this.current = state;
     this.broadcast(IPC.overlayState, state);
+    // A new question: the companion comes back to the pointer (unless it's sitting at the caret).
+    if (state === 'listening' && !this.anchored) this.setOwner(null);
+    // Mirrors the overlay: a point is let go a few seconds after the answer ends.
+    if ((state === 'idle' || state === 'cancelled' || state === 'error') && this.owner !== null && !this.anchored)
+      this.setOwner(this.owner, 3500);
+  }
+
+  private setOwner(displayId: number | null, releaseAfterMs?: number): void {
+    if (this.ownerTimer) clearTimeout(this.ownerTimer);
+    this.ownerTimer = null;
+    if (displayId !== null && releaseAfterMs !== undefined)
+      this.ownerTimer = setTimeout(() => this.setOwner(null), releaseAfterMs);
+    if (this.owner === displayId) return;
+    this.owner = displayId;
+    this.broadcast(IPC.overlayOwner, displayId);
   }
 
   point(target: MappedPoint, label: string): void {
@@ -88,11 +110,15 @@ export class OverlayManager implements OverlayPort {
     const win = this.windows.get(target.displayId);
     if (!display || !win || win.isDestroyed()) return;
     const p: OverlayPoint = { x: target.local.x, y: target.local.y, label };
+    // The pointing display owns the companion for as long as the overlay holds the point (≤ 12 s).
+    this.setOwner(target.displayId, 12500);
     win.webContents.send(IPC.overlayPoint, p);
   }
 
   /** Sit the companion beside the text caret (write mode), or go back to following the pointer. */
   anchor(caret: { displayId: number; x: number; y: number; height: number } | null): void {
+    this.anchored = caret !== null;
+    this.setOwner(caret ? caret.displayId : null);
     for (const [id, win] of this.windows) {
       if (win.isDestroyed()) continue;
       const a: OverlayAnchor =
@@ -182,10 +208,13 @@ export class OverlayManager implements OverlayPort {
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setIgnoreMouseEvents(true, { forward: true });
     win.setVisibleOnAllWorkspaces(true);
+    // Smoke tests run beside the user's own Clicky: keep their overlay invisible (it still renders).
+    if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0);
     this.platform.fitOverlayToDisplay(win, bounds);
     win.webContents.once('did-finish-load', () => {
       win.webContents.send(IPC.overlayConfig, this.configFor(display.id));
       win.webContents.send(IPC.overlayState, this.current);
+      win.webContents.send(IPC.overlayOwner, this.owner);
       this.lastCursor = '';
     });
     if (process.env['ELECTRON_RENDERER_URL']) {
