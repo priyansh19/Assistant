@@ -52,20 +52,41 @@ export class InputHost {
         }
         return d.click(p.x, p.y, action.button, action.count);
       }
+      case 'close': {
+        const want = action.title.toLowerCase().trim();
+        const list = await d.windows();
+        const w =
+          list.find((x) => x.title.toLowerCase() === want) ??
+          list.find((x) => x.title.toLowerCase().includes(want) || want.includes(x.title.toLowerCase()));
+        if (!w) throw new Error(`no open window is called "${action.title}"`);
+        return d.closeWindow(w.handle);
+      }
       case 'open': {
+        // Whatever opens is maximised once its window comes to the front (folders and files too).
+        const before = await d.foregroundHandle().catch(() => '0');
+        const maximize = (): void => void d.maximizeNew(before, 2500).catch(() => undefined);
         if (action.app) {
           const a = this.findApp(action.app);
-          if (a) return d.launch(a.id);
+          if (a) {
+            await d.launch(a.id);
+            return maximize();
+          }
           if (!action.url && !action.path) throw new Error(`"${action.app}" isn't installed on this PC.`);
         }
         // Websites open in the user's default browser (whatever Windows has set, e.g. Comet).
-        if (action.url) return shell.openExternal(action.url);
+        if (action.url) {
+          await shell.openExternal(action.url);
+          return maximize();
+        }
         if (action.path) {
           // A file no app opens (an .xlsx on a PC without Excel) would only bring up Windows'
           // "pick an app" box: show it selected in File Explorer instead.
           if (!opensWithAnApp(action.path)) return shell.showItemInFolder(action.path);
           // Explorer opened by shell.openPath often lands behind the window in front.
-          if (isFolder(action.path)) return d.openFolder(action.path);
+          if (isFolder(action.path)) {
+            await d.openFolder(action.path);
+            return maximize();
+          }
           const err = await shell.openPath(action.path);
           if (err) throw new Error(err);
         }
@@ -85,6 +106,12 @@ export class InputHost {
   }
 
   /** The app in front (never-touch check for agent mode). */
+  /** Open windows for the agent, front first: "Title — app". */
+  async windows(): Promise<string[]> {
+    const list = (await this.driver?.windows().catch(() => [])) ?? [];
+    return list.slice(0, 40).map((w) => `${w.title.slice(0, 120)} — ${w.process || 'app'}`);
+  }
+
   async foreground(): Promise<AppInfo | null> {
     return (await this.driver?.foreground().catch(() => null)) ?? null;
   }

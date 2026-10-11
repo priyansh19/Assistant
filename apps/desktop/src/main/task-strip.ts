@@ -3,12 +3,12 @@ import { BrowserWindow, ipcMain, screen } from 'electron';
 import type { StripState } from '../preload/strip';
 import { IPC } from '../shared/ipc';
 
-const WIDTH = 540;
-const HEIGHT = 48;
+const WIDTH = 600;
+const HEIGHT = 46;
 
 /**
  * A slim bar at the top of the screen while Clicky does a task: the goal, the current step, and
- * Pause / Stop / Allow. It's non-focusable, so clicking it never takes focus from the app Clicky
+ * Pause / Stop / Allow / Allow all. It's non-focusable, so clicking it never takes focus from the app Clicky
  * is working in.
  */
 export class TaskStrip {
@@ -16,10 +16,11 @@ export class TaskStrip {
   private state: StripState = { goal: '', step: 0, max: 0, say: '', ask: null, paused: false, color: '#2f8cff' };
   private hideTimer: NodeJS.Timeout | null = null;
 
-  constructor(handlers: { pause(on: boolean): void; stop(): void; allow(): void }) {
+  constructor(handlers: { pause(on: boolean): void; stop(): void; allow(): void; allowAll(on: boolean): void }) {
     ipcMain.on(IPC.stripPause, (_e, on: unknown) => handlers.pause(on === true));
     ipcMain.on(IPC.stripStop, () => handlers.stop());
     ipcMain.on(IPC.stripAllow, () => handlers.allow());
+    ipcMain.on(IPC.stripAllowAll, (_e, on: unknown) => handlers.allowAll(on === true));
   }
 
   update(patch: Partial<StripState>): void {

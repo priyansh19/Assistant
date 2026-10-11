@@ -121,6 +121,7 @@ export class EngineHost {
       post: (msg) => this.emit(msg),
       media: this.worker,
       createHoldKeyHook: (key, dictationKey) => this.platform.createHoldKeyHook(key, dictationKey),
+      recordKeys: (ms) => this.platform.recordKeys(ms),
     });
     for (const m of this.replay.values()) this.inproc.handle(m);
     for (const m of this.queued.splice(0)) this.inproc.handle(m);

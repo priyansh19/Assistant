@@ -4,7 +4,7 @@ import {
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
   isResting,
-  HOLD_KEY_LABELS,
+  holdKeyLabel,
   requiredCredentials,
   type AskResult,
   type CredentialId,
@@ -21,6 +21,7 @@ import { InputHost } from './input-host';
 import { PlaybookStore } from './playbook-store';
 import { SkillStore } from './skill-store';
 import { TaskStrip } from './task-strip';
+import { AllowOrb } from './allow-orb';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
 import { LessonStore } from './lesson-store';
@@ -81,7 +82,10 @@ export class Controller {
     pause: (on) => this.engine.send({ type: 'agent.pause', on }),
     stop: () => this.engine.send({ type: 'cancel', reason: 'stopped from the task strip' }),
     allow: () => this.engine.send({ type: 'agent.allow' }),
+    allowAll: (on) => this.engine.send({ type: 'agent.allowAll', on }),
   });
+  /** Shown while Allow all is on; hovering it offers Turn off. */
+  private readonly orb = new AllowOrb(() => this.engine.send({ type: 'agent.allowAll', on: false }));
 
   constructor(
     platform: Platform,
@@ -199,6 +203,12 @@ export class Controller {
         return this.hooks.beforeListen?.();
       case 'keyTest':
         return this.keyTest?.(msg.down, msg.key);
+      case 'keyRecorded': {
+        const done = this.keyRecorded;
+        this.keyRecorded = null;
+        done?.(msg.key);
+        return;
+      }
       case 'askResult': {
         const done = this.asks.get(msg.id);
         this.asks.delete(msg.id);
@@ -214,6 +224,7 @@ export class Controller {
       case 'capturePlan':
         // Keep Clicky's own notch out of the screenshot the model sees.
         this.strip.hideForCapture();
+        this.orb.hideForCapture();
         this.planner.plan(msg.allDisplays).then(
           (plan) => this.engine.send({ type: 'capturePlan.reply', id: msg.id, plan }),
           (e: unknown) =>
@@ -236,6 +247,9 @@ export class Controller {
           .writeContext()
           .catch(() => ({ app: null, selection: null }))
           .then((context) => this.engine.send({ type: 'writeContext.reply', id: msg.id, context }));
+        return;
+      case 'windows':
+        void this.input.windows().then((windows) => this.engine.send({ type: 'windows.reply', id: msg.id, windows }));
         return;
       case 'foreground':
         void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
@@ -266,6 +280,11 @@ export class Controller {
         if (msg.text) this.tasks.needsApproval(msg.text);
         if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
         return;
+      case 'allowAll':
+        if (msg.on) this.orb.show();
+        else this.orb.hide();
+        if (this.strip.visible || msg.on) this.strip.update({ allowAll: msg.on });
+        return;
       case 'agentPaused':
         this.strip.update({ paused: msg.on, pausedForUser: msg.on && msg.reason === 'user' });
         return;
@@ -290,7 +309,7 @@ export class Controller {
   }
 
   private holdKeyLabel(): string {
-    return HOLD_KEY_LABELS[this.settings.get().holdKey];
+    return holdKeyLabel(this.settings.get().holdKey);
   }
 
   get state(): InteractionState {
@@ -338,6 +357,17 @@ export class Controller {
   playCue(sound: 'soft' | 'bubble' | 'glass'): void {
     this.worker.send({ op: 'cue', kind: 'start', sound });
     setTimeout(() => this.worker.send({ op: 'cue', kind: 'end', sound }), 450);
+  }
+
+  private keyRecorded: ((key: string | null) => void) | null = null;
+
+  /** Settings "Record keys": the next key combination pressed, or null (Esc or nothing pressed). */
+  recordKeys(): Promise<string | null> {
+    this.keyRecorded?.(null);
+    return new Promise((resolve) => {
+      this.keyRecorded = resolve;
+      this.engine.send({ type: 'keyRecord' });
+    });
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */
@@ -410,6 +440,7 @@ export class Controller {
     this.skills.stop();
     this.engine.stop();
     this.strip.destroy();
+    this.orb.destroy();
     this.input.dispose();
   }
 }

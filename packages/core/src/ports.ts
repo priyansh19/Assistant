@@ -46,6 +46,8 @@ export type InputAction =
   | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2; target?: string }
   /** Open an installed app by name, a website (default browser) or a folder or file. */
   | { kind: 'open'; app?: string; url?: string; path?: string }
+  /** Close a top-level window by its title (the app may still ask to save). */
+  | { kind: 'close'; title: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
   | { kind: 'type'; text: string }
   /** Delete this many characters before the text cursor (undo of a write). */

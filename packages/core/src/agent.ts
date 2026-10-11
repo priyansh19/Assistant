@@ -32,6 +32,8 @@ export type AgentAction =
   | { type: 'note'; text: string; row: string[] | null; say: string; risky: boolean }
   /** Save a table as an .xlsx file; rows default to every noted row. */
   | { type: 'save_sheet'; name: string; columns: string[]; rows: string[][] | null; say: string; risky: boolean }
+  /** Close a window by its title (from the open-windows list); always asked unless Allow all is on. */
+  | { type: 'close_window'; title: string; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
 
 const cells = (v: unknown, max: number): string[] | null =>
@@ -223,6 +225,11 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
         },
       };
     }
+    case 'close_window': {
+      const title = str(o['title'] ?? o['window'], 200);
+      if (!title) return { ok: false, error: 'close_window needs the window title' };
+      return { ok: true, action: { type, title, say, risky: true } };
+    }
     case 'wait':
       return { ok: true, action: { type, ms: Math.max(200, Math.min(5000, num(o['ms']) ?? 1000)), say, risky } };
     case 'done':
@@ -258,6 +265,10 @@ Actions:
 - save_sheet: {"name":"LinkedIn jobs","columns":["Title","Company","Location"]} saves an Excel
   (.xlsx) file in Documents\\Clicky with every row you noted (or give "rows": [[…],[…]] yourself).
   The next step tells you where it was saved; open it with {"path": …} so the user sees it.
+- close_window: {"title":"…"} closes one window by its exact title from "Open windows". This is
+  the reliable way to close windows: use it once per window instead of hunting for X buttons. If
+  the app asks to save changes, choose "Cancel" (never "Don't save"), note the window as having
+  unsaved work and move on; tell the user about it at the end.
 - done: {"say":"..."} when the task is complete. "say" is one or two short spoken sentences with
   the result: what you found (numbers, names, titles) or what you did.
 - fail: {"say":"..."} when the task is impossible or unsafe; say why in one short sentence.
@@ -351,6 +362,12 @@ export interface AgentDeps {
   saveSheet?(name: string, columns: string[], rows: string[][]): Promise<string>;
   /** Tokens each step may spend thinking (default 1024). */
   thinkingTokens?: number;
+  /** The open windows, front first ("Title — app"), so the agent knows what's on screen. */
+  openWindows?(): Promise<string[]>;
+  /** What was said and done earlier in this conversation (recent questions, answers and tasks). */
+  conversation?: string;
+  /** Check the screen before accepting "done" (default true). */
+  verifyDone?: boolean;
   /** Progress for the step strip. */
   onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
 }
@@ -376,6 +393,8 @@ const STEP_FIRST_TOKEN_MS = 30_000;
 const STEP_TOTAL_MS = 60_000;
 /** A step whose model call failed (busy, timed out, cut off) is retried this many times. */
 const STEP_RETRIES = 2;
+/** Times a run may stop, review what went wrong and try a new approach before giving up. */
+export const MAX_RECOVERIES = 3;
 /** Notes and rows kept for the prompt (the newest win). */
 const MAX_NOTES = 60;
 const MAX_ROWS = 500;
@@ -449,8 +468,56 @@ function describe(a: AgentAction): string {
       return `noted ${a.row ? `row [${a.row.join(' | ')}]` : ''}${a.row && a.text ? ' and ' : ''}${a.text ? `"${a.text.slice(0, 80)}"` : ''}`;
     case 'save_sheet':
       return `saved the sheet "${a.name}"`;
+    case 'close_window':
+      return `closed the window "${a.title.slice(0, 80)}"`;
     default:
       return a.type;
+  }
+}
+
+const REFLECT_PROMPT = `You review an assistant that operates a Windows PC with the mouse and keyboard.
+Its run hit a problem. Using the task, its steps (with the ones that did not work marked) and the
+current screenshot, say in at most three short sentences: what went wrong, and exactly what it
+should do differently now (a different element, a keyboard shortcut, the open action, waiting for
+a page, closing a popup, going back a step). Plain text, no JSON.`;
+
+const VERIFY_PROMPT = `You check whether an assistant really finished a task on a Windows PC. Look at the
+screenshots, the steps it took and its notes. Reply with ONLY one JSON object:
+{"complete": true} if the task is fully done as asked, or
+{"complete": false, "missing": "what is not done yet, in one short sentence"}.
+Be strict about every part of the task, but don't ask for things the task didn't ask for.`;
+
+/** Reasons to give up that only the user can fix; the run doesn't retry these. */
+const NEEDS_USER = /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch/i;
+
+/** The final check before "done": what's still missing, or null if the task looks finished (or the check failed). */
+async function verify(
+  deps: AgentDeps,
+  goal: string,
+  steps: readonly string[],
+  notes: readonly string[],
+  claim: string,
+): Promise<string | null> {
+  try {
+    const screens = await deps.capture.take(deps.signal);
+    const reply = await ask(
+      deps,
+      VERIFY_PROMPT,
+      [
+        `Task: ${goal}`,
+        `Steps taken:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}`,
+        notes.length ? `Notes:\n${notes.join('\n')}` : '',
+        `The assistant says: ${claim}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      screens,
+    );
+    if (!/"complete"\s*:\s*false/i.test(reply)) return null;
+    return /"missing"\s*:\s*"([^"]{1,300})"/.exec(reply)?.[1] ?? 'part of the task is not done';
+  } catch (e) {
+    if (!deps.signal.aborted) deps.log?.(`agent final check failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
   }
 }
 
@@ -469,6 +536,53 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   const rows: string[][] = [];
   const checked: { step: string; ok: boolean | null }[] = [];
   const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
+  let recoveries = 0;
+  const reflections: string[] = [];
+  /**
+   * The run hit a problem: instead of giving up, look back at what was done and what's on screen,
+   * work out the mistake and continue with a different approach. False once out of attempts.
+   */
+  const recover = async (problem: string): Promise<boolean> => {
+    if (recoveries >= MAX_RECOVERIES || deps.signal.aborted) return false;
+    recoveries++;
+    deps.log?.(`agent recovering (${recoveries}/${MAX_RECOVERIES}): ${problem}`);
+    deps.onStep?.('Rethinking my approach');
+    let review = '';
+    try {
+      const screens = await deps.capture.take(deps.signal);
+      review = (
+        await ask(
+          deps,
+          REFLECT_PROMPT,
+          [
+            `Task: ${goal}`,
+            `What went wrong: ${problem}`,
+            reflections.length ? `Earlier reviews:\n${reflections.join('\n')}` : '',
+            `Steps so far, with checks:\n${checked
+              .map((c, n) => `${n + 1}. ${c.step}${c.ok === false ? ' (did not work)' : ''}`)
+              .join('\n')}`,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          screens,
+        )
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 600);
+    } catch (e) {
+      if (deps.signal.aborted) return false;
+      deps.log?.(`agent review failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    deps.log?.(`agent review: ${review || '(none)'}`);
+    reflections.push(`Attempt ${recoveries} hit a problem (${problem}).${review ? ` Review: ${review}` : ''}`);
+    failedChecks = 0;
+    repeats = 0;
+    lastSig = null;
+    scrolls = 0;
+    note = 'Start the new approach from your review now.';
+    return true;
+  };
   for (let i = 0; i < max;) {
     if (deps.signal.aborted) return stopped();
     await deps.whilePaused?.(deps.signal);
@@ -486,8 +600,16 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     }
     const screens = await deps.capture.take(deps.signal);
     if (deps.signal.aborted) return stopped();
+    const windows = await deps.openWindows?.().catch(() => []);
     const question = [
       `Task: ${goal}`,
+      deps.conversation
+        ? `Earlier in this conversation (use it for "it", "that", "again", "the same"):\n${deps.conversation}`
+        : '',
+      reflections.length
+        ? `Earlier attempts in this run went wrong. Do it differently this time:\n${reflections.join('\n')}`
+        : '',
+      windows?.length ? `Open windows (front first):\n${windows.map((w) => `- ${w}`).join('\n')}` : '',
       deps.skills ?? '',
       deps.hints ? `What worked before for similar tasks (use it if it fits):\n${deps.hints}` : '',
       notes.length ? `Your notes so far:\n${notes.map((n) => `- ${n}`).join('\n')}` : '',
@@ -539,6 +661,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       prev.ok = check === 'worked';
       deps.log?.(`agent check: "${prev.step}" ${check}`);
       failedChecks = check === 'failed' ? failedChecks + 1 : 0;
+      if (failedChecks >= MAX_FAILED_CHECKS && (await recover(`${failedChecks} steps in a row did not work`))) continue;
       if (failedChecks >= MAX_FAILED_CHECKS) {
         deps.log?.('agent stopped: several steps in a row did not work');
         return {
@@ -551,8 +674,10 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       }
     }
     const sig = actionSignature(a);
-    repeats = sig !== null && sig === lastSig ? repeats + 1 : 0;
+    // A step that worked resets the count: pressing the same key to close twenty windows is fine.
+    repeats = sig !== null && sig === lastSig && check !== 'worked' ? repeats + 1 : 0;
     lastSig = sig;
+    if (repeats >= 2 && (await recover(`the same step three times without effect: ${describe(a)}`))) continue;
     if (repeats >= 2) {
       deps.log?.(`agent stopped: the same step three times (${describe(a)})`);
       return {
@@ -565,10 +690,21 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       note =
         'You just did this same step and it did not change anything. If the task is done, reply done; otherwise try a different way, such as a keyboard shortcut.';
     if (a.type === 'done') {
+      // The final eval: look at the screen once more before telling the user it's done.
+      if ((deps.verifyDone ?? true) && steps.length >= 2) {
+        const missing = await verify(deps, goal, steps, notes, a.say);
+        if (missing && (await recover(`you said done, but the check found: ${missing}`))) continue;
+        if (missing) {
+          deps.log?.(`agent unfinished after ${steps.length} steps: ${missing}`);
+          return { outcome: 'failed', summary: `I couldn't finish: ${missing}`, steps, checked };
+        }
+      }
       deps.log?.(`agent done after ${steps.length} steps: ${a.say}`);
       return { outcome: 'done', summary: a.say, steps, checked };
     }
     if (a.type === 'fail') {
+      // Giving up is a last resort: unless the task needs the user (a sign-in, a password), think again first.
+      if (!NEEDS_USER.test(a.say) && (await recover(`you wanted to give up: ${a.say}`))) continue;
       deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
       return { outcome: 'failed', summary: a.say, steps, checked };
     }
@@ -641,6 +777,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         ...(a.url ? { url: a.url } : {}),
         ...(a.path ? { path: a.path } : {}),
       };
+    } else if (a.type === 'close_window') {
+      deps.overlay.message(say, 'info');
+      input = { kind: 'close', title: a.title };
     } else if (a.type === 'type') {
       deps.atCaret?.();
       deps.overlay.message(say, 'info');

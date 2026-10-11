@@ -23,6 +23,11 @@ export interface Platform {
   readonly name: 'win32' | 'darwin' | 'linux';
   /** Hook for the hold-to-talk key chosen in settings. */
   createHoldKeyHook(key: HoldKey, dictationKey?: HoldKey | null): HoldKeyHook;
+  /**
+   * Record the next key combination pressed (everything held before all keys are let go): its
+   * keycodes and a label like "Win + Alt". Null if nothing is pressed within the time limit.
+   */
+  recordKeys(timeoutMs: number): Promise<{ codes: number[]; label: string } | null>;
   /** Mouse and keyboard injection; null where the OS doesn't allow it. */
   createInputDriver(): InputDriver | null;
   /** Make a freshly created overlay window cover `bounds` exactly, working around OS quirks. */
@@ -53,6 +58,14 @@ export interface InputDriver {
   launch(id: string): Promise<void>;
   /** Open a folder in File Explorer and bring its window to the front. */
   openFolder(path: string): Promise<void>;
+  /** Visible top-level windows, front first. */
+  windows(): Promise<{ handle: string; title: string; process: string }[]>;
+  /** The window in front, as a handle for maximizeNew. */
+  foregroundHandle(): Promise<string>;
+  /** Wait up to `ms` for a different window to come to the front, then maximise it. */
+  maximizeNew(before: string, ms: number): Promise<void>;
+  /** Ask a window to close, as its X button would (the app may ask to save first). */
+  closeWindow(handle: string): Promise<void>;
   /** The text caret in physical screen pixels, when the app exposes it. */
   caret(): Promise<{ x: number; y: number; height: number } | null>;
   /** Press together and release in reverse, e.g. ['ctrl', 's']. 'mask' is a no-op key. */

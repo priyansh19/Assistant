@@ -32,6 +32,10 @@ const api = {
   runAction: (id: string) => invoke<undefined>('dash:action-run', id),
   openLink: (url: string) => invoke<undefined>('dash:open-link', url),
   holdKeyTest: (on: boolean) => invoke<undefined>('dash:hold-key-test', on),
+  /** Record the next key combination pressed (Win + Alt…); null on Esc or timeout. */
+  recordKeys: () => invoke<string | null>('dash:record-keys'),
+  /** Models installed in Ollama on this PC. */
+  localModels: () => invoke<string[]>('dash:local-models'),
   tryIt: () => invoke<TryResult | null>('dash:try-it'),
   diagnostics: () => invoke<string>('dash:diagnostics'),
   openLogs: () => invoke<undefined>('dash:open-logs'),

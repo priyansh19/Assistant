@@ -91,7 +91,10 @@ export interface OrchestratorDeps {
   /** Agent mode was asked for but isn't set up (off, or rules not accepted): open its setup. */
   agentNotReady?(): void;
   /** Extra agent hooks from the app: never-touch list, pause, user takeover, step strip. */
-  agentHooks?(): Pick<AgentDeps, 'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress' | 'saveSheet'>;
+  agentHooks?(): Pick<
+    AgentDeps,
+    'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress' | 'saveSheet' | 'openWindows'
+  >;
   /** Ask the user to allow an agent step. */
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
   /** Write mode: the app in front and any selected text, read at key-up. */
@@ -144,8 +147,12 @@ const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, an
 /** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
 export const MIC_TAIL_MS = 80;
 
-/** A key held longer than this is treated as a missed key-up (e.g. Windows switched desktops). */
-export const MAX_LISTEN_MS = 60_000;
+/**
+ * A key held longer than this is treated as a missed key-up (e.g. Windows switched desktops), and
+ * what was said so far is used. It was one minute and threw the words away, which dropped long
+ * prompts (2026-10-11).
+ */
+export const MAX_LISTEN_MS = 5 * 60_000;
 
 /** Recordings shorter than this have no question in them. */
 const MIN_AUDIO_S = 0.3;
@@ -271,8 +278,8 @@ export class Orchestrator {
     const { signal } = interaction;
     run.listenTimer = setTimeout(() => {
       if (this.run === run && this.machine.state === 'listening') {
-        this.deps.overlay.message('Stopped listening: the key was held for over a minute.', 'info');
-        this.cancel('key held too long');
+        this.deps.overlay.message('Listening stopped after five minutes; using what you said.', 'info');
+        this.keyUp();
       }
     }, MAX_LISTEN_MS);
 
@@ -359,6 +366,30 @@ export class Orchestrator {
     );
   }
 
+  /**
+   * How long to wait for the final transcript. On-device speech recognition only starts at key-up,
+   * so a long recording needs longer (about 0.3 s per second spoken on top of the usual budget).
+   */
+  private transcriptBudget(listen: ListenStage): number {
+    return this.timeouts.transcriptMs + Math.round(listen.recordedSeconds * 300);
+  }
+
+  /** Recent agent tasks in this session: what was asked, what was done and how it ended. */
+  private readonly recentRuns: { goal: string; outcome: string; summary: string; steps: string[]; at: number }[] = [];
+
+  /** Recent questions, answers and tasks (the last 20 minutes), for follow-ups in agent runs. */
+  private conversationText(run: Run): string {
+    const lines: string[] = [];
+    for (const t of run.history.slice(-8))
+      lines.push(`${t.role === 'user' ? 'User' : 'Clicky'}: ${t.text.replace(/\s+/g, ' ').slice(0, 300)}`);
+    const since = this.now() - 20 * 60_000;
+    for (const r of this.recentRuns.filter((x) => x.at >= since).reverse())
+      lines.push(
+        `Task "${r.goal.slice(0, 160)}" ${r.outcome}: ${r.summary.slice(0, 200)} Steps: ${r.steps.slice(-8).join('; ').slice(0, 500)}`,
+      );
+    return lines.join('\n');
+  }
+
   /** Hold-to-talk key released. */
   keyUp(): void {
     const run = this.run;
@@ -437,7 +468,7 @@ export class Orchestrator {
     }
     let transcript: string;
     try {
-      transcript = await listen.transcript(this.timeouts.transcriptMs);
+      transcript = await listen.transcript(this.transcriptBudget(listen));
     } catch (e) {
       spec?.discard();
       if (!signal.aborted) this.fail(run, e, 'stt');
@@ -688,7 +719,7 @@ export class Orchestrator {
       : Promise.resolve({ app: null, selection: null });
     let text: string;
     try {
-      text = (await listen.transcript(this.timeouts.transcriptMs)).trim();
+      text = (await listen.transcript(this.transcriptBudget(listen))).trim();
     } catch (e) {
       if (!signal.aborted) this.fail(run, e, 'stt');
       return;
@@ -912,10 +943,12 @@ export class Orchestrator {
       const hints = this.deps.agentHints?.(goal);
       const inventory = this.deps.inventory?.();
       const skills = this.deps.agentSkills?.(goal);
+      const conversation = this.conversationText(run);
       const briefing = this.deps.agentBriefing?.();
       result = await runAgent(goal, {
         ...(hints ? { hints } : {}),
         ...(skills ? { skills } : {}),
+        ...(conversation ? { conversation } : {}),
         ...(briefing ? { briefing } : {}),
         ...(inventory ? { inventory } : {}),
         chat: this.deps.agentChat?.() ?? chat,
@@ -938,6 +971,14 @@ export class Orchestrator {
     if (signal.aborted) return;
     this.deps.log?.(`agent ${result.outcome} after ${result.steps.length} steps`);
     this.deps.agentRunFinished?.(goal, result);
+    this.recentRuns.unshift({
+      goal,
+      outcome: result.outcome,
+      summary: result.summary,
+      steps: result.steps,
+      at: this.now(),
+    });
+    this.recentRuns.splice(5);
     run.answer = result.summary;
     const out = speech.create(signal);
     out.onFirstAudio(() => {

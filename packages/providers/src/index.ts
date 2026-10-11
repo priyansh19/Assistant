@@ -56,6 +56,8 @@ export function createChat(s: Settings, getKey: KeyLookup, fetchImpl?: FetchLike
   const model = s.chatModel || undefined;
   const extra = { ...(model ? { model } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) };
   if (s.chatProvider === 'anthropic') return new AnthropicChat({ apiKey: need(getKey, 'anthropic'), ...extra });
+  if (s.chatProvider === 'ollama')
+    return new OpenAICompatibleChat({ id: 'ollama', apiKey: 'ollama', base: `${s.ollamaUrl}/v1`, ...extra });
   return new OpenAICompatibleChat({ id: s.chatProvider, apiKey: need(getKey, s.chatProvider), ...extra });
 }
 

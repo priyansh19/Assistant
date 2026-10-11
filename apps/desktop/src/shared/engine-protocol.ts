@@ -67,6 +67,8 @@ export type MainToEngine =
   | { type: 'holdKey.stop' }
   /** Setup wizard "press your key": report presses instead of asking. */
   | { type: 'keyTest'; on: boolean }
+  /** Settings "Record keys": report the next combination pressed. */
+  | { type: 'keyRecord' }
   | { type: 'ask'; id: number; question: string; source: 'typed' | 'action' }
   | { type: 'cancel'; reason: string }
   | { type: 'speakSample'; id: number; text: string }
@@ -75,9 +77,12 @@ export type MainToEngine =
   | { type: 'input.reply'; id: number; error?: string }
   | { type: 'writeContext.reply'; id: number; context: WriteContext }
   | { type: 'foreground.reply'; id: number; app: AppInfo | null }
+  | { type: 'windows.reply'; id: number; windows: string[] }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }
+  /** The notch's Allow all switch (session only). */
+  | { type: 'agent.allowAll'; on: boolean }
   /** The media renderer died; a new port follows once it's back. */
   | { type: 'media.crashed' }
   | { type: 'shutdown' };
@@ -101,6 +106,7 @@ export type EngineToMain =
   /** A voice question started (main moves the dashboard out of the screenshot). */
   | { type: 'listening' }
   | { type: 'keyTest'; down: boolean; key: 'talk' | 'dictate' }
+  | { type: 'keyRecorded'; key: string | null }
   | { type: 'askResult'; id: number; result: AskResult | null }
   | { type: 'speakSampleResult'; id: number; error?: string }
   | { type: 'capturePlan'; id: number; allDisplays: boolean }
@@ -112,12 +118,14 @@ export type EngineToMain =
   | { type: 'caretAnchor' }
   /** The app in front (never-touch check before each agent step). */
   | { type: 'foreground'; id: number }
+  | { type: 'windows'; id: number }
   /** Agent mode was asked for but isn't set up: open its rules screen. */
   | { type: 'agentSetup' }
   /** Step strip: progress, a question waiting for Allow, or the end of the run. */
   | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
   | { type: 'agentAsk'; text: string | null }
   | { type: 'agentPaused'; on: boolean; reason?: 'user' }
+  | { type: 'allowAll'; on: boolean }
   /** Something learned about how the user writes (main stores it). */
   | { type: 'styleLearned'; context: StyleContext; notes: string[]; examples: string[] }
   /** An agent run finished well: remember what worked. */

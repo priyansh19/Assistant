@@ -7,7 +7,7 @@
 export const CREDENTIAL_IDS = ['anthropic', 'openrouter', 'openai', 'assemblyai', 'elevenlabs'] as const;
 export type CredentialId = (typeof CREDENTIAL_IDS)[number];
 
-export const CHAT_PROVIDERS = ['anthropic', 'openrouter', 'openai'] as const;
+export const CHAT_PROVIDERS = ['anthropic', 'openrouter', 'openai', 'ollama'] as const;
 export type ChatProviderId = (typeof CHAT_PROVIDERS)[number];
 
 /** 'model': the answer model listens to the recorded audio itself (e.g. Gemini via OpenRouter). */
@@ -25,9 +25,37 @@ export type TtsProviderId = (typeof TTS_PROVIDERS)[number];
 
 /** Keys that work well for hold-to-talk because they do nothing on their own. */
 export const HOLD_KEYS = ['RightCtrl', 'RightAlt', 'RightShift', 'CapsLock', 'F8', 'F9', 'F10'] as const;
-export type HoldKey = (typeof HOLD_KEYS)[number];
+export type PresetKey = (typeof HOLD_KEYS)[number];
+/**
+ * A key combination the user recorded in settings ("Win + Alt"): "combo:<keycode>+<keycode>=<label>",
+ * keycodes as the keyboard hook reports them. Held means every key in it is down.
+ */
+export type ComboKey = `combo:${string}`;
+export type HoldKey = PresetKey | ComboKey;
 
-export const HOLD_KEY_LABELS: Record<HoldKey, string> = {
+const COMBO = /^combo:(\d{1,5}(?:\+\d{1,5}){0,3})=(.{1,40})$/;
+
+export function isComboKey(k: unknown): k is ComboKey {
+  return typeof k === 'string' && COMBO.test(k);
+}
+
+/** The keycodes of a recorded combination. */
+export function comboKeycodes(k: ComboKey): number[] {
+  return (COMBO.exec(k)?.[1] ?? '').split('+').map(Number);
+}
+
+export function makeComboKey(codes: readonly number[], label: string): ComboKey {
+  return `combo:${[...new Set(codes)].slice(0, 4).join('+')}=${label.replace(/[\r\n=]/g, ' ').slice(0, 40)}`;
+}
+
+/** How to name the key in the UI and in spoken hints ("Right Ctrl", "Win + Alt"). */
+export function holdKeyLabel(k: HoldKey | 'off'): string {
+  if (k === 'off') return 'Off';
+  if (isComboKey(k)) return COMBO.exec(k)?.[2] ?? 'your key combination';
+  return HOLD_KEY_LABELS[k];
+}
+
+export const HOLD_KEY_LABELS: Record<PresetKey, string> = {
   RightCtrl: 'Right Ctrl',
   RightAlt: 'Right Alt',
   RightShift: 'Right Shift',
@@ -66,6 +94,10 @@ export interface Settings {
   chatProvider: ChatProviderId;
   /** Model id for the chat provider; empty means the provider's fast default. */
   chatModel: string;
+  /** The model for agent steps (OpenRouter id); empty uses the default, chosen for click accuracy. */
+  agentModel: string;
+  /** Where Ollama runs, for the local answer model. */
+  ollamaUrl: string;
   sttProvider: SttProviderId;
   ttsProvider: TtsProviderId;
   /** ElevenLabs voice id; empty means the default voice. */
@@ -143,6 +175,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   chatProvider: 'anthropic',
   chatModel: '',
+  agentModel: '',
+  ollamaUrl: 'http://localhost:11434',
   sttProvider: 'assemblyai',
   ttsProvider: 'elevenlabs',
   ttsVoice: '',
@@ -196,7 +230,8 @@ export function agentReady(s: Settings): boolean {
 
 /** Which credential each provider choice needs. `system` TTS needs none. */
 export function requiredCredentials(s: Settings): CredentialId[] {
-  const ids = new Set<CredentialId>([s.chatProvider]);
+  // Ollama runs on this PC and needs no key.
+  const ids = new Set<CredentialId>(s.chatProvider === 'ollama' ? [] : [s.chatProvider]);
   if (s.sttProvider !== 'model' && s.sttProvider !== 'local') ids.add(s.sttProvider);
   if (s.ttsProvider !== 'system' && s.ttsProvider !== 'local') ids.add(s.ttsProvider);
   return [...ids];
@@ -216,8 +251,12 @@ function shortString(value: unknown, fallback: string, max = 200): string {
 
 export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTINGS): Settings {
   const o = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
-  const holdKey = oneOf(HOLD_KEYS, o['holdKey'], base.holdKey);
-  const dictation = oneOf<DictationKey>([...HOLD_KEYS, 'off'], o['dictationKey'], base.dictationKey);
+  const holdKey: HoldKey = isComboKey(o['holdKey'])
+    ? o['holdKey']
+    : oneOf<HoldKey>(HOLD_KEYS, o['holdKey'], base.holdKey);
+  const dictation: DictationKey = isComboKey(o['dictationKey'])
+    ? o['dictationKey']
+    : oneOf<DictationKey>([...HOLD_KEYS, 'off'], o['dictationKey'], base.dictationKey);
   const edge =
     typeof o['captureMaxEdge'] === 'number' && Number.isFinite(o['captureMaxEdge'])
       ? o['captureMaxEdge']
@@ -225,6 +264,10 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
   return {
     chatProvider: oneOf(CHAT_PROVIDERS, o['chatProvider'], base.chatProvider),
     chatModel: shortString(o['chatModel'], base.chatModel),
+    agentModel: shortString(o['agentModel'], base.agentModel),
+    ollamaUrl: /^https?:\/\/[^\s]+$/.test(String(o['ollamaUrl'] ?? ''))
+      ? String(o['ollamaUrl']).replace(/\/+$/, '')
+      : base.ollamaUrl,
     sttProvider: oneOf(STT_PROVIDERS, o['sttProvider'], base.sttProvider),
     ttsProvider: oneOf(TTS_PROVIDERS, o['ttsProvider'], base.ttsProvider),
     ttsVoice: shortString(o['ttsVoice'], base.ttsVoice),

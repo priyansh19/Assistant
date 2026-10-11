@@ -1,5 +1,5 @@
 import { app, Notification } from 'electron';
-import { HOLD_KEY_LABELS, type Settings } from '@clicky/core';
+import { holdKeyLabel, type Settings } from '@clicky/core';
 import type { OverlayConfig } from '../shared/overlay-protocol';
 import { getPlatform } from '../platform';
 import { Controller } from './controller';
@@ -50,7 +50,7 @@ if (!app.requestSingleInstanceLock()) {
 
     tray = new AppTray({
       openDashboard: (page) => dashboard.open(page),
-      holdKeyLabel: () => HOLD_KEY_LABELS[settings.get().holdKey],
+      holdKeyLabel: () => holdKeyLabel(settings.get().holdKey),
       paused: () => settings.get().paused,
       setPaused: (paused) => settings.update({ paused }),
       actions: () => history.listActions(),
@@ -96,7 +96,7 @@ if (!app.requestSingleInstanceLock()) {
     } else if (Notification.isSupported()) {
       new Notification({
         title: 'Clicky is ready',
-        body: `Hold ${HOLD_KEY_LABELS[settings.get().holdKey]} and ask about anything on your screen.`,
+        body: `Hold ${holdKeyLabel(settings.get().holdKey)} and ask about anything on your screen.`,
         silent: true,
       }).show();
     }

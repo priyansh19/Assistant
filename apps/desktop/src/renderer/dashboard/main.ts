@@ -1,7 +1,8 @@
 import {
   CURSOR_COLOR_HEX,
   CURSOR_COLORS,
-  HOLD_KEY_LABELS,
+  holdKeyLabel,
+  isComboKey,
   HOLD_KEYS,
   actionNameFrom,
   requiredCredentials,
@@ -214,6 +215,19 @@ function renderControls(s: Settings): void {
   const check = (id: string, v: boolean): void => {
     $<HTMLInputElement>(id).checked = v;
   };
+  // A recorded combination (Win + Alt…) gets its own entry in the list.
+  for (const [id, k] of [
+    ['holdKey', s.holdKey],
+    ['dictationKey', s.dictationKey],
+  ] as const) {
+    const sel = $<HTMLSelectElement>(id);
+    for (const o of [...sel.options]) if (o.dataset['combo'] && o.value !== k) o.remove();
+    if (isComboKey(k) && ![...sel.options].some((o) => o.value === k)) {
+      const o = new Option(holdKeyLabel(k), k);
+      o.dataset['combo'] = '1';
+      sel.add(o);
+    }
+  }
   set('holdKey', s.holdKey);
   set('profileName', s.profileName);
   set('profileSignOff', s.profileSignOff);
@@ -225,7 +239,7 @@ function renderControls(s: Settings): void {
   renderLearned();
   set('cueSound', s.cueSound);
   renderVoicePicker(s);
-  const dk = s.dictationKey === 'off' ? 'your dictation key' : HOLD_KEY_LABELS[s.dictationKey];
+  const dk = s.dictationKey === 'off' ? 'your dictation key' : holdKeyLabel(s.dictationKey);
   for (const e of document.querySelectorAll('.dict-key')) e.textContent = dk;
   set('dictationKey', s.dictationKey);
   check('agentEnabled', s.agentEnabled);
@@ -374,7 +388,7 @@ function renderHome(): void {
   const title = $('status-title');
   const desc = $('status-desc');
   const action = $<HTMLButtonElement>('status-action');
-  const key = HOLD_KEY_LABELS[s.holdKey];
+  const key = holdKeyLabel(s.holdKey);
   card.className = 'card hero';
   action.hidden = true;
   action.onclick = null;
@@ -398,7 +412,7 @@ function renderHome(): void {
     card.classList.add('ok');
     title.textContent = 'Ready';
     const tips = [`Hold ${key}, ask about anything on your screen, and let go.`];
-    if (s.dictationKey !== 'off') tips.push(`Hold ${HOLD_KEY_LABELS[s.dictationKey]} to dictate into any app.`);
+    if (s.dictationKey !== 'off') tips.push(`Hold ${holdKeyLabel(s.dictationKey)} to dictate into any app.`);
     if (s.agentEnabled) tips.push('Say "Clickey, …" to have it do the task for you.');
     desc.textContent = tips.join(' ');
   }
@@ -902,7 +916,7 @@ api.onHoldKey((down, which) => {
     if (!d || snap.settings.dictationKey === 'off') return;
     d.className = 'detected';
     d.textContent = down
-      ? `✓ ${HOLD_KEY_LABELS[snap.settings.dictationKey]} detected. Let go…`
+      ? `✓ ${holdKeyLabel(snap.settings.dictationKey)} detected. Let go…`
       : '✓ Works. Hold it in any text box to write.';
     return;
   }
@@ -911,7 +925,7 @@ api.onHoldKey((down, which) => {
   if (!target) return;
   target.className = 'detected';
   target.textContent = down
-    ? `✓ ${HOLD_KEY_LABELS[snap.settings.holdKey]} detected. Let go…`
+    ? `✓ ${holdKeyLabel(snap.settings.holdKey)} detected. Let go…`
     : '✓ Works. When you use Clicky, talk while holding it.';
 });
 
@@ -937,7 +951,7 @@ function renderWizard(): void {
   if ($('wizard').hidden) return;
   const body = $('wizard-body');
   const s = snap.settings;
-  const key = HOLD_KEY_LABELS[s.holdKey];
+  const key = holdKeyLabel(s.holdKey);
   $('wizard-steps').replaceChildren(...STEPS.map((_, i) => el('span', { className: i <= step ? 'done' : '' })));
   $('wizard-progress').textContent = `Step ${step + 1} of ${STEPS.length}`;
   const back = $<HTMLButtonElement>('wizard-back');
@@ -1061,7 +1075,7 @@ function renderWizard(): void {
   } else if (name === 'key') {
     const sel = el('select');
     sel.setAttribute('aria-label', 'Hold-to-talk key');
-    for (const k of HOLD_KEYS) sel.add(new Option(HOLD_KEY_LABELS[k], k));
+    for (const k of HOLD_KEYS) sel.add(new Option(holdKeyLabel(k), k));
     sel.value = s.holdKey;
     sel.addEventListener(
       'change',
@@ -1078,7 +1092,7 @@ function renderWizard(): void {
       if (d && d.className !== 'detected')
         d.textContent = `Nothing yet. Some laptops have no ${key}; pick another key, such as Right Shift.`;
     }, 8000);
-    const dk = s.dictationKey === 'off' ? null : HOLD_KEY_LABELS[s.dictationKey];
+    const dk = s.dictationKey === 'off' ? null : holdKeyLabel(s.dictationKey);
     const dictRow = dk
       ? el('div', { className: 'row' }, [
           el('div', { className: 'label' }, [
@@ -1139,7 +1153,7 @@ function renderWizard(): void {
     body.replaceChildren(
       h1('Three quick questions'),
       el('p', {
-        text: `So Clicky writes like you. Type, or click a box and hold ${s.dictationKey === 'off' ? 'your write key' : HOLD_KEY_LABELS[s.dictationKey]} to say it. You can change this later in Writes like me.`,
+        text: `So Clicky writes like you. Type, or click a box and hold ${s.dictationKey === 'off' ? 'your write key' : holdKeyLabel(s.dictationKey)} to say it. You can change this later in Writes like me.`,
       }),
       card,
       suggested,
@@ -1362,11 +1376,52 @@ function price(m: ModelOption): string {
   return m.per1000 < 0.01 ? 'under $0.01 per 1,000 answers' : `about ${m.per1000.toFixed(2)} per 1,000 answers`;
 }
 
+let localModels: string[] = [];
+let lastAgentModelKey = '';
+
+/** The agent's own model (OpenRouter only): the recommended one, or any model that sees screenshots. */
+function renderAgentModelPick(s: Settings): void {
+  const row = $('agentModelRow');
+  row.hidden = s.chatProvider !== 'openrouter';
+  if (row.hidden) return;
+  const pick = $<HTMLSelectElement>('agentModelPick');
+  const key = JSON.stringify([s.agentModel, modelOptions.length]);
+  if (key === lastAgentModelKey || document.activeElement === pick) return;
+  lastAgentModelKey = key;
+  pick.replaceChildren(
+    new Option('Recommended: Claude Haiku 5.5 (accurate clicks, cheap)', ''),
+    ...modelOptions.slice(0, 120).map((m) => new Option(`${m.name} — ${price(m)}`, m.id)),
+  );
+  if (s.agentModel && !modelOptions.some((m) => m.id === s.agentModel))
+    pick.add(new Option(s.agentModel, s.agentModel), 1);
+  pick.value = s.agentModel;
+}
+
 /** OpenRouter: a picker of models that can see the screen. Other providers keep the text field. */
 function renderModelPick(s: Settings): void {
   const pick = $<HTMLSelectElement>('chatModelPick');
   const custom = $<HTMLInputElement>('chatModel');
   const openRouter = s.chatProvider === 'openrouter';
+  renderAgentModelPick(s);
+  if (s.chatProvider === 'ollama') {
+    // The models installed in Ollama on this PC.
+    pick.hidden = false;
+    custom.hidden = true;
+    const key = JSON.stringify(['ollama', s.chatModel, localModels]);
+    if (key === lastModelKey || document.activeElement === pick) return;
+    lastModelKey = key;
+    pick.replaceChildren(
+      new Option(
+        localModels.length ? 'Recommended: qwen3-vl:4b (sees the screen)' : 'Ollama is not running on this PC',
+        '',
+      ),
+      ...localModels.map((m) => new Option(m, m)),
+      new Option('Type a model name…', '__custom'),
+    );
+    if (s.chatModel && !localModels.includes(s.chatModel)) pick.add(new Option(s.chatModel, s.chatModel), 1);
+    pick.value = s.chatModel;
+    return;
+  }
   pick.hidden = !openRouter;
   if (!openRouter) {
     custom.hidden = false;
@@ -1613,10 +1668,10 @@ async function refresh(): Promise<void> {
 
 async function init(): Promise<void> {
   const holdKey = $<HTMLSelectElement>('holdKey');
-  for (const k of HOLD_KEYS) holdKey.add(new Option(HOLD_KEY_LABELS[k], k));
+  for (const k of HOLD_KEYS) holdKey.add(new Option(holdKeyLabel(k), k));
   const dictationKey = $<HTMLSelectElement>('dictationKey');
   dictationKey.add(new Option('Off', 'off'));
-  for (const k of HOLD_KEYS) dictationKey.add(new Option(HOLD_KEY_LABELS[k], k));
+  for (const k of HOLD_KEYS) dictationKey.add(new Option(holdKeyLabel(k), k));
   const swatches = $('swatches');
   for (const c of CURSOR_COLORS) {
     const sw = el('button', { className: 'swatch', title: c });
@@ -1638,6 +1693,25 @@ async function init(): Promise<void> {
   });
 
   bindSelect('holdKey');
+  for (const which of ['holdKey', 'dictationKey'] as const) {
+    const btn = $<HTMLButtonElement>(`${which}Record`);
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = 'Press your keys…';
+      void api.recordKeys().then(async (key) => {
+        btn.disabled = false;
+        btn.textContent = 'Record keys';
+        if (!key) return;
+        const other = which === 'holdKey' ? snap.settings.dictationKey : snap.settings.holdKey;
+        if (key === other) {
+          btn.textContent = 'Already used';
+          setTimeout(() => (btn.textContent = 'Record keys'), 1800);
+          return;
+        }
+        await save({ [which]: key } as Partial<Settings>);
+      });
+    });
+  }
   bindText('profileName');
   bindText('profileSignOff');
   bindText('profileTone');
@@ -1721,7 +1795,16 @@ async function init(): Promise<void> {
   void api.models().then((m) => {
     modelOptions = m;
     lastModelKey = '';
+    lastAgentModelKey = '';
     renderModelPick(snap.settings);
+  });
+  void api.localModels().then((m) => {
+    localModels = m;
+    lastModelKey = '';
+    renderModelPick(snap.settings);
+  });
+  $<HTMLSelectElement>('agentModelPick').addEventListener('change', (e) => {
+    void save({ agentModel: (e.target as HTMLSelectElement).value });
   });
   bindSelect('sttProvider');
   bindSelect('ttsProvider');

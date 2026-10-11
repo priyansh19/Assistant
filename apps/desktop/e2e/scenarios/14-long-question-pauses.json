@@ -1,0 +1,17 @@
+{
+  "name": "Long question with pauses (about 30 s, real time)",
+  "key": "talk",
+  "realtime": true,
+  "pauseMs": 1800,
+  "say": "I want to ask you something about what is on my screen right now.",
+  "segments": [
+    "I want to ask you something about what is on my screen right now.",
+    "I have been working on this for a while, and I keep losing track of where things are.",
+    "So first, tell me which app is in front.",
+    "And then, after that, tell me where the close button is, and point at it for me please."
+  ],
+  "expect": {
+    "heard": ["what is on my screen", "losing track", "which app", "close button"],
+    "answered": true
+  }
+}

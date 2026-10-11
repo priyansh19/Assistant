@@ -1,0 +1,17 @@
+{
+  "name": "Long dictation with pauses (about 35 s)",
+  "key": "dictate",
+  "realtime": true,
+  "pauseMs": 1800,
+  "say": "long dictation",
+  "segments": [
+    "Hi Sam, thanks for sending the report over this morning.",
+    "I read through the first half and the numbers look right to me.",
+    "The only thing I would change is the chart on page four, because the colors are hard to tell apart.",
+    "Could you also add last quarter for comparison?",
+    "Let us talk about it on Thursday after lunch."
+  ],
+  "expect": {
+    "typed": ["thanks for sending", "numbers look right", "page", "last quarter", "thursday after lunch"]
+  }
+}

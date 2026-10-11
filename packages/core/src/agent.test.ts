@@ -297,3 +297,59 @@ describe('long tasks: notes and sheets', () => {
     expect(f.questions[0]).toContain('Skill "GitHub"');
   });
 });
+
+describe('recovering within the run', () => {
+  it('reviews and keeps going instead of stopping after failed steps', async () => {
+    const fail = (n: number) => `{"action":"key","keys":"f${n}","check":"failed"}`;
+    const f = fakes([
+      '{"action":"key","keys":"f1"}',
+      fail(2),
+      fail(3),
+      fail(4),
+      fail(5), // fourth failed check: the run reviews itself instead of stopping
+      'Clicked the wrong thing. Use the open action instead.', // the review
+      '{"action":"open","url":"https://example.com","check":"failed"}',
+      '{"action":"done","say":"Opened it.","check":"worked"}',
+      '{"complete": true}',
+    ]);
+    const r = await runAgent('open example', f.deps);
+    expect(r.outcome).toBe('done');
+    expect(f.questions.some((q) => q.includes('Use the open action instead'))).toBe(true);
+  });
+
+  it('does not accept done until the final check agrees', async () => {
+    const f = fakes([
+      '{"action":"key","keys":"ctrl+s"}',
+      '{"action":"key","keys":"enter","check":"worked"}',
+      '{"action":"done","say":"Saved.","check":"worked"}',
+      '{"complete": false, "missing": "the file name was never typed"}',
+      'Type the file name before pressing enter.',
+      '{"action":"type","text":"notes.txt"}',
+      '{"action":"done","say":"Saved as notes.txt.","check":"worked"}',
+      '{"complete": true}',
+    ]);
+    const r = await runAgent('save as notes.txt', f.deps);
+    expect(r.outcome).toBe('done');
+    expect(r.summary).toBe('Saved as notes.txt.');
+    expect(f.inputs.some((i) => i.kind === 'type')).toBe(true);
+  });
+
+  it('repeats a step freely while it keeps working (closing many windows)', async () => {
+    const f = fakes([
+      ...Array.from({ length: 5 }, () => '{"action":"key","keys":"alt+f4","check":"worked"}'),
+      '{"action":"done","say":"All closed.","check":"worked"}',
+      '{"complete": true}',
+    ]);
+    const r = await runAgent('close all windows', f.deps);
+    expect(r.outcome).toBe('done');
+    expect(f.inputs.filter((i) => i.kind === 'keys')).toHaveLength(5);
+  });
+
+  it('closes windows by title and always asks first', async () => {
+    const f = fakes(['{"action":"close_window","title":"Untitled - Notepad","say":"Closing Notepad"}']);
+    await runAgent('close notepad', { ...f.deps, openWindows: async () => ['Untitled - Notepad — notepad'] });
+    expect(f.confirms).toEqual(['Closing Notepad']);
+    expect(f.inputs).toEqual([{ kind: 'close', title: 'Untitled - Notepad' }]);
+    expect(f.questions[0]).toContain('Open windows (front first):\n- Untitled - Notepad — notepad');
+  });
+});

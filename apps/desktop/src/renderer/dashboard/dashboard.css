@@ -1180,3 +1180,10 @@ input:focus {
 #task-hint {
   padding: 0 16px 12px;
 }
+
+/* A key picker: the preset list plus Record keys for any combination. */
+.keypick {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

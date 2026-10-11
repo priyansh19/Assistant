@@ -308,7 +308,17 @@
               <div class="title">Hold-to-talk key</div>
               <div class="desc">Hold it, ask your question, let go. Esc stops an answer.</div>
             </div>
-            <select id="holdKey"></select>
+            <div class="keypick">
+              <select id="holdKey"></select>
+              <button
+                class="secondary small"
+                id="holdKeyRecord"
+                type="button"
+                title="Press any key combination, like Win + Alt"
+              >
+                Record keys
+              </button>
+            </div>
           </div>
           <div class="row">
             <div class="label">
@@ -317,7 +327,17 @@
                 Hold it and talk: your words are typed wherever the text cursor is. Nothing is saved.
               </div>
             </div>
-            <select id="dictationKey"></select>
+            <div class="keypick">
+              <select id="dictationKey"></select>
+              <button
+                class="secondary small"
+                id="dictationKeyRecord"
+                type="button"
+                title="Press any key combination, like Win + Alt"
+              >
+                Record keys
+              </button>
+            </div>
           </div>
           <div class="row">
             <div class="label">
@@ -483,6 +503,7 @@
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openrouter">OpenRouter</option>
               <option value="openai">OpenAI</option>
+              <option value="ollama">On this PC (Ollama)</option>
             </select>
           </div>
           <div class="row">
@@ -494,6 +515,13 @@
               <select id="chatModelPick" aria-label="Model"></select>
               <input type="text" id="chatModel" spellcheck="false" autocomplete="off" hidden />
             </div>
+          </div>
+          <div class="row" id="agentModelRow">
+            <div class="label">
+              <div class="title">Agent model</div>
+              <div class="desc">Does tasks for you (clicks and typing). Needs good aim on the screen.</div>
+            </div>
+            <select id="agentModelPick" aria-label="Agent model"></select>
           </div>
         </div>
         <div class="card">

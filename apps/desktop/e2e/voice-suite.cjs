@@ -47,7 +47,8 @@ const settingsFile = path.join(userData, 'settings.json');
 const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
 Object.assign(settings, {
   onboardingDone: true,
-  sttProvider: 'local',
+  // --stt assemblyai uses the cloud service (the user's live setup) instead of on-device Moonshine.
+  sttProvider: arg('--stt') ?? 'local',
   localSttModel: 'moonshine-tiny',
   ttsProvider: 'system',
   agentEnabled: true,
@@ -235,14 +236,19 @@ app.whenReady().then(async () => {
       return s;
     };
     let pcm = new Int16Array(0);
+    let realtime = false;
     engine.orchestrator.deps.mic = {
       async start(onFrame) {
         // Feed the prompt as 20 ms frames, a little faster than real time.
         const frame = 320;
+        const t0 = Date.now();
         (async () => {
           for (let i = 0; i < pcm.length; i += frame) {
             onFrame(pcm.subarray(i, i + frame));
-            if ((i / frame) % 10 === 0) await wait(10);
+            // Real time by the wall clock (timers on Windows tick every ~16 ms, so sleeping 20 ms per
+            // frame would fall behind and the key would be released before the speech ends).
+            if (realtime) while ((i + frame) / 16 > Date.now() - t0) await wait(5);
+            else if ((i / frame) % 10 === 0) await wait(10);
           }
         })();
       },
@@ -282,11 +288,20 @@ app.whenReady().then(async () => {
         void engine.orchestrator.ask(sc.say, 'typed');
         await wait(500);
       } else {
-        const tts = await local.synthesize(voice, sc.say, 1);
-        pcm = toMic(tts.pcm, tts.sampleRate, sc.noise);
+        // Long prompts: several sentences with real pauses between them, spoken in real time.
+        const parts = [];
+        for (const seg of sc.segments ?? [sc.say]) {
+          const tts = await local.synthesize(voice, seg, 1);
+          parts.push(toMic(tts.pcm, tts.sampleRate, sc.noise), new Int16Array(Math.round(16 * (sc.pauseMs ?? 0))));
+        }
+        pcm = new Int16Array(parts.reduce((n, x) => n + x.length, 0));
+        parts.reduce((at, x) => (pcm.set(x, at), at + x.length), 0);
+        realtime = !!sc.realtime;
+        log(`audio ${(pcm.length / 16000).toFixed(1)} s`);
+        if (process.env.CLICKY_DUMP_PCM) fs.writeFileSync(process.env.CLICKY_DUMP_PCM, Buffer.from(pcm.buffer));
         if (sc.key === 'dictate') engine.dictateDown();
         else engine.keyDown();
-        await wait((pcm.length / 16000) * 1000 * 0.6 + 400);
+        await wait((pcm.length / 16000) * 1000 * (realtime ? 1 : 0.6) + 400);
         engine.orchestrator.keyUp();
       }
       // Wait for the interaction (and any agent run) to finish.

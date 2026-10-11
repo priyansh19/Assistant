@@ -23,7 +23,7 @@ import type { Controller } from './controller';
 import type { CredentialStore } from './credential-store';
 import type { HistoryStore } from './history-store';
 import { log, redact } from './log';
-import { openRouterModels } from './model-catalog';
+import { ollamaModels, openRouterModels } from './model-catalog';
 import type { SettingsStore } from './settings-store';
 import { STT_MODELS, VOICES } from '../engine/local-speech/catalog';
 import { openWhisprRunning } from '../engine/local-speech/providers';
@@ -201,6 +201,7 @@ export class DashboardWindow {
           : null,
       );
     });
+    handle(IPC.dashRecordKeys, () => this.controller.recordKeys());
     handle(IPC.dashDiagnostics, () => this.diagnostics());
     handle(IPC.dashLocalDownload, async (id): Promise<TestResult> => {
       if (typeof id !== 'string') return { ok: false, message: 'Unknown model.' };
@@ -234,6 +235,7 @@ export class DashboardWindow {
       if (sound === 'soft' || sound === 'bubble' || sound === 'glass') this.controller.playCue(sound);
     });
     handle(IPC.dashModels, () => openRouterModels());
+    handle(IPC.dashLocalModels, () => ollamaModels(this.settings.get().ollamaUrl));
     handle(IPC.dashNoteRemove, (i) => {
       if (typeof i === 'number') this.controller.lessons.forget(i);
       return this.snapshot();

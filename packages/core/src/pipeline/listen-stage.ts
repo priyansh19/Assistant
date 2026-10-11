@@ -35,6 +35,12 @@ export class ListenStage {
   partial = '';
   /** When `partial` last changed. */
   partialAt = 0;
+  private samples = 0;
+
+  /** Seconds of audio recorded so far. */
+  get recordedSeconds(): number {
+    return this.samples / 16000;
+  }
 
   constructor(private readonly opts: ListenStageOptions) {
     const { signal } = opts;
@@ -42,6 +48,7 @@ export class ListenStage {
       .start(
         (frame) => {
           if (signal.aborted) return;
+          this.samples += frame.length;
           if (this.ready) this.ready.pushAudio(frame);
           else this.frames.push(frame);
         },

@@ -117,6 +117,53 @@ public static class ClickyInput {
     }
     return false;
   }
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int value, int size);
+  // The windows a person would call open: visible, titled, not tool windows, not hidden (cloaked)
+  // Store app frames. EnumWindows goes front to back. One line each: handle, process, title.
+  public static string Windows() {
+    var sb = new System.Text.StringBuilder();
+    EnumWindows((h, l) => {
+      if (!IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;
+      if ((GetWindowLong(h, -20) & 0x80) != 0) return true;
+      int cloaked; if (DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+      var t = new System.Text.StringBuilder(512); GetWindowText(h, t, 512);
+      var title = t.ToString();
+      if (title.Length == 0 || title == "Program Manager") return true;
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      string name = "";
+      try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { }
+      if (name == "clicky") return true;
+      sb.Append(h.ToInt64()).Append(' ').Append(B64(name)).Append(' ').Append(B64(title)).Append(';');
+      return true;
+    }, IntPtr.Zero);
+    return sb.ToString();
+  }
+  // After Clicky opens something: wait for a new window to come to the front, then maximise it so
+  // the app fills the screen like the user expects (and the screenshots show all of it).
+  public static string MaximizeNew(long before, int ms) {
+    var end = DateTime.Now.AddMilliseconds(ms);
+    while (DateTime.Now < end) {
+      IntPtr h = GetForegroundWindow();
+      if (h != IntPtr.Zero && h.ToInt64() != before) {
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        string name = "";
+        try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { }
+        if (name != "clicky" && name != "explorer" || GetWindowTextLength(h) > 0) {
+          if (name == "clicky") { Thread.Sleep(100); continue; }
+          ShowWindow(h, 3);
+          return name;
+        }
+      }
+      Thread.Sleep(100);
+    }
+    return "";
+  }
+  public static long ForegroundHandle() { return GetForegroundWindow().ToInt64(); }
+  [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+  public static void CloseWindow(long h) { PostMessage(new IntPtr(h), 0x0010, IntPtr.Zero, IntPtr.Zero); }
   public static string Foreground() {
     IntPtr h = GetForegroundWindow();
     if (h == IntPtr.Zero) return "";
@@ -243,6 +290,10 @@ while ($true) {
       'locate' { $out = [ClickyInput]::Locate([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4]) }
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
       'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
+      'windows' { $out = [ClickyInput]::Windows() }
+      'fgh'     { $out = [ClickyInput]::ForegroundHandle() }
+      'maxnew'  { $out = [ClickyInput]::MaximizeNew([long]$p[2], [int]$p[3]) }
+      'closewin' { [ClickyInput]::CloseWindow([long]$p[2]) }
       'folder' {
         $path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))
         [ClickyInput]::Grant()
@@ -413,6 +464,20 @@ export function createWin32InputDriver(): InputDriver {
         .map((a) => ({ name: a.Name, id: a.AppID }));
     },
     launch: (id) => done(send(`launch ${Buffer.from(id, 'utf8').toString('base64')}`)),
+    windows: async () => {
+      const raw = await send('windows');
+      return raw
+        .split(';')
+        .filter(Boolean)
+        .map((line) => {
+          const [handle = '', proc = '', title = ''] = line.split(' ');
+          return { handle, process: b64(proc), title: b64(title) };
+        });
+    },
+    foregroundHandle: async () => (await send('fgh')).trim(),
+    maximizeNew: async (before, ms) =>
+      void (await send(`maxnew ${/^\d+$/.test(before) ? before : '0'} ${Math.max(200, Math.min(8000, int(ms)))}`)),
+    closeWindow: (handle) => done(send(`closewin ${/^\d+$/.test(handle) ? handle : '0'}`)),
     openFolder: (path) => done(send(`folder ${Buffer.from(path, 'utf8').toString('base64')}`)),
     caret: async () => {
       const [x, y, h] = (await send('caret')).split(' ').map(Number);

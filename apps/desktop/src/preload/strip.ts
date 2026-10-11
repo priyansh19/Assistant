@@ -12,6 +12,8 @@ export interface StripState {
   paused: boolean;
   /** Paused because the user is using the mouse (resumes by itself). */
   pausedForUser?: boolean;
+  /** Allow all is on: risky steps run without asking. */
+  allowAll?: boolean;
   /** The user's cursor colour, as the accent. */
   color: string;
 }
@@ -28,6 +30,7 @@ const api = {
   pause: (on: boolean) => send('strip:pause', on),
   stop: () => send('strip:stop'),
   allow: () => send('strip:allow'),
+  allowAll: (on: boolean) => send('strip:allow-all', on),
 };
 
 export type StripApi = typeof api;

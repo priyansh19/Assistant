@@ -1,9 +1,11 @@
 import {
-  HOLD_KEY_LABELS,
+  holdKeyLabel,
   agentReady,
   buildUserContext,
   lessonFrom,
   lessonHints,
+  makeComboKey,
+  ApprovalMemory,
   matchSkills,
   skillsText,
   contextOf,
@@ -43,6 +45,8 @@ export interface EngineOptions {
   post(msg: EngineToMain): void;
   media: MediaChannel;
   createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null): HoldKeyHook;
+  /** Record a key combination from the keyboard (settings "Record keys"). */
+  recordKeys?(timeoutMs: number): Promise<{ codes: number[]; label: string } | null>;
   now?(): number;
 }
 
@@ -85,6 +89,7 @@ export class Engine {
   private readonly inputs = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   private readonly contexts = new Map<number, (c: WriteContext) => void>();
   private readonly foregrounds = new Map<number, (a: AppInfo | null) => void>();
+  private readonly windowLists = new Map<number, (w: string[]) => void>();
   /** Last mouse or key use that wasn't Clicky's own input. */
   private lastUserInputAt = 0;
   /** Mouse events until then are Clicky's own clicks moving the pointer. */
@@ -92,6 +97,10 @@ export class Engine {
   /** When the current agent step started, to tell if the user acted since. */
   private stepStartedAt = 0;
   private agentPaused = false;
+  /** "Allow all" on the notch: every risky step runs without asking, for this session. */
+  private allowAll = false;
+  /** Steps the user allowed; similar ones (not deletes or closes) run without asking again. */
+  private readonly approvals = new ApprovalMemory();
   /** Where a burst of mouse movement started, to ignore jitter. */
   private moveAnchor: { x: number; y: number; at: number } | null = null;
   /** Last style lesson per context, so learning runs at most every couple of minutes. */
@@ -177,6 +186,7 @@ export class Engine {
           this.stepStartedAt = Date.now();
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
+        openWindows: () => this.openWindows(),
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
       confirm: (text, signal) => this.confirm(text, signal),
@@ -185,7 +195,7 @@ export class Engine {
       tidyDictation: () => settings().tidyDictation,
       undoHint: () => {
         const k = settings().dictationKey;
-        return k === 'off' ? '' : `Tap ${HOLD_KEY_LABELS[k]} to undo, or hold it and say "shorter" to rewrite.`;
+        return k === 'off' ? '' : `Tap ${holdKeyLabel(k)} to undo, or hold it and say "shorter" to rewrite.`;
       },
       userContext: (app) => {
         const s = settings();
@@ -317,6 +327,18 @@ export class Engine {
       case 'keyTest':
         this.keyTest = msg.on;
         return;
+      case 'keyRecord': {
+        const record = this.opts.recordKeys;
+        if (!record) return this.post({ type: 'keyRecorded', key: null });
+        this.stopHoldKey();
+        void record(10_000)
+          .catch(() => null)
+          .then((r) => {
+            this.post({ type: 'keyRecorded', key: r ? makeComboKey(r.codes, r.label) : null });
+            if (this.config && !this.config.settings.paused) this.startHoldKey();
+          });
+        return;
+      }
       case 'ask':
         void this.orchestrator
           .ask(msg.question, msg.source)
@@ -342,6 +364,12 @@ export class Engine {
         else p.resolve();
         return;
       }
+      case 'windows.reply': {
+        const done = this.windowLists.get(msg.id);
+        this.windowLists.delete(msg.id);
+        done?.(msg.windows);
+        return;
+      }
       case 'foreground.reply': {
         const done = this.foregrounds.get(msg.id);
         this.foregrounds.delete(msg.id);
@@ -354,6 +382,12 @@ export class Engine {
         return;
       case 'agent.allow':
         this.pendingConfirm?.(true);
+        return;
+      case 'agent.allowAll':
+        this.allowAll = msg.on;
+        this.post({ type: 'log', level: 'info', message: `allow all ${msg.on ? 'on' : 'off'}` });
+        this.post({ type: 'allowAll', on: msg.on });
+        if (msg.on) this.pendingConfirm?.(true);
         return;
       case 'writeContext.reply': {
         const done = this.contexts.get(msg.id);
@@ -508,12 +542,35 @@ export class Engine {
    */
   private agentChat(): VisionChatProvider {
     const s = this.cfg().settings;
+    // A model chosen for agent steps wins (OpenRouter).
+    if (s.agentModel && s.chatProvider === 'openrouter' && !this.cfg().demo) {
+      const key = `${this.key('openrouter') ?? ''}|${s.agentModel}`;
+      if (this.agentChatCache?.key !== key)
+        this.agentChatCache = { key, chat: createChat({ ...s, chatModel: s.agentModel }, this.key) };
+      return this.agentChatCache.chat;
+    }
     if (this.cfg().demo || s.chatProvider !== 'openrouter' || s.chatModel)
       return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(s, this.key));
     const key = `${this.key('openrouter') ?? ''}`;
     if (this.agentChatCache?.key !== key)
       this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };
     return this.agentChatCache.chat;
+  }
+
+  /** The open windows from main (empty if main is slow). */
+  private openWindows(): Promise<string[]> {
+    const id = this.nextPlanId++;
+    return new Promise<string[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.windowLists.delete(id);
+        resolve([]);
+      }, 1500);
+      this.windowLists.set(id, (w) => {
+        clearTimeout(timer);
+        resolve(w);
+      });
+      this.post({ type: 'windows', id });
+    });
   }
 
   /** The app in front if it's on the never-touch list. */
@@ -598,7 +655,15 @@ export class Engine {
 
   /** Agent mode: show what's about to happen and wait for a hold-key press (allow) or Esc (stop). */
   private confirm(text: string, signal: AbortSignal): Promise<boolean> {
-    const key = HOLD_KEY_LABELS[this.cfg().settings.holdKey];
+    if (this.allowAll) {
+      this.post({ type: 'log', level: 'info', message: `allowed (allow all is on): ${text}` });
+      return Promise.resolve(true);
+    }
+    if (this.approvals.covers(text)) {
+      this.post({ type: 'log', level: 'info', message: `allowed (like a step allowed before): ${text}` });
+      return Promise.resolve(true);
+    }
+    const key = holdKeyLabel(this.cfg().settings.holdKey);
     const prompt = `${text}? Press ${key} to allow, or Esc to stop.`;
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
     return new Promise<boolean>((resolve) => {
@@ -613,6 +678,7 @@ export class Engine {
         signal.removeEventListener('abort', onAbort);
         if (this.pendingConfirm === finish) this.pendingConfirm = null;
         this.post({ type: 'agentAsk', text: null });
+        if (ok) this.approvals.allow(text);
         resolve(ok);
       };
       if (signal.aborted) return finish(false);
