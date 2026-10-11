@@ -20,7 +20,12 @@ win:
   # Keep icon/name editing of Clicky.exe; there is no code-signing certificate (personal build).
   signExecutable: false
 nsis:
-  oneClick: true
+  # A short, styled installer (welcome, progress, finish) with Clicky's own art.
+  oneClick: false
+  allowToChangeInstallationDirectory: false
+  installerSidebar: resources/installerSidebar.bmp
+  uninstallerSidebar: resources/installerSidebar.bmp
+  installerHeader: resources/installerHeader.bmp
   perMachine: false
   createDesktopShortcut: always
   createStartMenuShortcut: true

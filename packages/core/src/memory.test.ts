@@ -19,3 +19,13 @@ describe('memoryNote', () => {
     expect(notesText(['Comet is on the taskbar'])).toContain('- Comet is on the taskbar');
   });
 });
+
+describe('bareGreeting', () => {
+  it('spots a wake word or hello with no question', async () => {
+    const { bareGreeting } = await import('./memory.js');
+    expect(bareGreeting('Hey Clicky')).toBe(true);
+    expect(bareGreeting('hi there, you there?')).toBe(true);
+    expect(bareGreeting('hey clicky where is the start button')).toBe(false);
+    expect(bareGreeting('')).toBe(false);
+  });
+});
