@@ -20,6 +20,8 @@ export interface SpeechOutput {
 }
 
 export interface SpeechFactory {
+  /** Provider id for the latency trace (e.g. 'elevenlabs', 'system'). */
+  readonly id?: string;
   create(signal: AbortSignal): SpeechOutput;
   prewarm?(signal: AbortSignal): void;
 }
@@ -37,6 +39,7 @@ export interface AudioSink {
 /** Wire a streaming cloud TTS provider to an audio sink. */
 export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): SpeechFactory {
   return {
+    id: tts.id,
     prewarm: (signal) => void tts.prewarm?.(signal).catch(() => undefined),
     create(signal) {
       const sink = openSink();

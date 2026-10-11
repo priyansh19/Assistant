@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type TtsAudioChunk } from '@clicky/core';
+import { DEFAULT_SETTINGS, describeError, type TtsAudioChunk } from '@clicky/core';
 import { describe, expect, it } from 'vitest';
 import { AnthropicChat } from './anthropic.js';
 import { AssemblyAIStt, type WebSocketLike } from './assemblyai.js';
@@ -198,6 +198,24 @@ describe('AnthropicChat', () => {
     await expect(
       collect(chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 10, signal: signal() })),
     ).rejects.toThrow(/declined/);
+  });
+
+  it('tags HTTP errors with the provider and status', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }),
+        {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    const chat = new AnthropicChat({ apiKey: 'k', model: 'claude-haiku-5-5', fetch: fetchImpl });
+    const err: unknown = await collect(
+      chat.stream({ system: '', history: [], question: 'q', images: [], maxTokens: 10, signal: signal() }),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err).toMatchObject({ provider: 'anthropic', status: 401 });
+    expect(describeError(err, 'answer')).toMatch(/^Your Anthropic key was rejected/);
   });
 });
 

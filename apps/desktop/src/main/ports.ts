@@ -254,6 +254,7 @@ export function createAudioSink(worker: WorkerHost): AudioSink {
 /** The offline Windows voice (speechSynthesis in the worker). */
 export function systemSpeech(worker: WorkerHost): SpeechFactory {
   return {
+    id: 'system',
     create(signal): SpeechOutput {
       const streamId = `v${++streamSeq}`;
       const firstFns: Array<() => void> = [];

@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ConfigError, type VisionChatProvider, type VisionChatRequest } from '@clicky/core';
-import { prewarmOrigin, toBase64, type FetchLike } from './http.js';
+import { ConfigError, StageError, type VisionChatProvider, type VisionChatRequest } from '@clicky/core';
+import { prewarmOrigin, ProviderError, toBase64, type FetchLike } from './http.js';
 
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -20,7 +20,7 @@ export interface AnthropicOptions {
 export class AnthropicChat implements VisionChatProvider {
   readonly id = 'anthropic';
   private readonly client: Anthropic;
-  private readonly model: string;
+  readonly model: string;
   private readonly fetchImpl: FetchLike;
 
   constructor(opts: AnthropicOptions) {
@@ -68,13 +68,25 @@ export class AnthropicChat implements VisionChatProvider {
       },
       { signal: req.signal },
     );
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
+    let final: Anthropic.Beta.BetaMessage;
+    try {
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
+      }
+      final = await stream.finalMessage();
+    } catch (e) {
+      // SDK errors carry the HTTP status; tag them with the provider so the user sees who failed.
+      if (e instanceof Anthropic.APIError && typeof e.status === 'number')
+        throw new ProviderError('anthropic', e.status, e.message);
+      throw e;
     }
-    const final = await stream.finalMessage();
-    if (final.stop_reason === 'refusal') throw new Error('The AI declined to answer this question.');
+    if (final.stop_reason === 'refusal')
+      throw new StageError('answer', 'refused', 'The AI declined to answer this question.', { provider: 'anthropic' });
     // No stop reason means the stream ended without message_stop: the answer was cut off.
-    if (final.stop_reason === null) throw new Error('anthropic: the answer was cut off (connection closed early)');
+    if (final.stop_reason === null)
+      throw new StageError('answer', 'bad-output', 'the answer was cut off (connection closed early)', {
+        provider: 'anthropic',
+      });
   }
 }
 

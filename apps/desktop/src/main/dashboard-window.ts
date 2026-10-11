@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron';
-import { CREDENTIAL_IDS, isResting, type CredentialId } from '@clicky/core';
+import { CREDENTIAL_IDS, isResting, STAGE_METRICS, type CredentialId } from '@clicky/core';
 import { checkKey, defaultChatModel } from '@clicky/providers';
 import {
   IPC,
@@ -373,6 +373,7 @@ export class DashboardWindow {
       `Hold key: ${s.holdKey}; mic: ${s.micDeviceId ? 'custom' : 'default'}, keep ready ${s.micAlwaysReady}; paused ${s.paused}`,
       `Screenshots: ${s.captureMaxEdge} px, all displays ${s.captureAllDisplays}`,
       `Response time (key up → first audio): last ${stats.lastMs ?? '–'} ms, typical ${stats.p50Ms ?? '–'} ms, p95 ${stats.p95Ms ?? '–'} ms`,
+      `Per stage, p50/p95 ms: ${STAGE_METRICS.map((m) => `${m} ${stats.stages[m].p50 ?? '–'}/${stats.stages[m].p95 ?? '–'}`).join(', ')}`,
       'Recent questions (no text):',
       ...recent,
     ];

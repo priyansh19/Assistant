@@ -509,6 +509,39 @@ button:disabled {
   margin: 6px 2px 0;
 }
 
+.speed {
+  margin-top: 8px;
+  padding: 10px 16px;
+}
+
+.speed summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.speed-table {
+  width: 100%;
+  margin: 8px 0 4px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-table th,
+.speed-table td {
+  padding: 4px 0;
+  text-align: right;
+}
+
+.speed-table th:first-child,
+.speed-table td:first-child {
+  text-align: left;
+}
+
+.speed-table th {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
 .section-head {
   display: flex;
   align-items: baseline;

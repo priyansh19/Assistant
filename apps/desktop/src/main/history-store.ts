@@ -8,10 +8,13 @@ import {
   parseActions,
   parseHistory,
   percentile,
+  stageStats,
   MAX_ACTIONS,
   type HistoryEntry,
   type LatencySummary,
   type SavedAction,
+  type StageMetric,
+  type StageStat,
 } from '@clicky/core';
 
 function readJson(file: string): unknown {
@@ -34,6 +37,8 @@ export interface LatencyStats {
   lastMs: number | null;
   p50Ms: number | null;
   p95Ms: number | null;
+  /** p50/p95 per stage over recent interactions (architecture §8.3). */
+  stages: Record<StageMetric, StageStat>;
 }
 
 type Listener = () => void;
@@ -42,14 +47,15 @@ type Listener = () => void;
 export class HistoryStore {
   private history: HistoryEntry[];
   private actions: SavedAction[];
-  private latencies: number[] = [];
+  /** Recent latency summaries, oldest first (only those that reached first audio count for stats). */
+  private summaries: LatencySummary[] = [];
   private readonly listeners = new Set<Listener>();
   private readonly dir = app.getPath('userData');
 
   constructor() {
     this.history = parseHistory(readJson(join(this.dir, 'history.json')));
     this.actions = parseActions(readJson(join(this.dir, 'actions.json')));
-    this.latencies = this.loadLatencies();
+    this.summaries = this.loadSummaries();
   }
 
   onChange(fn: Listener): () => void {
@@ -144,30 +150,39 @@ export class HistoryStore {
       // logging must never break an interaction
     }
     if (summary.keyUpToFirstAudioMs !== null) {
-      this.latencies = [...this.latencies, summary.keyUpToFirstAudioMs].slice(-50);
+      this.summaries = [...this.summaries, summary].slice(-50);
       this.changed();
     }
   }
 
   stats(): LatencyStats {
-    const recent = this.latencies.slice(-20);
+    const recent = this.summaries.slice(-20);
+    const firstAudio = recent.map((s) => s.keyUpToFirstAudioMs).filter((v): v is number => typeof v === 'number');
     return {
       count: this.history.filter((e) => e.outcome === 'answered').length,
-      lastMs: this.latencies.at(-1) ?? null,
-      p50Ms: percentile(recent, 50),
-      p95Ms: percentile(recent, 95),
+      lastMs: this.summaries.at(-1)?.keyUpToFirstAudioMs ?? null,
+      p50Ms: percentile(firstAudio, 50),
+      p95Ms: percentile(firstAudio, 95),
+      stages: stageStats(recent),
     };
   }
 
-  private loadLatencies(): number[] {
+  private loadSummaries(): LatencySummary[] {
     try {
       const lines = readFileSync(join(this.dir, 'logs', 'latency.jsonl'), 'utf8')
         .trim()
         .split('\n')
-        .slice(-50);
-      return lines
-        .map((l) => (JSON.parse(l) as { keyUpToFirstAudioMs?: number | null }).keyUpToFirstAudioMs)
-        .filter((v): v is number => typeof v === 'number');
+        .slice(-200);
+      const out: LatencySummary[] = [];
+      for (const l of lines) {
+        try {
+          const row = JSON.parse(l) as LatencySummary;
+          if (typeof row.keyUpToFirstAudioMs === 'number') out.push(row);
+        } catch {
+          // a torn line from a crash mid-write
+        }
+      }
+      return out.slice(-50);
     } catch {
       return [];
     }

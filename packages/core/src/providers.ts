@@ -33,6 +33,8 @@ export interface VisionChatRequest {
 
 export interface VisionChatProvider {
   readonly id: string;
+  /** The model id in use, for the latency trace. */
+  readonly model?: string;
   /** Open connections early (TLS, HTTP/2) so the real request starts warm. Safe to call often. */
   prewarm?(signal: AbortSignal): Promise<void>;
   /** Stream text deltas as they arrive. Throws (or rejects the iterator) on failure or abort. */

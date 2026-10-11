@@ -6,6 +6,7 @@ import {
   actionNameFrom,
   requiredCredentials,
   searchHistory,
+  STAGE_METRICS,
   type CredentialId,
   type HistoryEntry,
   type SavedAction,
@@ -313,9 +314,39 @@ function renderHome(): void {
   $('stat-count').textContent = String(snap.stats.count);
   $('stat-last').textContent = seconds(snap.stats.lastMs);
   $('stat-p50').textContent = seconds(snap.stats.p50Ms);
+  renderSpeed(snap);
   const recent = $('recent-list');
   recent.dataset['empty'] = `Nothing yet. Hold ${key} and ask “What am I looking at?”`;
   recent.replaceChildren(...snap.history.slice(0, 5).map((e) => historyItem(e, true)));
+}
+
+const STAGE_LABELS: Record<(typeof STAGE_METRICS)[number], string> = {
+  keyUpToFirstAudioMs: 'Letting go → first word',
+  transcriptMs: 'Finishing the transcript',
+  keyUpToRequestMs: 'Letting go → question sent',
+  modelFirstTokenMs: 'AI writing its first word',
+  tokenToSpeechMs: 'First words → voice',
+  speechToAudioMs: 'Voice starting to play',
+  keyUpToPointMs: 'Letting go → cursor moves',
+  recordingStartMs: 'Key press → recording',
+};
+
+function ms(v: number | null): string {
+  return v === null ? '–' : `${v} ms`;
+}
+
+/** Per-stage p50/p95, so a slow step is visible without reading logs. */
+function renderSpeed(snap: DashboardSnapshot): void {
+  const stages = snap.stats.stages;
+  const rows = STAGE_METRICS.filter((m) => stages[m].n > 0).map((m) =>
+    el('tr', {}, [
+      el('td', { text: STAGE_LABELS[m] }),
+      el('td', { text: ms(stages[m].p50) }),
+      el('td', { text: ms(stages[m].p95) }),
+    ]),
+  );
+  $('speed').hidden = rows.length === 0;
+  $('speed-rows').replaceChildren(...rows);
 }
 
 // ----------------------------------------------------------------- history

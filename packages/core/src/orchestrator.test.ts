@@ -2,14 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DisplayGeometry } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import type { InteractionState } from './interaction.js';
-import {
-  ConfigError,
-  MIC_TAIL_MS,
-  MIN_HOLD_MS,
-  Orchestrator,
-  type OrchestratorDeps,
-  type ScreenCapture,
-} from './orchestrator.js';
+import { ConfigError } from './errors.js';
+import { MIC_TAIL_MS, MIN_HOLD_MS, Orchestrator, type OrchestratorDeps, type ScreenCapture } from './orchestrator.js';
 import type { SttProvider, SttSession, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { SpeechFactory, SpeechOutput } from './speech.js';
 
@@ -224,7 +218,8 @@ describe('Orchestrator', () => {
   });
 
   it('cancels mid-answer and stops speech', async () => {
-    const t = setup({ chat: () => fakeChat(['Hello there. ', 'More text. ', 'Even more.'], { delayMs: 5 }) });
+    // Slow enough that the answer is still streaming when Esc arrives, however fast the machine.
+    const t = setup({ chat: () => fakeChat(['Hello there. ', 'More text. ', 'Even more.'], { delayMs: 60 }) });
     t.o.keyDown();
     t.advance(1000);
     t.o.keyUp();

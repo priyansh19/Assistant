@@ -12,6 +12,7 @@
  */
 
 import { HeardTagFilter, joinFrames, pcmToWav } from './audio.js';
+import { classifyFailure, StageError, StageTimeoutError, userMessage, type Stage } from './errors.js';
 import { mapPointToDisplay, type CaptureGeometry, type MappedPoint } from './coordinates.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
@@ -67,9 +68,6 @@ export interface AskResult {
   detail?: string;
 }
 
-/** Thrown by provider getters when configuration is missing; shown to the user as-is. */
-export class ConfigError extends Error {}
-
 export interface OrchestratorDeps {
   chat(): VisionChatProvider;
   stt(): SttProvider;
@@ -117,11 +115,9 @@ const MIN_AUDIO_S = 0.3;
 /** Hold shorter than this is treated as an accidental tap. */
 export const MIN_HOLD_MS = 250;
 
-class TimeoutError extends Error {}
-
-function withTimeout<T>(p: Promise<T>, ms: number, what: string, signal: AbortSignal): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number, stage: Stage, what: string, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new TimeoutError(`${what} took too long`)), ms);
+    const t = setTimeout(() => reject(new StageTimeoutError(stage, what)), ms);
     const onAbort = (): void => {
       clearTimeout(t);
       reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
@@ -141,55 +137,6 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string, signal: AbortSi
       },
     );
   });
-}
-
-/** Turn any failure into one short sentence the user can act on. */
-export function describeError(e: unknown): string {
-  if (e instanceof ConfigError) return e.message;
-  if (e instanceof TimeoutError) return `Sorry, ${e.message}. Please try again.`;
-  const msg = e instanceof Error ? e.message : String(e);
-  const status = /\b(401|403)\b/.test(msg)
-    ? 'auth'
-    : /\b429\b/.test(msg)
-      ? 'rate'
-      : /\b5\d\d\b/.test(msg)
-        ? 'server'
-        : '';
-  if (/credit|quota|billing|insufficient|\b402\b/i.test(msg))
-    return 'An AI account is out of credit. Add billing with the provider, then try again.';
-  if (status === 'auth') {
-    // Name the provider and its own reason when we have them, e.g. "openrouter 401: User not found."
-    const m = /^(anthropic|openrouter|openai|assemblyai|elevenlabs)\b[^:]*:\s*(.+)$/i.exec(msg);
-    const names: Record<string, string> = {
-      anthropic: 'Anthropic',
-      openrouter: 'OpenRouter',
-      openai: 'OpenAI',
-      assemblyai: 'AssemblyAI',
-      elevenlabs: 'ElevenLabs',
-    };
-    if (m?.[1]) {
-      const who = names[m[1].toLowerCase()] ?? m[1];
-      const why = (m[2] ?? '').slice(0, 80);
-      if (/user not found/i.test(why) && who === 'OpenRouter') {
-        return "Your OpenRouter key can't run models (it may be a management key). Create a normal key at openrouter.ai/keys.";
-      }
-      return `Your ${who} key was rejected (${why}). Check it in Clicky > API keys.`;
-    }
-    return 'An API key was rejected. Check your keys in Clicky > API keys.';
-  }
-  if (status === 'rate') return 'The AI service is rate limiting requests. Wait a moment and try again.';
-  if (status === 'server') return 'The AI service had a problem. Please try again.';
-  if (/fetch failed|network|ENOTFOUND|ECONN|socket/i.test(msg))
-    return 'Network problem. Check your internet connection.';
-  if (/NotAllowedError|Permission denied/i.test(msg)) {
-    return 'Windows is blocking the microphone. Open Settings > Privacy & security > Microphone and allow desktop apps.';
-  }
-  if (/NotFoundError|OverconstrainedError|no microphone/i.test(msg))
-    return 'No microphone found. Plug one in or pick another in Clicky > General.';
-  if (/NotReadableError/i.test(msg)) return 'Another app is using the microphone. Close it and try again.';
-  if (/mic\.start timed out|disconnected|Microphone unavailable/i.test(msg))
-    return 'The microphone did not respond. Try again, or pick another in Clicky > General.';
-  return `Something went wrong: ${msg.slice(0, 120)}`;
 }
 
 interface Run {
@@ -278,13 +225,13 @@ export class Orchestrator {
         signal,
         (e) => {
           if (!signal.aborted && (this.machine.state === 'listening' || this.machine.state === 'transcribing'))
-            this.fail(run, e);
+            this.fail(run, e, 'mic');
         },
       )
       .then(
         () => latency.mark('recordingStarted'),
         (e: unknown) => {
-          if (!signal.aborted) this.fail(run, e);
+          if (!signal.aborted) this.fail(run, e, 'mic');
         },
       );
     // Listening directly: frames just accumulate and go to the answer model with the screenshot.
@@ -293,8 +240,9 @@ export class Orchestrator {
     if (!direct) {
       try {
         stt = this.deps.stt();
+        latency.setMeta('stt', stt.id);
       } catch (e) {
-        this.fail(run, e);
+        this.fail(run, e, 'stt');
         return;
       }
     }
@@ -304,9 +252,10 @@ export class Orchestrator {
         // Flush audio recorded before the connection was ready, then stream directly.
         for (const f of run.micFrames.splice(0)) session.pushAudio(f);
         ready = session;
+        latency.mark('sttReady');
       },
       (e: unknown) => {
-        if (!signal.aborted) this.fail(run, e);
+        if (!signal.aborted) this.fail(run, e, 'stt');
       },
     );
     try {
@@ -336,7 +285,7 @@ export class Orchestrator {
     }
     run.latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
-    void this.afterKeyUp(run).catch((e: unknown) => this.fail(run, e));
+    void this.afterKeyUp(run).catch((e: unknown) => this.fail(run, e, 'app'));
   }
 
   /** Esc, or the user asked to stop. */
@@ -403,10 +352,16 @@ export class Orchestrator {
     let transcript: string;
     try {
       if (!run.sttSession) throw new Error('speech-to-text did not start');
-      const session = await withTimeout(run.sttSession, this.timeouts.transcriptMs, 'speech recognition', signal);
-      transcript = await withTimeout(session.finish(), this.timeouts.transcriptMs, 'speech recognition', signal);
+      const session = await withTimeout(
+        run.sttSession,
+        this.timeouts.transcriptMs,
+        'stt',
+        'speech recognition',
+        signal,
+      );
+      transcript = await withTimeout(session.finish(), this.timeouts.transcriptMs, 'stt', 'speech recognition', signal);
     } catch (e) {
-      if (!signal.aborted) this.fail(run, e);
+      if (!signal.aborted) this.fail(run, e, 'stt');
       return;
     }
     if (signal.aborted) return;
@@ -425,7 +380,7 @@ export class Orchestrator {
     } catch (e) {
       // Anything unexpected must end in a visible error, never a stuck "thinking".
       run.speech?.stop();
-      if (!run.interaction.signal.aborted) this.fail(run, e);
+      if (!run.interaction.signal.aborted) this.fail(run, e, 'app');
     }
   }
 
@@ -453,19 +408,28 @@ export class Orchestrator {
       chat = this.deps.chat();
       speechFactory = this.deps.speech();
     } catch (e) {
-      this.fail(run, e);
+      this.fail(run, e, 'config');
       return;
     }
+    run.latency.setMeta('chat', chat.id);
+    if (chat.model) run.latency.setMeta('model', chat.model);
+    if (speechFactory.id) run.latency.setMeta('voice', speechFactory.id);
 
     let screens: ScreenCapture;
     try {
       screens = await screensP;
       run.latency.mark('captureReady');
     } catch (e) {
-      if (!signal.aborted) this.fail(run, e);
+      if (!signal.aborted) this.fail(run, e, 'capture');
       return;
     }
     if (signal.aborted) return;
+    run.latency.setMeta(
+      'imageBytes',
+      screens.images.reduce((n, img) => n + img.data.byteLength, 0),
+    );
+    if (screens.images[0])
+      run.latency.setMeta('imageEdge', Math.max(screens.images[0].width, screens.images[0].height));
 
     const system = buildSystemPrompt({
       screens: screens.images.map((img, i) => ({
@@ -482,7 +446,7 @@ export class Orchestrator {
     run.speech = speech;
     // A voice failure on the first sentence should surface now, not after the whole answer streams.
     speech.done.catch((e: unknown) => {
-      if (!signal.aborted && !run.finished) this.fail(run, e);
+      if (!signal.aborted && !run.finished) this.fail(run, e, 'speech');
     });
     speech.onFirstAudio(() => {
       if (signal.aborted) return;
@@ -499,10 +463,14 @@ export class Orchestrator {
       return out ? parser.push(out) : [];
     };
     const chunker = new SentenceChunker();
+    const say = (sentence: string): void => {
+      run.latency.mark('firstSpeech');
+      speech.say(sentence);
+    };
     const handleText = (text: string): void => {
       run.answer += text;
       this.deps.overlay.caption?.(run.answer);
-      for (const sentence of chunker.push(text)) speech.say(sentence);
+      for (const sentence of chunker.push(text)) say(sentence);
     };
     const handleEvents = (events: ReturnType<PointStreamParser['push']>): void => {
       for (const ev of events) {
@@ -512,7 +480,10 @@ export class Orchestrator {
       }
     };
 
+    // Which stage a failure inside the loop below belongs to.
+    let stage: Stage = 'answer';
     try {
+      run.latency.mark('requestSent');
       const stream = chat.stream({
         system,
         history: this.deps.recentTurns(),
@@ -527,7 +498,7 @@ export class Orchestrator {
       let first = true;
       for (;;) {
         const remaining = first ? this.timeouts.firstTokenMs : Math.max(1, deadline - this.now());
-        const next = await withTimeout(iterator.next(), remaining, 'the AI answer', signal);
+        const next = await withTimeout(iterator.next(), remaining, 'answer', 'the AI answer', signal);
         if (next.done) break;
         if (first) {
           run.latency.mark('firstToken');
@@ -541,7 +512,7 @@ export class Orchestrator {
         if (heard.heard && !run.question) run.question = heard.heard;
       }
       handleEvents(parser.end());
-      for (const sentence of chunker.end()) speech.say(sentence);
+      for (const sentence of chunker.end()) say(sentence);
       speech.end();
       if (!run.answer.trim()) {
         if (audio && !run.question) {
@@ -551,12 +522,13 @@ export class Orchestrator {
           this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
           return;
         }
-        throw new Error('The AI returned an empty answer.');
+        throw new StageError('answer', 'bad-output', 'the answer was empty', { provider: chat.id });
       }
-      await withTimeout(speech.done, SPEAKING_TIMEOUT_MS, 'playing the answer', signal);
+      stage = 'speech';
+      await withTimeout(speech.done, SPEAKING_TIMEOUT_MS, 'speech', 'playing the answer', signal);
     } catch (e) {
       speech.stop();
-      if (!signal.aborted) this.fail(run, e);
+      if (!signal.aborted) this.fail(run, e, stage);
       return;
     }
     if (signal.aborted) return;
@@ -579,11 +551,14 @@ export class Orchestrator {
     this.deps.overlay.point(mapped.point, tag.label);
   }
 
-  private fail(run: Run, e: unknown): void {
+  private fail(run: Run, e: unknown, stage: Stage): void {
     if (run.finished) return;
-    const message = describeError(e);
+    const err = classifyFailure(e, stage);
+    const message = userMessage(err);
+    run.latency.setFailure({ stage: err.stage, kind: err.kind, ...(err.provider ? { provider: err.provider } : {}) });
+    run.latency.event(err.stage, 'failed', { kind: err.kind, ...(err.provider ? { provider: err.provider } : {}) });
     this.deps.log?.(
-      `interaction ${run.interaction.id} failed: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+      `interaction ${run.interaction.id} failed in ${err.stage} (${err.kind}${err.provider ? `, ${err.provider}` : ''}): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
     );
     this.deps.overlay.message(message, 'error');
     if (this.run === run) this.machine.dispatch({ type: 'fail', reason: message });

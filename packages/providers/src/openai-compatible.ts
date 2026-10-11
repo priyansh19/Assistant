@@ -24,7 +24,7 @@ interface ChatChunk {
 export class OpenAICompatibleChat implements VisionChatProvider {
   readonly id: string;
   private readonly base: string;
-  private readonly model: string;
+  readonly model: string;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly opts: OpenAICompatibleOptions) {

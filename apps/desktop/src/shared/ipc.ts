@@ -1,4 +1,12 @@
-import type { CredentialId, HistoryEntry, InteractionState, SavedAction, Settings } from '@clicky/core';
+import type {
+  CredentialId,
+  HistoryEntry,
+  InteractionState,
+  SavedAction,
+  Settings,
+  StageMetric,
+  StageStat,
+} from '@clicky/core';
 import type { MicDevice } from './worker-protocol';
 
 // IPC channel names shared by main, preload and renderer. Preloads inline the strings (typed as
@@ -41,6 +49,7 @@ export interface LatencyStatsView {
   lastMs: number | null;
   p50Ms: number | null;
   p95Ms: number | null;
+  stages: Record<StageMetric, StageStat>;
 }
 
 /** What the dashboard sees. Never contains key material, only whether each key is saved. */
