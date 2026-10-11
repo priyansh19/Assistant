@@ -9,7 +9,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TASKS } from './tasks.mjs';
+import { BATCH3 } from './tasks-batch3.mjs';
+import { TASKS as BASE } from './tasks.mjs';
+
+const TASKS = [...BASE, ...BATCH3];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (n) => {
@@ -80,16 +83,6 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
   let answered = 0;
   const limit = (t.maxMinutes ?? 3) * 60_000;
   while (Date.now() - t0 < limit) {
-    if (!entry) {
-      // Out of time: stop the run with Esc so the next task starts clean, and keep its record.
-      say('timed out; pressing Esc');
-      ps('Invoke-Tap 0x1B');
-      for (let i = 0; i < 20 && !entry; i++) {
-        await wait(1000);
-        const h = history()[0];
-        if (h && h.id !== before && h.at >= t0 - 1000) entry = { ...h, outcome: 'timeout' };
-      }
-    }
     await wait(1500);
     const log = logFrom(offset);
     const asks = log.match(/asking to allow: .*/g) ?? [];
@@ -107,6 +100,31 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     if (h && h.id !== before && h.at >= t0 - 1000) {
       entry = h;
       break;
+    }
+  }
+  if (!entry) {
+    // Out of time: stop the run with Esc so the next task starts clean, and keep its record.
+    say('timed out; pressing Esc');
+    ps('Invoke-Tap 0x1B');
+    for (let i = 0; i < 20 && !entry; i++) {
+      await wait(1000);
+      const h = history()[0];
+      if (h && h.id !== before && h.at >= t0 - 1000) entry = { ...h, outcome: 'timeout' };
+    }
+  }
+  // Clicky may carry on by itself ("I can't see that on screen" starts a run that goes and looks):
+  // follow it to its end so the next task doesn't start on top of it.
+  await wait(2500);
+  if (entry && /finding it out/.test(logFrom(offset))) {
+    say('Clicky is going to find it out; following that run');
+    const first = entry;
+    while (Date.now() - t0 < limit * 2) {
+      await wait(1500);
+      const h = history()[0];
+      if (h && h.id !== first.id && h.at > first.at) {
+        entry = { ...h, question: first.question };
+        break;
+      }
     }
   }
   // The step review (shortest route) is logged a few seconds after the run ends.

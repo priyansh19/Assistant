@@ -5,7 +5,7 @@ const docs = "[Environment]::GetFolderPath('MyDocuments')";
 const desk = "[Environment]::GetFolderPath('Desktop')";
 const test = `(Join-Path (${docs}) 'ClickyTest')`;
 const notepads = (n) =>
-  Array.from({ length: n }, () => 'Start-Process notepad; Start-Sleep -Milliseconds 700').join('; ');
+  Array.from({ length: n }, () => 'Start-Process notepad.exe; Start-Sleep -Milliseconds 700').join('; ');
 
 export const TASKS = [
   {
@@ -13,7 +13,7 @@ export const TASKS = [
     destructive: true,
     say: 'Clicky, minimise this window.',
     setup: [
-      "Start-Process notepad; Start-Sleep 2; [LiveWin]::Front() | Set-Content (Join-Path $env:TEMP 'clicky-w01.txt')",
+      "Start-Process notepad.exe; Start-Sleep 2; [LiveWin]::Front() | Set-Content (Join-Path $env:TEMP 'clicky-w01.txt')",
     ],
     check:
       "$t = Get-Content (Join-Path $env:TEMP 'clicky-w01.txt'); (Get-AppWindows | Where-Object { $_.Split('|')[1] -eq $t } | Select-Object -First 1)",

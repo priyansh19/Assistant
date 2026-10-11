@@ -1,4 +1,5 @@
-import { clipboard, ClipboardItem, screen, shell } from 'electron';
+import { app, clipboard, ClipboardItem, screen, shell } from 'electron';
+import { join, sep } from 'node:path';
 import { isTerminal, type AppInfo, type InputAction, type WriteContext } from '@clicky/core';
 import type { InputDriver } from '../platform/types';
 import { statSync } from 'node:fs';
@@ -6,6 +7,23 @@ import { opensWithAnApp } from '../platform';
 
 /** Browser processes, to bring forward after opening a website in one. */
 const BROWSERS = 'comet,chrome,msedge,firefox,brave,opera,vivaldi,arc';
+
+/**
+ * "C:\Users\me\Desktop" when the Desktop the user sees is elsewhere (OneDrive moves it): the
+ * model guesses the usual path, so map it to the real one. Same for Documents, Pictures and so on.
+ */
+function knownFolder(path: string): string {
+  const home = app.getPath('home');
+  for (const name of ['desktop', 'documents', 'downloads', 'pictures', 'music', 'videos'] as const) {
+    const usual = join(home, name.charAt(0).toUpperCase() + name.slice(1));
+    const real = app.getPath(name);
+    if (real.toLowerCase() === usual.toLowerCase()) continue;
+    const lower = path.toLowerCase();
+    if (lower === usual.toLowerCase() || lower.startsWith(`${usual.toLowerCase()}${sep}`))
+      return real + path.slice(usual.length);
+  }
+  return path;
+}
 
 const isFolder = (path: string): boolean => {
   try {
@@ -83,15 +101,16 @@ export class InputHost {
           return maximize(BROWSERS);
         }
         if (action.path) {
+          const target = knownFolder(action.path);
           // A file no app opens (an .xlsx on a PC without Excel) would only bring up Windows'
           // "pick an app" box: show it selected in File Explorer instead.
-          if (!opensWithAnApp(action.path)) return shell.showItemInFolder(action.path);
+          if (!opensWithAnApp(target)) return shell.showItemInFolder(target);
           // Explorer opened by shell.openPath often lands behind the window in front.
-          if (isFolder(action.path)) {
-            await d.openFolder(action.path);
+          if (isFolder(target)) {
+            await d.openFolder(target);
             return maximize();
           }
-          const err = await shell.openPath(action.path);
+          const err = await shell.openPath(target);
           if (err) throw new Error(err);
         }
         return;

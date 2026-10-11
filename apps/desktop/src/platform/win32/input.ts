@@ -57,7 +57,13 @@ public static class ClickyInput {
     Send(new[] { Mouse(0x0800, unchecked((uint)(-notches * 120))) });
   }
   // Line breaks are Shift+Enter: a new line in chat apps and editors instead of "send".
+  [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
+  [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
   public static void Text(string s) {
+    timeBeginPeriod(1); // so the pause between characters is ~10 ms, not the default ~16
+    try { TextPaced(s); } finally { timeEndPeriod(1); }
+  }
+  static void TextPaced(string s) {
     var batch = new System.Collections.Generic.List<INPUT>();
     foreach (char ch in s) {
       if (ch == '\r') continue;
@@ -71,7 +77,9 @@ public static class ClickyInput {
         continue;
       }
       batch.Add(Key(0, ch, UNICODE)); batch.Add(Key(0, ch, UNICODE | KEYUP));
-      if (batch.Count >= 80) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(8); }
+      // One character at a time, ~10 ms apart: Windows 11 Notepad (and other RichEdit apps) mix up
+      // characters that arrive faster ("- Eggs" typed as "ssssss"), found by the live suite.
+      if (batch.Count >= 2) { Send(batch.ToArray()); batch.Clear(); Thread.Sleep(8); }
     }
     if (batch.Count > 0) Send(batch.ToArray());
   }
@@ -484,7 +492,7 @@ export function createWin32InputDriver(): InputDriver {
     return ready;
   }
 
-  async function send(cmd: string): Promise<string> {
+  async function send(cmd: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<string> {
     await start();
     const child = proc;
     if (!child) throw new Error('the input helper is not running');
@@ -493,7 +501,7 @@ export function createWin32InputDriver(): InputDriver {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error('the input helper timed out'));
-      }, COMMAND_TIMEOUT_MS);
+      }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
       child.stdin.write(`${id} ${cmd}\n`);
     });
@@ -506,7 +514,9 @@ export function createWin32InputDriver(): InputDriver {
     warm: () => void start().catch(() => undefined),
     click: (x, y, button, count) => done(send(`click ${int(x)} ${int(y)} ${button} ${count}`)),
     scroll: (x, y, amount) => done(send(`scroll ${int(x)} ${int(y)} ${int(amount)}`)),
-    type: (text) => done(send(`text ${Buffer.from(text, 'utf8').toString('base64')}`)),
+    // Typing is paced (~10 ms a character), so long text gets time to finish.
+    type: (text) =>
+      done(send(`text ${Buffer.from(text, 'utf8').toString('base64')}`, COMMAND_TIMEOUT_MS + text.length * 15)),
     backspace: (count) => done(send(`back ${Math.max(0, Math.min(20000, int(count)))}`)),
     foreground: async () => {
       const r = await send('fg');
