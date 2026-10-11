@@ -108,33 +108,41 @@ function color(): string {
   return CURSOR_COLOR_HEX[config.color];
 }
 
+/** Distance from the triangle's centre to its tip, as a fraction of the size setting. */
+const TIP = 0.6;
+
+/**
+ * An equilateral triangle with softly rounded corners. One vertex is the pointer tip: it faces the
+ * real cursor while following and rests exactly on the target while pointing.
+ */
 function drawTriangle(at: Pt, heading: number, scale: number, alpha: number): void {
   const s = SIZES[config.size] * scale;
+  const r = s * TIP;
   ctx.save();
   ctx.translate(at.x, at.y);
   // The shape is drawn pointing right (+x); rotate to the heading.
   ctx.rotate(heading);
   ctx.globalAlpha = alpha;
-  const tip = { x: s * 0.62, y: 0 };
-  const l = { x: -s * 0.42, y: -s * 0.5 };
-  const r = { x: -s * 0.42, y: s * 0.5 };
-  const notch = { x: -s * 0.18, y: 0 };
-  const grad = ctx.createLinearGradient(l.x, l.y, tip.x, tip.y);
+  const pts = [0, (2 * Math.PI) / 3, (-2 * Math.PI) / 3].map((a) => ({ x: Math.cos(a) * r, y: Math.sin(a) * r }));
+  const [tip, b, c] = pts as [Pt, Pt, Pt];
+  const round = s * 0.07;
+  const grad = ctx.createLinearGradient(b.x, 0, tip.x, 0);
   grad.addColorStop(0, shade(color(), 0.35));
   grad.addColorStop(1, color());
   ctx.shadowColor = color();
   ctx.shadowBlur = 14 * scale;
   ctx.beginPath();
-  ctx.moveTo(tip.x, tip.y);
-  ctx.quadraticCurveTo((tip.x + l.x) / 2 + 1, (tip.y + l.y) / 2 - 1, l.x, l.y);
-  ctx.quadraticCurveTo(notch.x - 2, notch.y - s * 0.12, notch.x, notch.y);
-  ctx.quadraticCurveTo(notch.x - 2, notch.y + s * 0.12, r.x, r.y);
-  ctx.quadraticCurveTo((tip.x + r.x) / 2 + 1, (tip.y + r.y) / 2 + 1, tip.x, tip.y);
+  // Start mid-edge so every corner, the tip included, gets the same small rounding.
+  ctx.moveTo((c.x + tip.x) / 2, (c.y + tip.y) / 2);
+  ctx.arcTo(tip.x, tip.y, b.x, b.y, round);
+  ctx.arcTo(b.x, b.y, c.x, c.y, round);
+  ctx.arcTo(c.x, c.y, tip.x, tip.y, round);
   ctx.closePath();
   ctx.fillStyle = grad;
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.stroke();
   ctx.restore();
@@ -280,8 +288,8 @@ function frame(now: number): void {
     const hover = Math.sin((now - mode.since) / 260) * 2.5;
     const s = SIZES[config.size];
     pos = {
-      x: mode.at.x - Math.cos(mode.heading) * s * 0.62 - Math.cos(mode.heading) * hover,
-      y: mode.at.y - Math.sin(mode.heading) * s * 0.62 - Math.sin(mode.heading) * hover,
+      x: mode.at.x - Math.cos(mode.heading) * (s * TIP + hover),
+      y: mode.at.y - Math.sin(mode.heading) * (s * TIP + hover),
     };
     heading = mode.heading;
     drawTargetRing(mode.at, mode.since, now);
