@@ -45,6 +45,12 @@ export interface InputDriver {
   backspace(count: number): Promise<void>;
   /** The app in front: lower-case process name and window title. */
   foreground(): Promise<{ process: string; title: string } | null>;
+  /** Where the control with this name is right now (physical px), searched near the hint point. */
+  locate(name: string, x: number, y: number): Promise<{ x: number; y: number } | null>;
+  /** Installed apps (Start menu, including Store apps). */
+  apps(): Promise<{ name: string; id: string }[]>;
+  /** Launch an installed app by its id from apps(). */
+  launch(id: string): Promise<void>;
   /** The text caret in physical screen pixels, when the app exposes it. */
   caret(): Promise<{ x: number; y: number; height: number } | null>;
   /** Press together and release in reverse, e.g. ['ctrl', 's']. 'mask' is a no-op key. */

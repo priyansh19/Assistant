@@ -42,7 +42,10 @@ export interface OverlayPort {
 
 /** Something agent mode or dictation does with the mouse or keyboard. Points are on a display. */
 export type InputAction =
-  | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2 }
+  /** `target` names what's being clicked, so the live position can be looked up at click time. */
+  | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2; target?: string }
+  /** Open an installed app by name, a website (default browser) or a folder or file. */
+  | { kind: 'open'; app?: string; url?: string; path?: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
   | { kind: 'type'; text: string }
   /** Delete this many characters before the text cursor (undo of a write). */

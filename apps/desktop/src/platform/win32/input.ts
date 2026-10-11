@@ -29,6 +29,7 @@ public static class ClickyInput {
   [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint tid, ref GUITHREADINFO info);
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder sb, int max);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string name);
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object obj);
   const uint KEYUP = 2, UNICODE = 4, EXTENDED = 1;
   static void Aware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
@@ -82,6 +83,64 @@ public static class ClickyInput {
     var sb = new System.Text.StringBuilder(512); GetWindowText(h, sb, 512);
     return B64(name) + " " + B64(sb.ToString());
   }
+  // Words that describe a control rather than name it ("Comet browser icon" → "comet").
+  static readonly string[] Generic = { "button", "icon", "app", "application", "browser", "the", "taskbar", "tab", "link", "menu", "on", "in", "item", "shortcut", "pinned", "window" };
+  static string[] Tokens(string s) {
+    var list = new System.Collections.Generic.List<string>();
+    foreach (var w in System.Text.RegularExpressions.Regex.Split(s.ToLowerInvariant(), "[^a-z0-9]+"))
+      if (w.Length >= 3 && Array.IndexOf(Generic, w) < 0) list.Add(w);
+    return list.ToArray();
+  }
+  static bool Matches(System.Windows.Automation.AutomationElement e, string[] want) {
+    string n;
+    try { n = (e.Current.Name ?? "").ToLowerInvariant(); } catch { return false; }
+    if (n.Length == 0 || want.Length == 0) return false;
+    foreach (var t in want) if (n.Contains(t)) return true;
+    return false;
+  }
+  static string Center(System.Windows.Automation.AutomationElement e) {
+    var r = e.Current.BoundingRectangle;
+    if (r.IsEmpty || r.Width < 1) return "";
+    return ((int)(r.X + r.Width / 2)) + " " + ((int)(r.Y + r.Height / 2));
+  }
+  // Where the control named "name" is right now (physical px "x y"), searching what's under the
+  // point first, then the taskbar and the window in front; the match nearest the hint wins.
+  public static string Locate(string name, int x, int y) {
+    Aware();
+    var want = Tokens(name);
+    if (want.Length == 0) return "";
+    try {
+      var e = System.Windows.Automation.AutomationElement.FromPoint(new System.Windows.Point(x, y));
+      for (int i = 0; e != null && i < 6; i++) {
+        if (Matches(e, want)) { var c = Center(e); if (c != "") return c; }
+        e = System.Windows.Automation.TreeWalker.ControlViewWalker.GetParent(e);
+      }
+    } catch { }
+    var cond = new System.Windows.Automation.OrCondition(
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Button),
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.ListItem),
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.MenuItem),
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.TabItem),
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Hyperlink),
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Edit));
+    string best = ""; double bestD = double.MaxValue;
+    foreach (var h in new[] { FindWindow("Shell_TrayWnd", null), GetForegroundWindow() }) {
+      if (h == IntPtr.Zero) continue;
+      try {
+        var all = System.Windows.Automation.AutomationElement.FromHandle(h).FindAll(System.Windows.Automation.TreeScope.Descendants, cond);
+        int seen = 0;
+        foreach (System.Windows.Automation.AutomationElement el in all) {
+          if (++seen > 4000) break;
+          if (!Matches(el, want)) continue;
+          var c = Center(el); if (c == "") continue;
+          var p = c.Split(' '); double dx = int.Parse(p[0]) - x, dy = int.Parse(p[1]) - y; double d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = c; }
+        }
+      } catch { }
+    }
+    return best;
+  }
+
   // The text caret in physical screen pixels: "x y height", or "" when the app doesn't expose one.
   public static string Caret() {
     Aware();
@@ -138,6 +197,9 @@ while ($true) {
       'back'   { [ClickyInput]::Backspace([int]$p[2]) }
       'fg'     { $out = [ClickyInput]::Foreground() }
       'caret'  { $out = [ClickyInput]::Caret() }
+      'locate' { $out = [ClickyInput]::Locate([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4]) }
+      'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
+      'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       default  { throw "unknown command $($p[1])" }
     }
     [Console]::Out.WriteLine("$id ok $out")
@@ -194,7 +256,7 @@ export function createWin32InputDriver(): InputDriver {
 
   function start(): Promise<void> {
     if (ready) return ready;
-    const script = `Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @'\n${CSHARP}\n'@\n${LOOP}`;
+    const script = `Add-Type -ReferencedAssemblies Accessibility,UIAutomationClient,UIAutomationTypes,WindowsBase -TypeDefinition @'\n${CSHARP}\n'@\n${LOOP}`;
     const child = spawn(
       'powershell.exe',
       [
@@ -281,6 +343,22 @@ export function createWin32InputDriver(): InputDriver {
       const [a, b] = r.split(' ');
       return a === undefined || a === '' ? null : { process: b64(a), title: b64(b ?? '') };
     },
+    locate: async (name, x, y) => {
+      const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
+      const [lx, ly] = r.split(' ').map(Number);
+      return lx === undefined || ly === undefined || !Number.isFinite(lx + ly) ? null : { x: lx, y: ly };
+    },
+    apps: async () => {
+      const raw = b64(await send('apps'));
+      const parsed: unknown = JSON.parse(raw || '[]');
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      return list
+        .filter(
+          (a): a is { Name: string; AppID: string } => typeof a?.Name === 'string' && typeof a?.AppID === 'string',
+        )
+        .map((a) => ({ name: a.Name, id: a.AppID }));
+    },
+    launch: (id) => done(send(`launch ${Buffer.from(id, 'utf8').toString('base64')}`)),
     caret: async () => {
       const [x, y, h] = (await send('caret')).split(' ').map(Number);
       return x === undefined || y === undefined || h === undefined || !Number.isFinite(x + y + h)

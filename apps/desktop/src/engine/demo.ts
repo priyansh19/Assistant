@@ -54,12 +54,12 @@ export function demoChat(): VisionChatProvider {
           : '{"action":"wait","ms":300,"say":"Waiting a moment"}';
         return;
       }
-      const img = req.images[0];
       // Point near the bottom-left of the first screenshot, where the Start button usually is.
-      const x = img ? Math.round(img.width * 0.42) : 100;
-      const y = img ? Math.round(img.height * 0.97) : 100;
-      const w = img?.width ?? 1000;
-      const h = img?.height ?? 600;
+      // Positions are thousandths of the screenshot, as the prompt asks.
+      const x = 420;
+      const y = 970;
+      const w = 1000;
+      const h = 1000;
       const parts = [
         `[POINT:${x},${y}:Start button]`,
         // Show the drawing marks too: an arrow from the middle of the screen down to the taskbar.

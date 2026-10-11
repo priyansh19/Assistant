@@ -5,7 +5,7 @@
  * (the interaction signal), and risky steps wait for the user's go-ahead.
  */
 
-import { mapPointToDisplay } from './coordinates.js';
+import { fromThousandths, mapPointToDisplay } from './coordinates.js';
 import { StageError } from './errors.js';
 import { delay, withTimeout } from './pipeline/budget.js';
 import type { CapturePort, InputAction, InputPort, OverlayPort, ScreenCapture } from './ports.js';
@@ -26,6 +26,7 @@ export type AgentAction =
   | { type: 'key'; keys: string[]; say: string; risky: boolean }
   | { type: 'scroll'; x: number; y: number; screen: number | null; amount: number; say: string; risky: boolean }
   | { type: 'wait'; ms: number; say: string; risky: boolean }
+  | { type: 'open'; app: string; url: string; path: string; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
 
 /** The model's verdict on its previous step, judged from the new screenshot. */
@@ -40,7 +41,7 @@ const QUESTION_START = /^(?:how|where|what|why|when|which|who|whose|is|are|was|d
  * answered normally.
  */
 const TRIGGER =
-  /^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:clickey|clicky|clicki|click\s+y|klicky|klickey|agents?)\b[\s,:.!-]*(.*)$/is;
+  /^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:clickey|clicky|clicki|click\s+y|click\s+here|klicky|klickey|agents?)\b[\s,:.!-]*(.*)$/is;
 
 /** The task when the request starts with the trigger word; null otherwise (including questions). */
 export function agentGoal(question: string): string | null {
@@ -178,6 +179,14 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
         action: { type, x, y, screen: scr, amount: Math.max(-30, Math.min(30, Math.round(amount))), say, risky },
       };
     }
+    case 'open': {
+      const app = str(o['app'], 120);
+      const url = str(o['url'], 500);
+      const path = str(o['path'], 400);
+      if (!app && !url && !path) return { ok: false, error: 'open needs an app, url or path' };
+      if (url && !/^https?:\/\//i.test(url)) return { ok: false, error: 'url must start with http:// or https://' };
+      return { ok: true, action: { type, app, url, path, say, risky } };
+    }
     case 'wait':
       return { ok: true, action: { type, ms: Math.max(200, Math.min(5000, num(o['ms']) ?? 1000)), say, risky } };
     case 'done':
@@ -199,11 +208,14 @@ wanted, judged from the new screenshot. Examples:
 {"action":"key","keys":"ctrl+s","say":"Saving"}
 
 Actions:
-- click, double_click, right_click: x,y are the centre of the element in screenshot pixels (origin
-  top-left). Add "screen":N if it is not on the first screenshot. Always include "target".
+- click, double_click, right_click: x,y are the centre of the element in thousandths of the
+  screenshot (0–1000 across, 0–1000 down; 0,0 is the top-left corner). Add "screen":N if it is not on the first screenshot. Always include "target".
 - type: {"text": "..."} types into the focused field. Click the field first if it isn't focused.
 - key: {"keys": "..."} one key or shortcut, e.g. "enter", "esc", "ctrl+l", "alt+tab", "win".
 - scroll: {"x":..,"y":..,"amount":N} N notches, positive scrolls down, negative up.
+- open: {"app":"Grok Bot"} launches an installed app by its exact name from the list below;
+  {"url":"https://…"} opens a website in the user's default browser; {"path":"C:\\…"} opens a folder or file.
+  This is the fastest, most reliable way to open things: use it instead of clicking around.
 - wait: {"ms":N} when something is still loading.
 - done: {"say":"..."} when the task is complete. "say" is one short spoken sentence about what you did.
 - fail: {"say":"..."} when the task is impossible or unsafe; say why in one short sentence.
@@ -222,23 +234,29 @@ Rules:
   field) and they didn't say what to type, reply done with a question as "say", e.g. "The search
   box is open. What would you like to search for?"
 - Ignore Clicky's own bar at the top of the screen and its triangle; they are not part of the app.
-- Use what's on screen first. To open an app, click its icon if it's visible (taskbar, desktop,
-  an open window). Open exactly the app named: Comet is not Chrome, Edge is not Chrome.
-- Only if the app isn't visible anywhere: key "win+r", type its program name and press "enter".
-  To open a website, focus the browser, press "ctrl+l", type the address and press "enter".
+- To open an app that's in "Apps on this PC", use the open action with its exact name. Open exactly
+  the app named: Comet is not Chrome, Edge is not Chrome. Only if it isn't installed, open its
+  website with {"url": …} (that uses the user's default browser, never a specific one).
+- To open a folder or file from "Folders", use {"path": …}.
 - Follow "Things the user told you" and "What worked before" when they apply; they come from the
   user's own corrections and earlier runs.
 - "say" is a few words for the user, like "Opening the File menu".`;
 
-function agentSystemPrompt(screens: ScreenCapture, userContext?: string): string {
+function agentSystemPrompt(
+  screens: ScreenCapture,
+  userContext?: string,
+  inventory?: { apps: string[]; folders: string[] },
+): string {
   const lines = [AGENT_PROMPT, '', 'Screenshots in this message:'];
   screens.images.forEach((img, i) =>
     lines.push(
       `- screen${i + 1}: ${img.width}x${img.height} px${i + 1 === screens.cursorScreen ? ' (the mouse is on this screen)' : ''}`,
     ),
   );
+  if (inventory?.apps.length) lines.push('', `Apps on this PC: ${inventory.apps.slice(0, 250).join('; ')}`);
+  if (inventory?.folders.length) lines.push('', `Folders: ${inventory.folders.slice(0, 60).join('; ')}`);
   const ctx = userContext?.trim();
-  if (ctx) lines.push('', `About the user: ${ctx.slice(0, 500)}`);
+  if (ctx) lines.push('', `About the user: ${ctx.slice(0, 4000)}`);
   return lines.join('\n');
 }
 
@@ -270,6 +288,8 @@ export interface AgentDeps {
   userInterrupted?(): boolean;
   /** The user took over: wait (shown on the task bar) until they stop or press Resume. */
   waitForUser?(signal: AbortSignal): Promise<void>;
+  /** What's on this PC: installed app names and common folders. */
+  inventory?: { apps: string[]; folders: string[] };
   /** Lessons from earlier successful runs of similar tasks, shown to the model as hints. */
   hints?: string;
   /** Progress for the step strip. */
@@ -352,6 +372,8 @@ function describe(a: AgentAction): string {
       return `scrolled ${a.amount > 0 ? 'down' : 'up'} ${Math.abs(a.amount)} at ${a.x},${a.y}`;
     case 'wait':
       return `waited ${a.ms} ms`;
+    case 'open':
+      return `opened ${a.app || a.url || a.path}`;
     default:
       return a.type;
   }
@@ -394,7 +416,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     ]
       .filter(Boolean)
       .join('\n\n');
-    const reply = await ask(deps, agentSystemPrompt(screens, deps.userContext), question, screens);
+    const reply = await ask(deps, agentSystemPrompt(screens, deps.userContext, deps.inventory), question, screens);
     if (deps.signal.aborted) return stopped();
     const parsed = parseAgentAction(reply);
     if (!parsed.ok) {
@@ -457,7 +479,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     deps.onProgress?.({ goal, step: i, max, say });
     let input: InputAction | null = null;
     if (a.type === 'click' || a.type === 'double_click' || a.type === 'right_click' || a.type === 'scroll') {
-      const mapped = mapPointToDisplay(a, screens.geometry);
+      const mapped = mapPointToDisplay(fromThousandths(a, screens.geometry), screens.geometry);
       if (!mapped.ok) {
         note = `That position was off the screenshot (${mapped.detail}). Use coordinates inside the image.`;
         steps.push(`(skipped: ${describe(a)} was off screen)`);
@@ -473,7 +495,16 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
               at: mapped.point,
               button: a.type === 'right_click' ? 'right' : 'left',
               count: a.type === 'double_click' ? 2 : 1,
+              ...(a.target ? { target: a.target } : {}),
             };
+    } else if (a.type === 'open') {
+      deps.overlay.message(say, 'info');
+      input = {
+        kind: 'open',
+        ...(a.app ? { app: a.app } : {}),
+        ...(a.url ? { url: a.url } : {}),
+        ...(a.path ? { path: a.path } : {}),
+      };
     } else if (a.type === 'type') {
       deps.atCaret?.();
       deps.overlay.message(say, 'info');

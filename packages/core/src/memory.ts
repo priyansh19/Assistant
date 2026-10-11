@@ -36,7 +36,7 @@ export function bareGreeting(question: string): boolean {
   const rest = question
     .toLowerCase()
     .replace(/[^a-z\s']/g, ' ')
-    .replace(/\b(hey|hi|hello|hiya|yo|ok(ay)?|clickey|clicky|click|there|you|are|r|u|listening|buddy)\b/g, ' ')
+    .replace(/\b(hey|hi|hello|hiya|yo|ok(ay)?|clickey|clicky|click|here|there|you|are|r|u|listening|buddy)\b/g, ' ')
     .trim();
   return rest.length === 0 && question.trim().length > 0;
 }

@@ -148,3 +148,17 @@ describe("plain dictation stays the user's words", () => {
     ).toBe(true);
   });
 });
+
+describe('write key: talking to Clicky is not dictation', () => {
+  it('greets, answers or writes depending on what was said', () => {
+    const o = { hasSelection: false, last: null, now: 0 };
+    expect(planDictation('Hi, Clicky.', o)).toEqual({ kind: 'greet' });
+    expect(planDictation('Hey Clicky, open WhatsApp', o)).toEqual({ kind: 'assistant', question: 'open WhatsApp' });
+    expect(planDictation('Click here, what is this error?', o)).toEqual({
+      kind: 'assistant',
+      question: 'what is this error?',
+    });
+    expect(planDictation('Hey Clicky, reply to this and say thanks', o).kind).toBe('write');
+    expect(planDictation('how are you', o)).toEqual({ kind: 'plain', text: 'how are you' });
+  });
+});

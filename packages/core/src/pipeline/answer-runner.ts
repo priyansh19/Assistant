@@ -9,7 +9,7 @@
  * (or the StageError it throws) onto the state machine.
  */
 
-import { mapPointToDisplay } from '../coordinates.js';
+import { fromThousandths, mapPointToDisplay } from '../coordinates.js';
 import type { MappedPoint } from '../coordinates.js';
 import { classifyFailure, StageError, type Stage } from '../errors.js';
 import type { PointTarget } from '../point-parser.js';
@@ -221,12 +221,23 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
   }
 }
 
+/** Drawing coordinates arrive in thousandths of the screenshot, like POINT. */
+function shapeFromThousandths(s: DrawShape, screens: ScreenCapture): DrawShape {
+  const cap = screens.geometry[(s.screen ?? 1) - 1];
+  if (!cap) return s;
+  const fx = (v: number): number => (v / 1000) * cap.imageWidth;
+  const fy = (v: number): number => (v / 1000) * cap.imageHeight;
+  if (s.kind === 'box') return { ...s, x: fx(s.x), y: fy(s.y), w: fx(s.w), h: fy(s.h) };
+  if (s.kind === 'arrow') return { ...s, x1: fx(s.x1), y1: fy(s.y1), x2: fx(s.x2), y2: fy(s.y2) };
+  return { ...s, x: fx(s.x), y: fy(s.y), r: fx(s.r) };
+}
+
 /** At most this many drawings per answer, so a confused model can't cover the screen. */
 export const MAX_DRAWINGS = 4;
 
 function drawShape(shape: DrawShape, screens: ScreenCapture, drawn: { count: number }, input: AnswerRunInput): void {
   if (drawn.count >= MAX_DRAWINGS || !input.hooks.draw) return;
-  const mapped = mapShapeToDisplay(shape, screens.geometry);
+  const mapped = mapShapeToDisplay(shapeFromThousandths(shape, screens), screens.geometry);
   if (!mapped.ok) {
     input.hooks.log?.(`${shape.kind} drawing skipped: ${mapped.detail}`);
     return;
@@ -242,7 +253,7 @@ function pointAt(
   input: AnswerRunInput,
 ): void {
   if (!tag || result.pointLabel !== null) return; // only the first point is used
-  const mapped = mapPointToDisplay(tag, screens.geometry);
+  const mapped = mapPointToDisplay(fromThousandths(tag, screens.geometry), screens.geometry);
   if (!mapped.ok) {
     input.hooks.log?.(`POINT skipped (${mapped.reason}): ${mapped.detail}`);
     return;

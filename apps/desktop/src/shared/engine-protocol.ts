@@ -43,6 +43,8 @@ export interface EngineConfig {
   lessons: AgentLesson[];
   /** Things the user asked Clicky to remember. */
   notes: string[];
+  /** Installed app names and common folders (main scans them). */
+  inventory: { apps: string[]; folders: string[] };
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
