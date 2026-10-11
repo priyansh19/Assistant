@@ -2,7 +2,14 @@
 // Main sends requests (id + op) and gets one reply per request; mic frames and playback progress
 // are pushed as events.
 import type { WorkerApi } from '../../preload/worker';
-import type { CaptureSource, CapturedFrame, MicDevice, WorkerRequest } from '../../shared/worker-protocol';
+import type {
+  CaptureSource,
+  CapturedFrame,
+  MicDevice,
+  WorkerEvent,
+  WorkerReply,
+  WorkerRequest,
+} from '../../shared/worker-protocol';
 
 declare global {
   interface Window {
@@ -11,6 +18,70 @@ declare global {
 }
 
 const api = window.clickyWorker;
+
+// ---------------------------------------------------------------- links
+
+/**
+ * Who a request came from: main (dashboard mic test, mic arming, the in-process engine) or the
+ * engine process over its own port. Replies and stream events go back to whoever asked, and mic
+ * frames only to whoever is recording, so audio for the voice loop never passes through main.
+ */
+interface Link {
+  reply(r: WorkerReply): void;
+  emit(e: WorkerEvent): void;
+}
+
+const mainLink: Link = { reply: (r) => api.reply(r), emit: (e) => api.emit(e) };
+let engineLink: Link | null = null;
+/** Mic owner ('voice' | 'test') → link that started it. */
+const ownerLinks = new Map<string, Link>();
+/** Playback / voice stream id → link that opened it. */
+const streamLinks = new Map<string, Link>();
+
+function emit(e: WorkerEvent): void {
+  if (e.type === 'mic.frame') {
+    for (const link of new Set(ownerLinks.values())) link.emit(e);
+  } else if (e.type === 'mic.level') {
+    mainLink.emit(e); // the overlay waveform and the dashboard meter live in main
+  } else if (e.type === 'mic.error') {
+    for (const link of new Set([mainLink, ...ownerLinks.values()])) link.emit(e);
+  } else if (e.type === 'audio.started' || e.type === 'audio.finished' || e.type === 'audio.error') {
+    (streamLinks.get(e.streamId) ?? mainLink).emit(e);
+    if (e.type !== 'audio.started') streamLinks.delete(e.streamId);
+  } else {
+    mainLink.emit(e);
+  }
+}
+
+window.addEventListener('message', (ev: MessageEvent<{ type?: string }>) => {
+  if (ev.source !== window || ev.data?.type !== 'clicky-engine-port') return;
+  const port = ev.ports[0];
+  if (!port) return;
+  detachEngine();
+  const link: Link = {
+    reply: (reply) => port.postMessage({ kind: 'reply', reply }),
+    emit: (event) => port.postMessage({ kind: 'event', event }),
+  };
+  engineLink = link;
+  port.onmessage = (m: MessageEvent<{ kind: string; id: number; req: WorkerRequest }>) => {
+    if (engineLink === link && m.data.kind === 'request') dispatch(m.data.id, m.data.req, link);
+  };
+  port.start();
+});
+
+/** The engine went away (or was replaced): stop what it was using, so nothing keeps running. */
+function detachEngine(): void {
+  const old = engineLink;
+  engineLink = null;
+  if (!old) return;
+  for (const [owner, link] of [...ownerLinks]) if (link === old) micStop(owner);
+  for (const [id, link] of [...streamLinks]) {
+    if (link !== old) continue;
+    streamLinks.delete(id);
+    audioStop(id);
+    voiceStop(id);
+  }
+}
 
 // ---------------------------------------------------------------- microphone
 
@@ -103,8 +174,8 @@ async function openMic(deviceId: string): Promise<void> {
           if (preroll.length > PREROLL_FRAMES) preroll.shift();
           return;
         }
-        api.emit({ type: 'mic.frame', frame: ev.data.frame });
-        api.emit({ type: 'mic.level', level: Math.min(1, ev.data.rms * 4) });
+        emit({ type: 'mic.frame', frame: ev.data.frame });
+        emit({ type: 'mic.level', level: Math.min(1, ev.data.rms * 4) });
       };
       const current = { stream, nodes: [source, node, mute] as AudioNode[], deviceId };
       for (const t of stream.getAudioTracks()) {
@@ -112,7 +183,7 @@ async function openMic(deviceId: string): Promise<void> {
           if (mic !== current) return;
           const wasEmitting = emitting;
           closeMic();
-          if (wasEmitting) api.emit({ type: 'mic.error', message: 'The microphone was disconnected.' });
+          if (wasEmitting) emit({ type: 'mic.error', message: 'The microphone was disconnected.' });
         };
       }
       mic = current;
@@ -160,12 +231,13 @@ async function micStart(deviceId: string, owner: string): Promise<void> {
   }
   emitting = true;
   // Only a warm device has a meaningful pre-roll; flush it first.
-  if (warm) for (const f of preroll.splice(0)) api.emit({ type: 'mic.frame', frame: f });
+  if (warm) for (const f of preroll.splice(0)) emit({ type: 'mic.frame', frame: f });
   preroll.length = 0;
 }
 
 function micStop(owner: string): void {
   owners.delete(owner);
+  ownerLinks.delete(owner);
   if (owners.size > 0) return; // the other user (voice or test) still needs it
   micGen++;
   emitting = false;
@@ -308,7 +380,7 @@ function finishIfDrained(id: string, s: PlayStream): void {
   if (s.finishing && s.sources.size === 0 && !s.done) {
     s.done = true;
     streams.delete(id);
-    api.emit({ type: 'audio.finished', streamId: id });
+    emit({ type: 'audio.finished', streamId: id });
   }
 }
 
@@ -349,7 +421,7 @@ function audioChunk(id: string, data: Uint8Array): void {
   if (!s.started) {
     s.started = true;
     const delayMs = Math.max(0, (start - ctx.currentTime) * 1000);
-    setTimeout(() => api.emit({ type: 'audio.started', streamId: id }), delayMs);
+    setTimeout(() => emit({ type: 'audio.started', streamId: id }), delayMs);
   }
 }
 
@@ -405,7 +477,7 @@ function voiceDone(id: string, v: VoiceStream): void {
   if (v.finishing && v.pending === 0 && !v.done) {
     v.done = true;
     voices.delete(id);
-    api.emit({ type: 'audio.finished', streamId: id });
+    emit({ type: 'audio.finished', streamId: id });
   }
 }
 
@@ -425,7 +497,7 @@ function voiceSay(id: string, text: string): void {
   u.onstart = () => {
     if (!stream.started && !stream.done) {
       stream.started = true;
-      api.emit({ type: 'audio.started', streamId: id });
+      emit({ type: 'audio.started', streamId: id });
     }
   };
   const end = (): void => {
@@ -436,7 +508,7 @@ function voiceSay(id: string, text: string): void {
   u.onend = end;
   u.onerror = (e) => {
     if (e.error !== 'interrupted' && e.error !== 'canceled') {
-      api.emit({ type: 'audio.error', streamId: id, message: `Windows voice failed: ${e.error}` });
+      emit({ type: 'audio.error', streamId: id, message: `Windows voice failed: ${e.error}` });
     }
     end();
   };
@@ -483,7 +555,7 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         s.finishing = true;
         finishIfDrained(req.streamId, s);
       } else {
-        api.emit({ type: 'audio.finished', streamId: req.streamId });
+        emit({ type: 'audio.finished', streamId: req.streamId });
       }
       return;
     }
@@ -497,28 +569,36 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         v.finishing = true;
         voiceDone(req.streamId, v);
       } else {
-        api.emit({ type: 'audio.finished', streamId: req.streamId });
+        emit({ type: 'audio.finished', streamId: req.streamId });
       }
       return;
     }
-    case 'voice.stop': {
-      const v = voices.get(req.streamId);
-      if (v) {
-        v.done = true;
-        voices.delete(req.streamId);
-        speechSynthesis.cancel();
-      }
-      return;
-    }
+    case 'voice.stop':
+      return voiceStop(req.streamId);
+    case 'engine.detached':
+      return detachEngine();
   }
 }
 
-api.onRequest((id, req) => {
+function voiceStop(id: string): void {
+  const v = voices.get(id);
+  if (!v) return;
+  v.done = true;
+  voices.delete(id);
+  speechSynthesis.cancel();
+}
+
+function dispatch(id: number, req: WorkerRequest, link: Link): void {
+  // Remember who owns what, so frames and stream events go back to them.
+  if (req.op === 'mic.start') ownerLinks.set(req.owner, link);
+  else if (req.op === 'audio.open' || req.op === 'voice.say') streamLinks.set(req.streamId, link);
   handle(req).then(
-    (result) => api.reply({ id, ok: true, result }),
-    (e: unknown) => api.reply({ id, ok: false, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }),
+    (result) => link.reply({ id, ok: true, result }),
+    (e: unknown) => link.reply({ id, ok: false, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }),
   );
-});
+}
+
+api.onRequest((id, req) => dispatch(id, req, mainLink));
 
 // Warm up the mic pipeline and the audio output so the first press and first answer are fast
 // (no microphone device is opened here).

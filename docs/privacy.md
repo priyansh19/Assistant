@@ -26,10 +26,10 @@ All under `%APPDATA%\Clicky\`:
 
 | File | Contents |
 |---|---|
-| `credentials.json` | API keys, encrypted with Windows DPAPI for your user account (Electron `safeStorage`). Never stored in plaintext; if encryption is unavailable, keys are not saved. |
+| `credentials.json` | API keys, encrypted with Windows DPAPI for your user account (Electron `safeStorage`). Never stored in plaintext; if encryption is unavailable, keys are not saved. The main process decrypts them and passes them in memory to Clicky's engine process (a background Node process that calls the providers); they never reach a window. |
 | `settings.json` | Your settings. No secrets. |
 | `history.json` | Text-only history: question, answer, what was pointed at, timing. Turn off with *Remember history*; clear from the History page. |
 | `actions.json` | Saved actions (name + question). |
-| `logs/clicky.log`, `logs/latency.jsonl` | Diagnostics and per-question timing. Strings that look like API keys are masked. No audio, images, questions or answers are logged. |
+| `logs/clicky.log`, `logs/latency.jsonl` | Diagnostics and per-question timing per stage, plus which provider and model answered and, on failure, which stage and provider failed. Strings that look like API keys are masked. No audio, images, questions or answers are logged. |
 
 Screenshots and audio are never written to disk.

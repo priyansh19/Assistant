@@ -30,7 +30,9 @@ export type WorkerRequest =
   | { op: 'audio.stop'; streamId: string }
   | { op: 'voice.say'; streamId: string; text: string }
   | { op: 'voice.finish'; streamId: string }
-  | { op: 'voice.stop'; streamId: string };
+  | { op: 'voice.stop'; streamId: string }
+  /** The engine process went away: stop the mic and streams it owned (sent by main). */
+  | { op: 'engine.detached' };
 
 export interface MicDevice {
   deviceId: string;

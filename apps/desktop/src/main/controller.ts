@@ -1,85 +1,186 @@
 import { app } from 'electron';
 import {
-  cloudSpeech,
+  CREDENTIAL_IDS,
   HOLD_KEY_LABELS,
-  contextTurns,
-  Orchestrator,
   requiredCredentials,
   type AskResult,
   type CredentialId,
   type InteractionState,
   type Settings,
-  type SpeechFactory,
 } from '@clicky/core';
-import { createChat, createStt, createTts } from '@clicky/providers';
-import type { HoldKeyHook, Platform } from '../platform';
+import { DEMO } from '../engine/demo';
+import type { EngineConfig, EngineToMain } from '../shared/engine-protocol';
+import type { Platform } from '../platform';
+import { CapturePlanner } from './capture-planner';
 import type { CredentialStore } from './credential-store';
-import { DEMO, demoChat, demoStt } from './demo';
+import { EngineHost } from './engine-host';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
-import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './ports';
 import type { SettingsStore } from './settings-store';
 import type { WorkerHost } from './worker-host';
 
 type StateListener = (state: InteractionState) => void;
 
 export interface ControllerHooks {
-  /** Called on key-down before listening starts, e.g. to get the Clicky window out of the shot. */
+  /** Called on key-down after listening starts, e.g. to get the Clicky window out of the shot. */
   beforeListen?(): void;
   /** Keys are missing: show the user where to add them. */
   needKeys?(): void;
 }
 
-/** Owns the orchestrator and the hold key, and connects them to settings, keys and storage. */
+/** A typed question that outlives this is answered with an error rather than left hanging. */
+const ASK_TIMEOUT_MS = 180_000;
+
+/**
+ * Main's side of the interaction loop. The loop itself runs in the engine (architecture §4); this
+ * keeps the engine's config current, carries out what the engine asks of main (overlay, history,
+ * logs, screen layout) and gives the rest of main a small API.
+ */
 export class Controller {
-  readonly orchestrator: Orchestrator;
-  private holdKey: HoldKeyHook | null = null;
+  private readonly engine: EngineHost;
+  private readonly planner = new CapturePlanner();
   private readonly stateListeners = new Set<StateListener>();
-  private readonly speechFactory: () => SpeechFactory;
+  private current: { state: InteractionState; interactionId: string | null } = { state: 'idle', interactionId: null };
   /** While set (setup wizard "press your key"), key presses are reported here instead of asking. */
   private keyTest: ((down: boolean) => void) | null = null;
+  private nextId = 1;
+  private readonly asks = new Map<number, (r: AskResult | null) => void>();
+  private readonly samples = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   hooks: ControllerHooks = {};
 
   constructor(
-    private readonly platform: Platform,
+    platform: Platform,
     private readonly settings: SettingsStore,
     private readonly credentials: CredentialStore,
     private readonly history: HistoryStore,
     private readonly overlays: OverlayManager,
     private readonly worker: WorkerHost,
   ) {
-    const getKey = (id: CredentialId): string | null => this.credentials.get(id);
-    this.speechFactory = (): SpeechFactory => {
-      const tts = DEMO ? null : createTts(this.settings.get(), getKey);
-      return tts ? cloudSpeech(tts, () => createAudioSink(this.worker)) : systemSpeech(this.worker);
-    };
-    this.orchestrator = new Orchestrator({
-      chat: () => (DEMO ? demoChat() : createChat(this.settings.get(), getKey)),
-      stt: () => (DEMO ? demoStt() : createStt(this.settings.get(), getKey)),
-      speech: () => this.speechFactory(),
-      capture: createCapturePort(this.worker, () => this.settings.get()),
-      mic: createMicPort(
-        this.worker,
-        () => this.settings.get().micDeviceId,
-        (level) => this.overlays.level(level),
-      ),
-      overlay: this.overlays,
-      listensDirectly: () => !DEMO && this.settings.get().sttProvider === 'model',
-      recentTurns: () => (this.settings.get().useRecentContext ? contextTurns(this.history.list(), Date.now()) : []),
-      record: (entry) => this.history.add(entry, this.settings.get().rememberHistory),
-      onLatency: (summary) => {
-        this.history.logLatency(summary);
-        log.info('latency', summary);
-      },
-      onState: (state) => {
-        for (const fn of this.stateListeners) fn(state);
-        // After each answer, get the speech-to-text service ready for the next question.
-        if (state === 'idle' || state === 'cancelled' || state === 'error') this.prewarm();
-      },
-      log: (m) => log.info(m),
+    this.engine = new EngineHost(platform, worker);
+    this.engine.onMessage((msg) => this.onEngine(msg));
+    // The overlay waveform: levels come from the media renderer through main, only while listening.
+    worker.on((e) => {
+      if (e.type === 'mic.level' && this.current.state === 'listening') overlays.level(e.level);
+      else if (e.type === 'worker.crashed') this.engine.mediaCrashed();
     });
-    this.worker.onRestart = () => this.syncMicArm();
+    worker.onRestart = () => {
+      this.syncMicArm();
+      this.engine.connectMedia();
+    };
+    const push = (): void => this.pushConfig();
+    settings.onChange(push);
+    credentials.onChange(push);
+    history.onChange(push);
+    this.pushConfig();
+    this.engine.start();
+  }
+
+  private config(): EngineConfig {
+    const keys: Partial<Record<CredentialId, string>> = {};
+    for (const id of CREDENTIAL_IDS) {
+      const k = this.credentials.get(id);
+      if (k) keys[id] = k;
+    }
+    return {
+      settings: this.settings.get(),
+      keys,
+      missing: this.missingKeys(),
+      history: this.history.list(),
+      demo: DEMO,
+    };
+  }
+
+  private pushConfig(): void {
+    this.engine.send({ type: 'config', config: this.config() });
+  }
+
+  private onEngine(msg: EngineToMain): void {
+    switch (msg.type) {
+      case 'ready':
+        return;
+      case 'state': {
+        this.current = { state: msg.state, interactionId: msg.interactionId };
+        if (msg.interactionId === null) this.engineLost();
+        for (const fn of this.stateListeners) fn(msg.state);
+        return;
+      }
+      case 'overlay': {
+        const o = msg.overlay;
+        if (o.op === 'state') this.overlays.state(o.state);
+        else if (o.op === 'point') this.overlays.point(o.target, o.label);
+        else if (o.op === 'message') this.overlays.message(o.text, o.kind);
+        return;
+      }
+      case 'record':
+        return this.history.add(msg.entry, this.settings.get().rememberHistory);
+      case 'latency':
+        this.history.logLatency(msg.summary);
+        log.info('latency', msg.summary);
+        return;
+      case 'log':
+        return log[msg.level](msg.message);
+      case 'needKeys':
+        return this.hooks.needKeys?.();
+      case 'listening':
+        return this.hooks.beforeListen?.();
+      case 'keyTest':
+        return this.keyTest?.(msg.down);
+      case 'askResult': {
+        const done = this.asks.get(msg.id);
+        this.asks.delete(msg.id);
+        return done?.(msg.result);
+      }
+      case 'speakSampleResult': {
+        const p = this.samples.get(msg.id);
+        this.samples.delete(msg.id);
+        if (msg.error) p?.reject(new Error(msg.error));
+        else p?.resolve();
+        return;
+      }
+      case 'capturePlan':
+        this.planner.plan(msg.allDisplays).then(
+          (plan) => this.engine.send({ type: 'capturePlan.reply', id: msg.id, plan }),
+          (e: unknown) =>
+            this.engine.send({
+              type: 'capturePlan.reply',
+              id: msg.id,
+              error: e instanceof Error ? e.message : String(e),
+            }),
+        );
+        return;
+      case 'holdKey.failed':
+        log.error('hold-to-talk hook failed', msg.message);
+        this.overlays.message(`The ${this.holdKeyLabel()} key can't be watched right now. Restart Clicky.`, 'error');
+        return;
+    }
+  }
+
+  /** The engine process died mid-question: answer every waiter instead of leaving it hanging. */
+  private engineLost(): void {
+    for (const done of this.asks.values())
+      done({ outcome: 'error', answer: '', pointLabel: null, detail: 'Clicky restarted its voice engine. Try again.' });
+    this.asks.clear();
+    for (const p of this.samples.values()) p.reject(new Error('Clicky restarted its voice engine. Try again.'));
+    this.samples.clear();
+  }
+
+  private holdKeyLabel(): string {
+    return HOLD_KEY_LABELS[this.settings.get().holdKey];
+  }
+
+  get state(): InteractionState {
+    return this.current.state;
+  }
+
+  /** Id of the latest interaction, to tell whether a newer question has started since. */
+  get interactionId(): string | null {
+    return this.current.interactionId;
+  }
+
+  /** 'process' when the engine runs in its own process, 'inproc' when it fell back to main. */
+  get engineMode(): string {
+    return this.engine.mode;
   }
 
   onState(fn: StateListener): () => void {
@@ -96,43 +197,25 @@ export class Controller {
 
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   prewarm(): void {
-    if (DEMO || this.missingKeys().length) return;
-    try {
-      createStt(this.settings.get(), (id) => this.credentials.get(id)).prewarm?.();
-    } catch {
-      // missing config shows up when the user asks
-    }
+    this.engine.send({ type: 'prewarm' });
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */
   setKeyTest(fn: ((down: boolean) => void) | null): void {
     this.keyTest = fn;
+    this.engine.send({ type: 'keyTest', on: fn !== null });
   }
 
   startHoldKey(): void {
-    this.holdKey?.stop();
-    const s = this.settings.get();
-    this.holdKey = this.platform.createHoldKeyHook(s.holdKey);
-    this.holdKey.start({
-      onDown: () => {
-        if (this.keyTest) return this.keyTest(true);
-        if (this.settings.get().paused) return;
-        if (this.missingKeys().length) {
-          // Nothing can work yet: say so and open the place to fix it, instead of failing later.
-          this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
-          this.hooks.needKeys?.();
-          return;
-        }
-        // The mic and capture start first; moving windows can wait a millisecond.
-        this.orchestrator.keyDown();
-        this.hooks.beforeListen?.();
-      },
-      onUp: () => {
-        if (this.keyTest) return this.keyTest(false);
-        this.orchestrator.keyUp();
-      },
-      onCancel: () => this.orchestrator.cancel('escape'),
-    });
+    this.engine.send({ type: 'holdKey.start' });
+  }
+
+  stopHoldKey(): void {
+    this.engine.send({ type: 'holdKey.stop' });
+  }
+
+  cancel(reason: string): void {
+    this.engine.send({ type: 'cancel', reason });
   }
 
   /** Open or close the warm microphone to match settings (see Settings.micAlwaysReady). */
@@ -145,39 +228,43 @@ export class Controller {
       .catch((e: unknown) => log.warn('could not keep the microphone ready', String(e)));
   }
 
-  stopHoldKey(): void {
-    this.holdKey?.stop();
-    this.holdKey = null;
-  }
-
   async ask(question: string, source: 'typed' | 'action'): Promise<AskResult | null> {
     if (this.missingKeys().length) {
       this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
       this.hooks.needKeys?.();
       return { outcome: 'error', answer: '', pointLabel: null, detail: 'Add your API keys first.' };
     }
-    return this.orchestrator.ask(question, source);
+    const id = this.nextId++;
+    return new Promise<AskResult | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.asks.delete(id);
+        resolve({ outcome: 'error', answer: '', pointLabel: null, detail: 'The question took too long.' });
+      }, ASK_TIMEOUT_MS);
+      this.asks.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      this.engine.send({ type: 'ask', id, question, source });
+    });
   }
 
   /** Voice preview for the dashboard. */
-  async speakSample(): Promise<void> {
-    const key = HOLD_KEY_LABELS[this.settings.get().holdKey];
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 20000);
-    const out = this.speechFactory().create(ac.signal);
-    try {
-      out.say(`Hi, I'm Clicky. Hold ${key}, ask me about anything on your screen, and let go.`);
-      out.end();
-      await out.done;
-      if (ac.signal.aborted) throw new Error('The voice took too long to respond. Check your internet connection.');
-    } finally {
-      clearTimeout(timer);
-      out.stop();
-    }
+  speakSample(): Promise<void> {
+    const id = this.nextId++;
+    const text = `Hi, I'm Clicky. Hold ${this.holdKeyLabel()}, ask me about anything on your screen, and let go.`;
+    return new Promise<void>((resolve, reject) => {
+      this.samples.set(id, { resolve, reject });
+      this.engine.send({ type: 'speakSample', id, text });
+    });
   }
 
   applyLaunchAtLogin(enabled: boolean): void {
     // Only meaningful for the installed app; in dev it would register electron.exe.
     if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: enabled });
+  }
+
+  /** App quitting: stop the hook and the engine process. */
+  shutdown(): void {
+    this.engine.stop();
   }
 }

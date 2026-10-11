@@ -8,7 +8,13 @@ import { defineConfig } from 'electron-vite';
 export default defineConfig({
   main: {
     build: {
-      rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } },
+      // The engine is a second Node entry, run as an Electron utilityProcess (architecture §4).
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          engine: resolve(__dirname, 'src/engine/index.ts'),
+        },
+      },
     },
   },
   preload: {

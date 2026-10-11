@@ -5,7 +5,7 @@ import { getPlatform } from '../platform';
 import { Controller } from './controller';
 import { CredentialStore } from './credential-store';
 import { DashboardWindow } from './dashboard-window';
-import { DEMO } from './demo';
+import { DEMO } from '../engine/demo';
 import { HistoryStore } from './history-store';
 import { log } from './log';
 import { OverlayManager } from './overlay-manager';
@@ -75,7 +75,7 @@ if (!app.requestSingleInstanceLock()) {
     settings.onChange((next, prev) => {
       if (next.holdKey !== prev.holdKey) ctl.startHoldKey();
       if (next.launchAtLogin !== prev.launchAtLogin) ctl.applyLaunchAtLogin(next.launchAtLogin);
-      if (next.paused && !prev.paused) ctl.orchestrator.cancel('paused');
+      if (next.paused && !prev.paused) ctl.cancel('paused');
       if (
         next.micAlwaysReady !== prev.micAlwaysReady ||
         next.paused !== prev.paused ||
@@ -107,7 +107,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {});
 
   app.on('will-quit', () => {
-    controller?.stopHoldKey();
+    controller?.shutdown();
     overlays?.stop();
     worker?.destroy();
     tray?.destroy();

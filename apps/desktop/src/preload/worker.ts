@@ -14,6 +14,12 @@ const api = {
   },
 };
 
+// A direct port to the engine process (architecture §4). MessagePorts can't cross the context
+// bridge, so hand it to the page with window.postMessage, the pattern Electron documents.
+ipcRenderer.on('worker:engine-port', (e) => {
+  window.postMessage({ type: 'clicky-engine-port' }, '*', e.ports);
+});
+
 export type WorkerApi = typeof api;
 
 contextBridge.exposeInMainWorld('clickyWorker', api);

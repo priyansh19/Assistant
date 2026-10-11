@@ -42,7 +42,7 @@ Clicky is mostly OS integration. The parts that decide the stack:
 - **Runtime:** Electron (current stable, 44.x at time of writing), Node 22+, TypeScript strict.
 - **Build/dev:** electron-vite (main / preload / renderer bundles), Electron Forge or electron-builder for packaging (decide in Phase 6; Forge + Squirrel is what tekram uses).
 - **Package manager:** pnpm workspaces.
-- **Hold-to-talk:** `uiohook-napi` in the main process; Electron `globalShortcut` only for non-hold shortcuts.
+- **Hold-to-talk:** `uiohook-napi` in the engine `utilityProcess` (falls back to main, see `architecture.md` §4); Electron `globalShortcut` only for non-hold shortcuts.
 - **Mic:** `getUserMedia` + `AudioWorklet` in a hidden renderer, 16 kHz mono PCM16 frames over IPC/MessagePort to the STT client.
 - **Capture:** a `getUserMedia` desktop stream (source id from `desktopCapturer`) opened at key-down and sampled at key-up, plus the `screen` API for display geometry and scale factors. Phase 0 showed no native addon is needed (see `docs/reference-findings.md`).
 - **Overlay:** one transparent, frameless, `alwaysOnTop('screen-saver')`, click-through `BrowserWindow` per display, recreated on `display-added/removed/metrics-changed`. Canvas/CSS animation.

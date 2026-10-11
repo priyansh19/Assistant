@@ -299,14 +299,14 @@ export class DashboardWindow {
     const win = this.win;
     if (!win || win.isDestroyed() || !win.isFocused() || win.isMinimized()) return false;
     win.minimize();
-    const mine = this.controller.orchestrator.machine.interaction?.id;
-    const off = this.controller.onState((state) => {
-      const o = this.controller.orchestrator;
-      if (o.machine.interaction?.id !== mine) return off(); // a newer question took over
+    const ctl = this.controller;
+    const mine = ctl.interactionId;
+    const off = ctl.onState((state) => {
+      if (ctl.interactionId !== mine) return off(); // a newer question took over
       if (!isResting(state)) return;
       off();
       setTimeout(() => {
-        if (!win.isDestroyed() && win.isMinimized() && o.machine.interaction?.id === mine) win.restore();
+        if (!win.isDestroyed() && win.isMinimized() && ctl.interactionId === mine) win.restore();
       }, 1500);
     });
     return true;
@@ -342,11 +342,11 @@ export class DashboardWindow {
       if (hid) {
         // Remember which interaction this was: restore only if no newer question has started since,
         // and whatever the outcome (a failure message in the window must be visible).
-        const mine = this.controller.orchestrator.machine.interaction?.id;
+        const ctl = this.controller;
+        const mine = ctl.interactionId;
         setTimeout(() => {
-          const o = this.controller.orchestrator;
           if (win.isDestroyed() || !win.isMinimized()) return;
-          if (isResting(o.state) && o.machine.interaction?.id === mine) win.restore();
+          if (isResting(ctl.state) && ctl.interactionId === mine) win.restore();
         }, 1200);
       }
     }
@@ -389,7 +389,7 @@ export class DashboardWindow {
       encryptionAvailable: this.credentials.encryptionAvailable,
       appVersion: app.getVersion(),
       defaultModel: defaultChatModel(s.chatProvider),
-      state: this.controller.orchestrator.state,
+      state: this.controller.state,
       missing: this.controller.missingKeys(s),
       stats: this.history.stats(),
       history: this.history.list().slice(0, 200),

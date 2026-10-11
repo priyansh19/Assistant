@@ -1,5 +1,7 @@
-import { desktopCapturer, screen, type Display } from 'electron';
+// Ports the pipeline uses to reach the media renderer (mic, capture, playback, offline voice).
+// They only need a MediaChannel, so they run the same in the engine process and in main.
 import {
+  StageError,
   type AudioSink,
   type CapturePort,
   type DisplayGeometry,
@@ -8,114 +10,39 @@ import {
   type SpeechFactory,
   type SpeechOutput,
 } from '@clicky/core';
-import type { CaptureSource, CapturedFrame, WorkerEvent } from '../shared/worker-protocol';
-import type { WorkerHost } from './worker-host';
+import type { CapturePlan } from '../shared/engine-protocol';
+import type { CapturedFrame, WorkerEvent } from '../shared/worker-protocol';
+import type { MediaChannel } from './media-channel';
 
 const JPEG_QUALITY = 0.82;
-
-function geometry(d: Display): DisplayGeometry {
-  return { id: d.id, bounds: d.bounds, scaleFactor: d.scaleFactor };
-}
-
-function physical(d: Display): { width: number; height: number } {
-  return { width: Math.round(d.bounds.width * d.scaleFactor), height: Math.round(d.bounds.height * d.scaleFactor) };
-}
-
-/** Displays to capture: the cursor's display first, then (optionally) the rest. */
-function targetDisplays(allDisplays: boolean): Display[] {
-  const cursor = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  if (!allDisplays) return [cursor];
-  return [cursor, ...screen.getAllDisplays().filter((d) => d.id !== cursor.id)];
-}
-
-/**
- * desktopCapturer.getSources blocks the main process for ~200-300 ms on Windows, so it must never
- * run on the key-down path. Source ids are stable for a display layout: fetch them at startup and
- * whenever displays change, and reuse them.
- */
-class SourceCache {
-  private sources: Electron.DesktopCapturerSource[] = [];
-  private pending: Promise<void> | null = null;
-
-  constructor() {
-    const refresh = (): void => void this.refresh();
-    screen.on('display-added', refresh);
-    screen.on('display-removed', refresh);
-    // Only geometry changes matter; taskbar/work-area changes would cost a blocking getSources.
-    screen.on('display-metrics-changed', (_e, _d, changed: string[]) => {
-      if (changed.some((c) => c === 'bounds' || c === 'scaleFactor' || c === 'rotation')) refresh();
-    });
-    // Off the startup critical path.
-    setTimeout(refresh, 1500);
-  }
-
-  refresh(): Promise<void> {
-    this.pending ??= desktopCapturer
-      .getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
-      .then((s) => {
-        this.sources = s;
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        this.pending = null;
-      });
-    return this.pending;
-  }
-
-  /** Sources for these displays from the cache, or null if the cache doesn't cover them. */
-  lookup(displays: Display[]): CaptureSource[] | null {
-    const out: CaptureSource[] = [];
-    for (const d of displays) {
-      const src = this.sources.find((s) => s.display_id === String(d.id));
-      if (!src) return null;
-      out.push({ sourceId: src.id, ...physical(d) });
-    }
-    return out;
-  }
-
-  async get(displays: Display[]): Promise<CaptureSource[]> {
-    // Only fetch when we have nothing at all; a miss with a warm cache falls back to order rather
-    // than paying for another blocking getSources on the key-down path.
-    if (this.sources.length === 0) await this.refresh();
-    const hit = this.lookup(displays);
-    if (hit) return hit;
-    const all = screen.getAllDisplays();
-    return displays.map((d) => {
-      // Some drivers leave display_id empty: match by position in the display list instead.
-      const src = this.sources[all.findIndex((x) => x.id === d.id)] ?? this.sources[0];
-      if (!src) throw new Error('No screen is available to capture.');
-      return { sourceId: src.id, ...physical(d) };
-    });
-  }
-}
 
 /** Upper bound for grabbing the screenshot(s); a locked or protected screen can stall capture. */
 const CAPTURE_TIMEOUT_MS = 4000;
 
+/** Works out which displays and capture sources to use (main owns the screen API). */
+export type CapturePlanner = (allDisplays: boolean) => Promise<CapturePlan>;
+
 export function createCapturePort(
-  worker: WorkerHost,
+  media: MediaChannel,
+  planner: CapturePlanner,
   settings: () => { captureMaxEdge: number; captureAllDisplays: boolean },
 ): CapturePort {
-  const cache = new SourceCache();
   // The displays and sources chosen at key-down are reused at key-up, so the frame matches. The
   // plan belongs to one interaction: a cancelled press must not leak it into the next question.
-  let planned: { signal: AbortSignal; plan: Promise<{ displays: Display[]; sources: CaptureSource[] }> } | null = null;
-  const plan = (): Promise<{ displays: Display[]; sources: CaptureSource[] }> => {
-    const displays = targetDisplays(settings().captureAllDisplays);
-    return cache.get(displays).then((sources) => ({ displays, sources }));
-  };
+  let planned: { signal: AbortSignal; plan: Promise<CapturePlan> } | null = null;
+  const plan = (): Promise<CapturePlan> => planner(settings().captureAllDisplays);
   return {
     begin(signal) {
       const p = plan();
       planned = { signal, plan: p };
       p.then((pl) => {
-        if (!signal.aborted) worker.send({ op: 'capture.begin', sources: pl.sources });
+        if (!signal.aborted) media.send({ op: 'capture.begin', sources: pl.sources });
       }).catch(() => undefined);
       signal.addEventListener(
         'abort',
         () => {
           if (planned?.signal === signal) planned = null;
-          worker.send({ op: 'capture.stop' });
+          media.send({ op: 'capture.stop' });
         },
         { once: true },
       );
@@ -125,19 +52,24 @@ export function createCapturePort(
       planned = null;
       const pl = await (mine ?? plan());
       if (signal.aborted) throw new Error('aborted');
-      const frames = await worker
+      const frames = await media
         .request<CapturedFrame[]>(
           { op: 'capture.take', sources: pl.sources, maxEdge: settings().captureMaxEdge, quality: JPEG_QUALITY },
           CAPTURE_TIMEOUT_MS,
         )
         .catch((e: unknown) => {
-          worker.send({ op: 'capture.stop' });
-          throw new Error(`Couldn't capture the screen (${e instanceof Error ? e.message : String(e)}).`, { cause: e });
+          media.send({ op: 'capture.stop' });
+          throw new StageError(
+            'capture',
+            'unknown',
+            `Couldn't capture the screen (${e instanceof Error ? e.message : String(e)}).`,
+            { cause: e },
+          );
         });
       return {
         images: frames.map((f) => ({ data: f.data, mediaType: 'image/jpeg', width: f.width, height: f.height })),
         geometry: frames.map((f, i) => ({
-          display: geometry(pl.displays[i] as Display),
+          display: pl.displays[i] as DisplayGeometry,
           imageWidth: f.width,
           imageHeight: f.height,
         })),
@@ -147,29 +79,29 @@ export function createCapturePort(
   };
 }
 
-export function createMicPort(worker: WorkerHost, deviceId: () => string, onLevel: (level: number) => void): MicPort {
+/** Mic frames for the voice loop. Levels for the overlay waveform go to main separately. */
+export function createMicPort(media: MediaChannel, deviceId: () => string): MicPort {
   let off: (() => void) | null = null;
   let current = 0;
   return {
     async start(onFrame, signal, onError) {
       off?.();
       const me = ++current;
-      const myOff = worker.on((e: WorkerEvent) => {
+      const myOff = media.on((e: WorkerEvent) => {
         if (signal.aborted) return;
         if (e.type === 'mic.frame') onFrame(e.frame);
-        else if (e.type === 'mic.level') onLevel(e.level);
         else if (e.type === 'mic.error') onError?.(new Error(e.message));
         else if (e.type === 'worker.crashed') onError?.(new Error('The audio worker stopped unexpectedly.'));
       });
       off = myOff;
       try {
-        await worker.request({ op: 'mic.start', deviceId: deviceId(), owner: 'voice' }, 8000);
+        await media.request({ op: 'mic.start', deviceId: deviceId(), owner: 'voice' }, 8000);
       } catch (e) {
         myOff();
         // Only clean up if no newer press has taken over the mic meanwhile.
         if (current === me) {
           off = null;
-          worker.send({ op: 'mic.stop', owner: 'voice' });
+          media.send({ op: 'mic.stop', owner: 'voice' });
         }
         throw new Error(`Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
       }
@@ -178,8 +110,7 @@ export function createMicPort(worker: WorkerHost, deviceId: () => string, onLeve
       current++;
       off?.();
       off = null;
-      onLevel(0);
-      worker.send({ op: 'mic.stop', owner: 'voice' });
+      media.send({ op: 'mic.stop', owner: 'voice' });
     },
   };
 }
@@ -188,8 +119,8 @@ let streamSeq = 0;
 
 type Outcome = { ok: true } | { ok: false; error: Error };
 
-/** Plays streamed PCM through the worker. */
-export function createAudioSink(worker: WorkerHost): AudioSink {
+/** Plays streamed PCM through the media renderer. */
+export function createAudioSink(media: MediaChannel): AudioSink {
   const streamId = `a${++streamSeq}`;
   let opened = false;
   const startFns: Array<() => void> = [];
@@ -205,7 +136,7 @@ export function createAudioSink(worker: WorkerHost): AudioSink {
     if (o.ok) finished.resolve();
     else finished.reject(o.error);
   };
-  off = worker.on((e) => {
+  off = media.on((e) => {
     if (e.type === 'worker.crashed') {
       settle({ ok: false, error: new Error('The audio worker stopped unexpectedly.') });
       return;
@@ -221,9 +152,9 @@ export function createAudioSink(worker: WorkerHost): AudioSink {
       if (!opened) {
         opened = true;
         const m = /pcm_(\d+)/.exec(chunk.format);
-        worker.send({ op: 'audio.open', streamId, sampleRate: m ? Number(m[1]) : 24000 });
+        media.send({ op: 'audio.open', streamId, sampleRate: m ? Number(m[1]) : 24000 });
       }
-      worker.send({ op: 'audio.chunk', streamId, data: chunk.data });
+      media.send({ op: 'audio.chunk', streamId, data: chunk.data });
     },
     finish() {
       if (!opened) {
@@ -238,21 +169,21 @@ export function createAudioSink(worker: WorkerHost): AudioSink {
           else reject(o.error);
           return;
         }
-        worker.send({ op: 'audio.finish', streamId });
+        media.send({ op: 'audio.finish', streamId });
       });
     },
     onStart(fn) {
       startFns.push(fn);
     },
     stop() {
-      worker.send({ op: 'audio.stop', streamId });
+      media.send({ op: 'audio.stop', streamId });
       settle({ ok: true });
     },
   };
 }
 
 /** The offline Windows voice (speechSynthesis in the worker). */
-export function systemSpeech(worker: WorkerHost): SpeechFactory {
+export function systemSpeech(media: MediaChannel): SpeechFactory {
   return {
     id: 'system',
     create(signal): SpeechOutput {
@@ -268,7 +199,7 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
         resolveDone = res;
         rejectDone = rej;
       });
-      const off = worker.on((e) => {
+      const off = media.on((e) => {
         if (e.type === 'worker.crashed') {
           off();
           rejectDone(new Error('The audio worker stopped unexpectedly.'));
@@ -291,7 +222,7 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
         if (stopped) return;
         stopped = true;
         off();
-        worker.send({ op: 'voice.stop', streamId });
+        media.send({ op: 'voice.stop', streamId });
         resolveDone();
       };
       signal.addEventListener('abort', stop, { once: true });
@@ -299,12 +230,12 @@ export function systemSpeech(worker: WorkerHost): SpeechFactory {
         say(text) {
           if (stopped || ended || !text.trim()) return;
           said++;
-          worker.send({ op: 'voice.say', streamId, text });
+          media.send({ op: 'voice.say', streamId, text });
         },
         end() {
           if (ended || stopped) return;
           ended = true;
-          worker.send({ op: 'voice.finish', streamId });
+          media.send({ op: 'voice.finish', streamId });
         },
         done,
         onFirstAudio(fn) {

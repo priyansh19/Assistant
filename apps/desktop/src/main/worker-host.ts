@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { BrowserWindow, ipcMain, session } from 'electron';
+import { BrowserWindow, ipcMain, session, type MessagePortMain } from 'electron';
 import type { WorkerEvent, WorkerReply, WorkerRequest } from '../shared/worker-protocol';
 
 type EventHandler = (e: WorkerEvent) => void;
@@ -129,6 +129,21 @@ export class WorkerHost {
       if (this.loaded && this.win && !this.win.isDestroyed()) sendNow();
       else this.start().then(sendNow, fail);
     });
+  }
+
+  /**
+   * Hand the worker a direct port to the engine process, so mic frames and audio skip main
+   * (architecture §4). Re-sent by the engine host whenever either side restarts.
+   */
+  attachEnginePort(port: MessagePortMain): void {
+    this.start().then(
+      () => {
+        const win = this.win;
+        if (win && !win.isDestroyed()) win.webContents.postMessage('worker:engine-port', null, [port]);
+        else port.close();
+      },
+      () => port.close(),
+    );
   }
 
   /** Fire-and-forget (audio chunks): errors are reported through events instead. */

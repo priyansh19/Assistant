@@ -23,7 +23,8 @@ packages/core/        pure TS: state machine, POINT stream parser, coordinate ma
                       prompt builder, provider interfaces, latency recorder
 packages/providers/   LLM / STT / TTS clients implementing core interfaces
 apps/desktop/         Electron app
-  src/main/           lifecycle, tray, hotkey hook, capture, overlay manager, orchestrator
+  src/main/           control plane: lifecycle, tray, windows, stores, capture planning, engine host
+  src/engine/         data plane (utilityProcess): hotkey hook, orchestrator, providers, media ports
   src/preload/        minimal typed contextBridge APIs
   src/renderer/       overlay, settings, hidden audio worker
   src/platform/       ALL OS-specific code: win32/, darwin/, linux/

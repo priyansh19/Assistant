@@ -71,11 +71,11 @@ The numbers below are estimates from the code's structure and published provider
 - **Main** creates the other processes, hands each pair a `MessageChannelMain` port, then stays out of the way. It keeps the credential store (safeStorage only works in main) and sends the engine a settings + keys snapshot on start and on change. Keys go to the engine (a Node process, not a renderer), so the rule "keys never reach a renderer" still holds.
 - **Engine** is an Electron `utilityProcess`: Node, no window, its own event loop. It owns the hold-key hook, the interaction state machine, the pipeline and all provider connections. Because nothing else runs there, key events and socket reads never queue behind window work.
 - **Media renderer** is the current hidden worker, unchanged in what it does: mic, capture, playback, offline voice. It talks to the engine over port **P1** with transferable `ArrayBuffer`s (zero-copy), not through main.
-- **Overlay renderers** get state and point events straight from the engine over **P2**, so the cursor reacts on the same tick the event happens.
+- **Overlay renderers** get state and point events from the engine. As built, these go through main (one extra hop, off the audio path) because main owns the overlay windows and the cursor position; a direct port **P2** is the next step if the trace shows main delaying the pointer.
 - **Dashboard** keeps talking to main over normal IPC. Typed questions and saved actions are forwarded to the engine as commands.
 - **Supervisor:** main restarts the engine or media process if one dies, re-sends the snapshot and re-wires the ports; the running interaction ends in a visible error, never a stuck state.
 
-Risk to check on the laptop first: `uiohook-napi` inside a `utilityProcess`. Fallback if it misbehaves: keep the hook in main but forward key events to the engine over a port immediately, before any other work.
+Risk to check on the laptop first: `uiohook-napi` inside a `utilityProcess`. As built, if the engine process fails to start within 5 s or crashes more than twice in a minute, the same `Engine` runs inside main over the old worker channel for the rest of the session (log line "running the engine inside the main process"). `CLICKY_ENGINE=inproc` forces that mode. Mic levels for the overlay waveform still go through main; mic frames and audio don't.
 
 ## 5. Module boundaries
 
@@ -177,7 +177,7 @@ Each step is one PR, keeps the app working, and is measured with the trace from 
 
 1. **Trace and typed errors** (landed). Event log, `StageError`, provider error classifiers, latency table in the dashboard. No behaviour change; this produces the real "before" numbers.
 2. **Pipeline stages** (landed). Split the orchestrator into stages and a runner in `core`, with the existing behaviour and tests carried over. Still in main.
-3. **Engine process and direct ports.** Move the runner, providers and hold-key hook into a `utilityProcess`; wire media and overlay ports. Needs laptop verification of the hook.
+3. **Engine process and direct ports** (landed; needs the laptop check). Move the runner, providers and hold-key hook into a `utilityProcess`; wire media and overlay ports. Needs laptop verification of the hook.
 4. **Speed features.** Persistent TTS socket, eager first clause, image cache warm-up, speculative answer start, hedged fallback. Each behind a setting so its effect shows up in the trace on its own.
 
 ## 10. Working alongside Phase 2 fixes
