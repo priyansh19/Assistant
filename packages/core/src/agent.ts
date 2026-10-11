@@ -158,6 +158,13 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
     case 'key': {
       const keys = parseKeys(str(o['keys'] ?? o['key'], 60));
       if (!keys) return { ok: false, error: `unknown key "${str(o['keys'] ?? o['key'], 60)}"` };
+      // The Start menu sits above every app window (Clicky's triangle included): never open it.
+      if (keys.length === 1 && keys[0] === 'win')
+        return {
+          ok: false,
+          error:
+            'the Start menu is not allowed; click the app on the taskbar or desktop, or use win+r and type its name',
+        };
       return { ok: true, action: { type, keys, say, risky } };
     }
     case 'scroll': {
