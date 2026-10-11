@@ -61,6 +61,8 @@ describe('parseAgentAction', () => {
     expect(parseAgentAction('{"action":"click","x":"a"}')).toMatchObject({ ok: false });
     expect(parseAgentAction('{"action":"fly"}')).toEqual({ ok: false, error: 'unknown action "fly"' });
     expect(parseAgentAction('{"action":"key","keys":"ctrl+banana"}')).toMatchObject({ ok: false });
+    expect(parseAgentAction('{"action":"key","keys":"win"}')).toMatchObject({ ok: false });
+    expect(parseAgentAction('{"action":"key","keys":"win+r"}')).toMatchObject({ ok: true });
   });
 
   it('clamps waits and scrolls', () => {
@@ -205,5 +207,12 @@ describe('learning from runs', () => {
   it('reads the per-step check', () => {
     expect(parseStepCheck('{"action":"key","keys":"enter","check":"failed"}')).toBe('failed');
     expect(parseStepCheck('{"action":"done","say":"ok"}')).toBeNull();
+  });
+});
+
+describe('Start menu guard', () => {
+  it('rejects the bare Windows key but allows Win+R', () => {
+    expect(parseAgentAction('{"action":"key","keys":"win"}')).toMatchObject({ ok: false });
+    expect(parseAgentAction('{"action":"key","keys":"win+r"}')).toMatchObject({ ok: true });
   });
 });
