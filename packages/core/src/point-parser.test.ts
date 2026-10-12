@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TAG_LENGTH, parsePointTag, PointStreamParser, type ParserEvent } from './point-parser.js';
+import {
+  MAX_TAG_LENGTH,
+  MAX_TASK_TAG_LENGTH,
+  parsePointTag,
+  parseTaskTag,
+  PointStreamParser,
+  type ParserEvent,
+} from './point-parser.js';
 
 function run(chunks: string[]): ParserEvent[] {
   const p = new PointStreamParser();
@@ -139,5 +146,33 @@ describe('PointStreamParser', () => {
   it('releases an over-long bracket span as text even when it closes in one chunk', () => {
     const prose = `[POINT: ${'x'.repeat(MAX_TAG_LENGTH)}] end`;
     expect(spoken(run([prose]))).toBe(prose);
+  });
+});
+
+describe('TASK tag', () => {
+  const goal = 'Open Calculator, work out 18% of 2450 and put the result in a new Notepad note called sums';
+
+  it('parses the goal at every split point and never speaks it', () => {
+    const text = `[TASK:${goal}]`;
+    for (let i = 0; i <= text.length; i++) {
+      const events = run([text.slice(0, i), text.slice(i)]);
+      expect(events).toEqual([{ type: 'task', goal }]);
+    }
+  });
+
+  it('allows goals longer than a POINT tag but not unbounded', () => {
+    const long = 'a'.repeat(MAX_TAG_LENGTH + 50);
+    expect(run([`[TASK:${long}]`])).toEqual([{ type: 'task', goal: long }]);
+    const prose = `[TASK:${'x'.repeat(MAX_TASK_TAG_LENGTH)}] end`;
+    expect(spoken(run([prose]))).toBe(prose);
+  });
+
+  it('tidies whitespace and drops an empty goal', () => {
+    expect(parseTaskTag('[TASK:  close\n this   window ]')).toBe('close this window');
+    expect(parseTaskTag('[TASK: ]')).toBeNull();
+    expect(run(['[TASK:]Okay.'])).toEqual([
+      { type: 'invalid-tag', raw: '[TASK:]' },
+      { type: 'text', text: 'Okay.' },
+    ]);
   });
 });

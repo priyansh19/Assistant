@@ -56,13 +56,18 @@ export interface AnswerRunInput {
   confirm?: Promise<boolean>;
   /** The prompt prefix was sent ahead with warmCache: mark it cacheable so this request reads it. */
   cache?: boolean;
+  /** Agent mode exists here: the model may hand a request over with [TASK:goal] instead of answering. */
+  tasks?: boolean;
 }
 
 /**
  * The system prompt for these screenshots. Shared with the cache warm-up, which must send a
  * byte-identical prefix for the real request to hit the cache.
  */
-export function answerSystemPrompt(screens: ScreenCapture, opts: { userContext?: string; audio?: unknown }): string {
+export function answerSystemPrompt(
+  screens: ScreenCapture,
+  opts: { userContext?: string; audio?: unknown; tasks?: boolean },
+): string {
   return buildSystemPrompt({
     screens: screens.images.map((img, i) => ({
       index: i + 1,
@@ -72,6 +77,7 @@ export function answerSystemPrompt(screens: ScreenCapture, opts: { userContext?:
     })),
     ...(opts.userContext ? { userContext: opts.userContext } : {}),
     ...(opts.audio ? { audioQuestion: true } : {}),
+    ...(opts.tasks ? { tasks: true } : {}),
   });
 }
 
@@ -92,12 +98,17 @@ export interface AnswerRunHooks {
 }
 
 export interface AnswerRunResult {
-  /** 'no-speech': the model listened and heard no question. */
-  outcome: 'answered' | 'no-speech';
+  /**
+   * 'no-speech': the model listened and heard no question. 'task': the model handed the request to
+   * agent mode ([TASK:goal]); nothing was spoken and `task` holds the goal.
+   */
+  outcome: 'answered' | 'no-speech' | 'task';
   answer: string;
   /** What the model heard, when it listened to the recording. */
   heard: string | null;
   pointLabel: string | null;
+  /** The goal from a [TASK:goal] tag. */
+  task?: string;
 }
 
 /** Run the answer path. Throws a StageError on failure; returns quietly if `signal` aborts. */
@@ -190,6 +201,13 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         pointAt(ev.tag, screens, result, input);
       } else if (ev.type === 'draw') {
         drawShape(ev.shape, screens, drawn, input);
+      } else if (ev.type === 'task') {
+        // Something to do, not to answer: stop here (the tag comes first, so nothing was said)
+        // and let the caller run it. Ending the iterator also cancels the model stream.
+        input.hooks.log?.(`TASK from the answer model: ${ev.goal}`);
+        voice.stop();
+        void iterator.return(undefined).catch(() => undefined);
+        return { ...result, outcome: 'task', task: ev.goal };
       } else if (ev.type === 'heard') {
         result.heard = ev.text;
         input.hooks.heard?.(ev.text);

@@ -15,6 +15,8 @@ export type AnswerEvent =
   /** `tag` is null for [POINT:none]. */
   | { type: 'point'; tag: PointTarget | null }
   | { type: 'draw'; shape: DrawShape }
+  /** The model says this is a task for agent mode, not a question ([TASK:goal]). */
+  | { type: 'task'; goal: string }
   /** Something that looked like a tag but didn't parse; dropped, never spoken. */
   | { type: 'invalid-tag'; raw: string }
   /** What the model heard, when it listened to the recording itself. */
@@ -36,7 +38,7 @@ function* fromParser(events: ParserEvent[]): Generator<AnswerEvent> {
   for (const ev of events) {
     if (ev.type === 'text') yield ev;
     else if (ev.type === 'point') yield { type: 'point', tag: ev.tag.kind === 'point' ? ev.tag : null };
-    else if (ev.type === 'draw') yield ev;
+    else if (ev.type === 'draw' || ev.type === 'task') yield ev;
     else yield { type: 'invalid-tag', raw: ev.raw };
   }
 }
