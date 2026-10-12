@@ -89,5 +89,20 @@ Legend: ✅ we have it · 🟡 partial or different · ❌ missing · ⛔ delibe
 
 - **P1 (this PR)**: snap answer pointing to the real control; prompt parity (elaborate on request, plant a seed, code rule, help with anything).
 - **P2 (this PR)**: the label types in with a pop; moving the mouse cancels the return flight; the "meet Clicky" first run (welcome line, look-around comment, "hold Right Ctrl and introduce yourself") plus a "Say hi again" tray item; the "Show Clicky" setting for the transient cursor.
-- **P3**: keep Clicky's own windows out of its screenshots.
+- **P3 (done)**: keep Clicky's own windows out of its screenshots (setting *Keep Clicky out of screenshots*, on by default).
 - **P4**: auto-update. This needs Priyansh to decide how releases are published.
+
+## HeyClicky 1.0.53, the shipped app (static pass, 2026-10-12)
+
+From the laptop's static pass over the DMG (`research/heyclicky/static-pass-2026-10-12.md`). REA's own tools were blocked on the laptop, so this comes from the plist, the bundle layout and the bundled agent instructions.
+
+| HeyClicky | Ours | Status |
+|---|---|---|
+| Computer use acts on accessibility-tree element tokens (Cua Driver) and screenshots only check the result. | UI Automation retargets clicks and snaps answer pointing. Agent steps still act on screenshot positions. | **Being built** in the laptop thread: a UIA element snapshot with numbered elements. |
+| The agent picks the most direct route: connected apps, then the web, then the shell, and the screen last. | Opens URLs and files directly, and has file listing and moving. No web lookups without the browser, and no app connectors. | Web lookups are a next step. Connectors (Gmail, Linear, Jira and so on) are a larger decision. |
+| "The request is the approval": it confirms only before deleting, overwriting, sending email or spending money. It never claims what didn't happen. | The agent rules already ask before buying, deleting, submitting forms or installing (`packages/core/src/agent.ts`). There is per-step approval plus Allow all. | Same intent. None. |
+| Dated notes per helper; the newest fact wins and what the user says now beats everything. | Skills' "Learned" lists, shortest-route lessons and remembered corrections. | Partly. Adding dates and newest-wins would be a small change in the skill and lesson stores. |
+| Sound cues: agent start, done, close, needs-you; text open, receive and send. | Key-down and key-up cues. | **Built**: a "needs your OK" cue when a task waits for approval. No "done" sound, because it would sound the same when a task fails. |
+| Clicky's windows are filtered out of its captures. | They could appear in screenshots. | **Built**: content protection on the cursor, bubbles, task bar and orb (a setting, on by default). |
+| Sparkle auto-update, checking hourly. | Installed by hand. | Needs Priyansh's decision on how releases are published. |
+| Embedded Codex runtime, a model catalogue and a worker API that holds keys. | OpenRouter and Anthropic, with the user's own keys in safeStorage. | We're ahead on privacy. |

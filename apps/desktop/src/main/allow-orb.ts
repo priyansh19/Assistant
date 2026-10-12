@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import { IPC } from '../shared/ipc';
+import { keepOutOfScreenshots } from './capture-privacy';
 
 const WIDTH = 250;
 const HEIGHT = 110;
@@ -74,6 +75,7 @@ export class AllowOrb {
         sandbox: true,
       },
     });
+    keepOutOfScreenshots(win);
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setIgnoreMouseEvents(true, { forward: true });
     if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0);

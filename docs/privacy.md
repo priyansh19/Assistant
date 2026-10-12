@@ -44,4 +44,4 @@ All under `%APPDATA%\Clicky\`:
 | `playbooks\` | Your playbooks, one text file each. |
 | `logs/clicky.log`, `logs/latency.jsonl` | Diagnostics and per-question timing per stage, plus which provider and model answered and, on failure, which stage and provider failed. Strings that look like API keys are masked. No audio, images, questions or answers are logged. |
 
-Screenshots and audio are never written to disk.
+Screenshots and audio are never written to disk. Clicky's own windows (its cursor, bubbles, task bar and orb) are kept out of every screenshot while *Keep Clicky out of screenshots* is on (the default). This uses Windows' capture exclusion, so they don't appear in screen recordings or screen sharing either.

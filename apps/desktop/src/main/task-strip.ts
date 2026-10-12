@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import type { StripState } from '../preload/strip';
 import { IPC } from '../shared/ipc';
+import { keepOutOfScreenshots } from './capture-privacy';
 
 const WIDTH = 600;
 const HEIGHT = 46;
@@ -92,6 +93,7 @@ export class TaskStrip {
       },
     });
     win.setAlwaysOnTop(true, 'screen-saver');
+    keepOutOfScreenshots(win);
     if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0); // smoke tests
     win.webContents.once('did-finish-load', () => win.webContents.send(IPC.stripState, this.state));
     if (process.env['ELECTRON_RENDERER_URL'])

@@ -12,6 +12,7 @@ import { log } from './log';
 import { OverlayManager } from './overlay-manager';
 import { SettingsStore } from './settings-store';
 import { AppTray } from './tray';
+import { setHideFromCapture } from './capture-privacy';
 import { WorkerHost } from './worker-host';
 
 // Keep references so they aren't garbage-collected.
@@ -46,6 +47,7 @@ if (!app.requestSingleInstanceLock()) {
     const history = new HistoryStore();
     worker = new WorkerHost();
     void worker.start().catch((e: unknown) => log.error('worker failed to start', String(e)));
+    setHideFromCapture(settings.get().hideFromCapture);
     overlays = new OverlayManager(platform, overlayConfig(settings.get()));
     overlays.start();
     // The shipped instruction pack (agents.md, skills, learned routes) before the stores read them.
@@ -108,6 +110,7 @@ if (!app.requestSingleInstanceLock()) {
       ) {
         ctl.syncMicArm();
       }
+      if (next.hideFromCapture !== prev.hideFromCapture) setHideFromCapture(next.hideFromCapture);
       overlays?.setConfig(overlayConfig(next));
       tray?.refresh();
     });
