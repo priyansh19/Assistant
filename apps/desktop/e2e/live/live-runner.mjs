@@ -128,7 +128,9 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     if (asks.length > answered) {
       answered = asks.length;
       // Allow only what the task scopes it to (e.g. the Notepads it opened itself).
-      const ok = t.allow instanceof RegExp ? t.allow.test(asks.at(-1)) : t.allow === 'allow';
+      // Without the name, Clicky asks "Do this for you?" first: a person who asked would say yes.
+      const offer = /asking to allow: Do this for you/.test(asks.at(-1));
+      const ok = offer || (t.allow instanceof RegExp ? t.allow.test(asks.at(-1)) : t.allow === 'allow');
       say(`${asks.at(-1)} -> ${ok ? 'allow' : 'leave it (declined)'}`);
       if (ok) {
         await wait(800);
