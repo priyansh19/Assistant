@@ -1,6 +1,6 @@
 import { app, clipboard, ClipboardItem, screen, shell } from 'electron';
 import { join, sep } from 'node:path';
-import { isTerminal, type AppInfo, type InputAction, type WriteContext } from '@clicky/core';
+import { isTerminal, type AppInfo, type InputAction, type UiElement, type WriteContext } from '@clicky/core';
 import type { InputDriver } from '../platform/types';
 import { statSync } from 'node:fs';
 import { opensWithAnApp } from '../platform';
@@ -80,6 +80,9 @@ export class InputHost {
         }
         return d.click(p.x, p.y, action.button, action.count);
       }
+      case 'element':
+        await d.elementAct(action.id, action.op, action.text ?? '');
+        return;
       case 'close': {
         const want = action.title.toLowerCase().trim();
         const list = await d.windows();
@@ -180,6 +183,24 @@ export class InputHost {
 
   async usesAltGr(): Promise<boolean> {
     return (await this.driver?.usesAltGr().catch(() => false)) ?? false;
+  }
+
+  /**
+   * The controls of the window in front for the agent, numbered, with boxes in global DIP. The
+   * numbers stay valid for element actions until the next list is taken.
+   */
+  async elements(): Promise<UiElement[]> {
+    const list = (await this.driver?.elements(150, 1800).catch(() => [])) ?? [];
+    return list.map((e) => {
+      const tl = screen.screenToDipPoint({ x: e.x, y: e.y });
+      const br = screen.screenToDipPoint({ x: e.x + e.w, y: e.y + e.h });
+      return { id: e.id, kind: e.kind, name: e.name, x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+    });
+  }
+
+  /** What a browser shows when another agent drives it, or null. */
+  async otherAgent(): Promise<string | null> {
+    return (await this.driver?.otherAgent().catch(() => null)) ?? null;
   }
 
   /** Open windows for the agent, front first: "Title — app". */

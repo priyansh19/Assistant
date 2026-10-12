@@ -54,6 +54,15 @@ export interface InputDriver {
   foreground(): Promise<{ process: string; title: string } | null>;
   /** Where the control with this name is right now (physical px), searched near the hint point. */
   locate(name: string, x: number, y: number): Promise<{ x: number; y: number } | null>;
+  /** The controls of the window in front (UI Automation), numbered, with physical-pixel bounds. */
+  elements(
+    max: number,
+    budgetMs: number,
+  ): Promise<{ id: number; kind: string; name: string; x: number; y: number; w: number; h: number }[]>;
+  /** Act on control number id from the last elements() list; resolves to where (physical px). */
+  elementAct(id: number, op: 'click' | 'double' | 'right' | 'set', text?: string): Promise<{ x: number; y: number }>;
+  /** A message from a browser that another agent is driving it, or null. */
+  otherAgent(): Promise<string | null>;
   /**
    * For answer pointing: the control the model named, scored by name, kind and distance from its
    * guess (physical px), searching for at most budgetMs. Null when nothing matches well enough.

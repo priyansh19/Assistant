@@ -269,6 +269,14 @@ export class Controller {
           .catch(() => ({ app: null, selection: null }))
           .then((context) => this.engine.send({ type: 'writeContext.reply', id: msg.id, context }));
         return;
+      case 'elements':
+        void this.input
+          .elements()
+          .then((elements) => this.engine.send({ type: 'elements.reply', id: msg.id, elements }));
+        return;
+      case 'otherAgent':
+        void this.input.otherAgent().then((text) => this.engine.send({ type: 'otherAgent.reply', id: msg.id, text }));
+        return;
       case 'windows':
         void this.input.windows().then((windows) => this.engine.send({ type: 'windows.reply', id: msg.id, windows }));
         return;
@@ -307,7 +315,11 @@ export class Controller {
         if (this.strip.visible || msg.on) this.strip.update({ allowAll: msg.on });
         return;
       case 'agentPaused':
-        this.strip.update({ paused: msg.on, pausedForUser: msg.on && msg.reason === 'user' });
+        this.strip.update({
+          paused: msg.on,
+          pausedForUser: msg.on && msg.reason === 'user',
+          pausedForAgent: msg.on && msg.reason === 'agent',
+        });
         return;
       case 'caretAnchor':
         if (this.anchorTimer) clearTimeout(this.anchorTimer);

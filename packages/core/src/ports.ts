@@ -52,6 +52,8 @@ export type InputAction =
   | { kind: 'open'; app?: string; url?: string; path?: string }
   /** Close a top-level window by its title (the app may still ask to save). */
   | { kind: 'close'; title: string }
+  /** Act on control number `id` from the last list of controls (click it, or set its text). */
+  | { kind: 'element'; id: number; op: 'click' | 'double' | 'right' | 'set'; text?: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
   /** Hold the left button and move through these points, then let go (drawing in Paint, sliders). */
   | { kind: 'drag'; path: MappedPoint[] }

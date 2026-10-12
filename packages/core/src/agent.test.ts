@@ -355,6 +355,91 @@ describe('recovering within the run', () => {
   });
 });
 
+describe('controls from the window in front', () => {
+  const controls = [
+    { id: 1, kind: 'button', name: 'Close', x: 1900, y: 0, w: 60, h: 40 },
+    { id: 2, kind: 'edit', name: 'Address and search bar', x: 200, y: 60, w: 1000, h: 30 },
+  ];
+
+  it('lists them for the model with their position in thousandths', async () => {
+    const f = fakes(['{"action":"done","say":"Done."}']);
+    await runAgent('open the address bar', { ...f.deps, elements: async () => controls });
+    expect(f.questions[0]).toContain('1 button "Close" at 965,20');
+    expect(f.questions[0]).toContain('2 edit "Address and search bar" at 350,75');
+  });
+
+  it('clicks a control and fills a field by number', async () => {
+    const points: unknown[] = [];
+    const f = fakes([
+      '{"action":"set_value","id":2,"text":"github.com","say":"Typing the address"}',
+      '{"action":"click_element","id":1,"target":"Close","say":"Closing","check":"worked"}',
+      '{"action":"done","say":"Done.","check":"worked"}',
+      '{"complete": true}',
+    ]);
+    const r = await runAgent('go to github then close', {
+      ...f.deps,
+      overlay: { ...f.deps.overlay, point: (p) => void points.push(p.global) },
+      elements: async () => controls,
+    });
+    expect(r.outcome).toBe('done');
+    expect(f.inputs).toEqual([
+      { kind: 'element', id: 2, op: 'set', text: 'github.com' },
+      { kind: 'element', id: 1, op: 'click' },
+    ]);
+    // The companion flies to each control first.
+    expect(points).toEqual([
+      { x: 700, y: 75 },
+      { x: 1930, y: 20 },
+    ]);
+  });
+
+  it('tells the model when a number is not in the list', async () => {
+    const f = fakes(['{"action":"click_element","id":9,"say":"Clicking"}', '{"action":"done","say":"Done."}']);
+    await runAgent('click it', { ...f.deps, elements: async () => controls, verifyDone: false });
+    expect(f.inputs).toEqual([]);
+    expect(f.questions[1]).toContain('There is no control number 9');
+  });
+
+  it('parses the element actions', () => {
+    expect(parseAgentAction('{"action":"right_click_element","id":3}')).toMatchObject({
+      ok: true,
+      action: { type: 'click_element', id: 3, op: 'right' },
+    });
+    expect(parseAgentAction('{"action":"set_value","id":3}')).toMatchObject({ ok: false });
+  });
+});
+
+describe('another agent driving the PC', () => {
+  it('waits until it is gone, then carries on', async () => {
+    const seen = ['"Claude" started debugging this browser', '"Claude" started debugging this browser', null];
+    const f = fakes(['{"action":"key","keys":"enter"}', '{"action":"done","say":"Done."}']);
+    const messages: string[] = [];
+    const r = await runAgent('press enter', {
+      ...f.deps,
+      overlay: { ...f.deps.overlay, message: (t) => void messages.push(t) },
+      otherAgent: async () => (seen.length ? (seen.shift() ?? null) : null),
+      otherAgentPollMs: 1,
+      verifyDone: false,
+    });
+    expect(r.outcome).toBe('done');
+    expect(messages[0]).toContain('Another agent is using this PC');
+    expect(messages).toContain('The other agent is done. Carrying on.');
+    expect(f.inputs).toEqual([{ kind: 'keys', keys: ['enter'] }]);
+  });
+
+  it('stops waiting when the user stops the run', async () => {
+    const f = fakes(['{"action":"key","keys":"enter"}']);
+    setTimeout(() => f.ac.abort(), 20);
+    const r = await runAgent('press enter', {
+      ...f.deps,
+      otherAgent: async () => 'is being controlled by automated test software',
+      otherAgentPollMs: 5,
+    });
+    expect(r.outcome).toBe('stopped');
+    expect(f.inputs).toEqual([]);
+  });
+});
+
 describe('apps are launched, not hunted for on the taskbar', () => {
   it('turns a taskbar click on an installed app into an open', async () => {
     const f = fakes(['{"action":"click","x":300,"y":980,"target":"Notepad icon on the taskbar"}']);

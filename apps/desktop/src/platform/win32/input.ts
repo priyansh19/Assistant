@@ -250,6 +250,110 @@ public static class ClickyInput {
   }
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   public static void CloseWindow(long h) { PostMessage(new IntPtr(h), 0x0010, IntPtr.Zero, IntPtr.Zero); }
+  // ---- Accessibility snapshot: the controls of the window in front, numbered, so the agent can act
+  // on a named control instead of a guessed pixel (what the official Clicky does with macOS AX).
+  static System.Collections.Generic.List<System.Windows.Automation.AutomationElement> snap =
+    new System.Collections.Generic.List<System.Windows.Automation.AutomationElement>();
+  static readonly System.Windows.Automation.ControlType[] Actionable = {
+    System.Windows.Automation.ControlType.Button, System.Windows.Automation.ControlType.MenuItem,
+    System.Windows.Automation.ControlType.Hyperlink, System.Windows.Automation.ControlType.Edit,
+    System.Windows.Automation.ControlType.ListItem, System.Windows.Automation.ControlType.TabItem,
+    System.Windows.Automation.ControlType.CheckBox, System.Windows.Automation.ControlType.ComboBox,
+    System.Windows.Automation.ControlType.RadioButton, System.Windows.Automation.ControlType.TreeItem,
+    System.Windows.Automation.ControlType.DataItem, System.Windows.Automation.ControlType.SplitButton,
+    System.Windows.Automation.ControlType.Document };
+  // One line per control: "id|kind|name|x,y,w,h" (physical px), at most max controls, within budgetMs.
+  public static string Elements(int max, int budgetMs) {
+    Aware();
+    snap.Clear();
+    var sb = new System.Text.StringBuilder();
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    var end = DateTime.Now.AddMilliseconds(budgetMs);
+    var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
+    var stack = new System.Collections.Generic.Stack<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+    try { stack.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(System.Windows.Automation.AutomationElement.FromHandle(h), 0)); } catch { return ""; }
+    while (stack.Count > 0 && snap.Count < max && DateTime.Now < end) {
+      var top = stack.Pop();
+      var e = top.Key;
+      try {
+        var c = e.Current;
+        if (!c.IsOffscreen && Array.IndexOf(Actionable, c.ControlType) >= 0) {
+          var r = c.BoundingRectangle;
+          var name = (c.Name ?? "").Replace("|", "/").Replace("\n", " ").Trim();
+          if (name.Length > 60) name = name.Substring(0, 60);
+          if (!r.IsEmpty && r.Width >= 4 && r.Height >= 4 && (name.Length > 0 || c.ControlType == System.Windows.Automation.ControlType.Edit)) {
+            snap.Add(e);
+            var kind = c.ControlType.ProgrammaticName.Replace("ControlType.", "").ToLowerInvariant();
+            sb.Append(snap.Count).Append('|').Append(kind).Append('|').Append(name).Append('|')
+              .Append((int)r.X).Append(',').Append((int)r.Y).Append(',').Append((int)r.Width).Append(',').Append((int)r.Height).Append('\n');
+          }
+        }
+        if (top.Value < 14) {
+          // Children pushed in reverse, so the list reads top to bottom, left to right.
+          var kids = new System.Collections.Generic.List<System.Windows.Automation.AutomationElement>();
+          for (var k = walker.GetFirstChild(e); k != null && kids.Count < 400; k = walker.GetNextSibling(k)) kids.Add(k);
+          for (int i = kids.Count - 1; i >= 0; i--)
+            stack.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(kids[i], top.Value + 1));
+        }
+      } catch { }
+    }
+    return sb.ToString();
+  }
+  // Act on control number id from the last snapshot: invoke it (or click its centre), or set its
+  // text. Returns the centre "x y" it acted on (physical px), so the companion can show where.
+  public static string ElementAct(int id, string op, string text) {
+    Aware();
+    if (id < 1 || id > snap.Count) throw new Exception("there is no control number " + id + " in the last list");
+    var e = snap[id - 1];
+    var r = e.Current.BoundingRectangle;
+    int cx = (int)(r.X + r.Width / 2), cy = (int)(r.Y + r.Height / 2);
+    if (op == "set") {
+      object vp;
+      if (e.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out vp)) {
+        try { e.SetFocus(); } catch { }
+        ((System.Windows.Automation.ValuePattern)vp).SetValue(text);
+      } else {
+        Click(cx, cy, false, 1); Thread.Sleep(120); Text(text);
+      }
+    } else {
+      object ip;
+      if (op == "click" && e.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out ip)) ((System.Windows.Automation.InvokePattern)ip).Invoke();
+      else Click(cx, cy, op == "right", op == "double" ? 2 : 1);
+    }
+    return cx + " " + cy;
+  }
+  // Another agent driving the PC: a browser under remote debugging or automation shows a bar that
+  // says so ("Claude started debugging this browser", "controlled by automated test software").
+  public static string OtherAgent() {
+    string found = "";
+    var marks = new[] { "started debugging this browser", "is being controlled by automated test software", "is being debugged" };
+    EnumWindows((w, l) => {
+      if (!IsWindowVisible(w) || IsIconic(w)) return true;
+      var name = ProcOf(w);
+      if (name != "comet" && name != "chrome" && name != "msedge" && name != "brave") return true;
+      try {
+        var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
+        // The bar sits about eleven levels down in the browser's own UI; the page itself (a Document)
+        // is skipped, which keeps this to a few hundred nodes per window.
+        var st = new System.Collections.Generic.Stack<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+        st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(System.Windows.Automation.AutomationElement.FromHandle(w), 0));
+        int seen = 0;
+        var end = DateTime.Now.AddMilliseconds(700);
+        while (st.Count > 0 && seen < 2000 && DateTime.Now < end) {
+          var top = st.Pop(); seen++;
+          var c = top.Key.Current;
+          var n = (c.Name ?? "");
+          foreach (var m in marks) if (n.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { found = n.Length > 120 ? n.Substring(0, 120) : n; return false; }
+          if (top.Value < 16 && c.ControlType != System.Windows.Automation.ControlType.Document)
+            for (var k = walker.GetFirstChild(top.Key); k != null; k = walker.GetNextSibling(k))
+              st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(k, top.Value + 1));
+        }
+      } catch { }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
   public static string Foreground() {
     IntPtr h = GetForegroundWindow();
     if (h == IntPtr.Zero) return "";
@@ -506,6 +610,9 @@ while ($true) {
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
       'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       'windows' { $out = [ClickyInput]::Windows() }
+      'elements' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::Elements([int]$p[2], [int]$p[3]))) }
+      'elact'   { $out = [ClickyInput]::ElementAct([int]$p[2], $p[3], $(if ($p.Length -gt 4) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[4])) } else { '' })) }
+      'otheragent' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::OtherAgent())) }
       'altgr'   { $out = [ClickyInput]::UsesAltGr() }
       'fgh'     { $out = [ClickyInput]::ForegroundHandle() }
       'maxnew'  { $out = [ClickyInput]::MaximizeNew([long]$p[2], [int]$p[3], $(if ($p.Length -gt 4) { $p[4] } else { '' })) }
@@ -682,6 +789,24 @@ export function createWin32InputDriver(): InputDriver {
       const [lx, ly] = r.split(' ').map(Number);
       return lx === undefined || ly === undefined || !Number.isFinite(lx + ly) ? null : { x: lx, y: ly };
     },
+    elements: async (max, budgetMs) =>
+      b64(await send(`elements ${int(max)} ${int(budgetMs)}`, budgetMs + 5000))
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [id = '0', kind = '', name = '', box = '0,0,0,0'] = line.split('|');
+          const [x = 0, y = 0, w = 0, h = 0] = box.split(',').map(Number);
+          return { id: Number(id), kind, name, x, y, w, h };
+        }),
+    elementAct: async (id, op, text = '') => {
+      const r = await send(
+        `elact ${int(id)} ${op}${text ? ` ${Buffer.from(text, 'utf8').toString('base64')}` : ''}`,
+        COMMAND_TIMEOUT_MS + text.length * 15,
+      );
+      const [x, y] = r.split(' ').map(Number);
+      return { x: x ?? 0, y: y ?? 0 };
+    },
+    otherAgent: async () => b64(await send('otheragent', 8000)).trim() || null,
     locate: async (name, x, y) => {
       const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
       const [lx, ly] = r.split(' ').map(Number);

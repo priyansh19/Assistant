@@ -26,7 +26,9 @@ function render(s: StripState): void {
     : s.paused
       ? s.pausedForUser
         ? 'Paused while you use the mouse. I carry on when you stop.'
-        : 'Paused. Press play to carry on.'
+        : s.pausedForAgent
+          ? 'Another agent is using this PC. I carry on when it finishes, or press play to go now.'
+          : 'Paused. Press play to carry on.'
       : s.say;
   if (now !== lastNow) {
     // Replay the fade so each new step reads as new.

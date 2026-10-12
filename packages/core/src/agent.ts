@@ -5,7 +5,7 @@
  * (the interaction signal), and risky steps wait for the user's go-ahead.
  */
 
-import { fromThousandths, mapPointToDisplay, type MappedPoint } from './coordinates.js';
+import { fromThousandths, mapPointToDisplay, placeGlobal, type MappedPoint } from './coordinates.js';
 import { splitWake } from './wake.js';
 import { StageError } from './errors.js';
 import { delay, withTimeout } from './pipeline/budget.js';
@@ -40,6 +40,17 @@ export type AgentAction =
   | { type: 'save_sheet'; name: string; columns: string[]; rows: string[][] | null; say: string; risky: boolean }
   /** Close a window by its title (from the open-windows list); always asked unless Allow all is on. */
   | { type: 'close_window'; title: string; say: string; risky: boolean }
+  /** Act on a control from the "Controls" list by its number: more exact than a click by position. */
+  | {
+      type: 'click_element';
+      id: number;
+      op: 'click' | 'double' | 'right';
+      target: string;
+      say: string;
+      risky: boolean;
+    }
+  /** Put text into a field from the "Controls" list (replaces what's there). */
+  | { type: 'set_value'; id: number; text: string; target: string; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
 
 const cells = (v: unknown, max: number): string[] | null =>
@@ -330,6 +341,24 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
       if (!title) return { ok: false, error: 'close_window needs the window title' };
       return { ok: true, action: { type, title, say, risky: true } };
     }
+    case 'click_element':
+    case 'double_click_element':
+    case 'right_click_element': {
+      const id = num(o['id'] ?? o['element']);
+      if (id === null || id < 1) return { ok: false, error: `${type} needs the control's number as "id"` };
+      const op = type === 'double_click_element' ? 'double' : type === 'right_click_element' ? 'right' : 'click';
+      return {
+        ok: true,
+        action: { type: 'click_element', id: Math.round(id), op, target: str(o['target'], 80), say, risky },
+      };
+    }
+    case 'set_value': {
+      const id = num(o['id'] ?? o['element']);
+      const text = typeof o['text'] === 'string' ? o['text'].slice(0, 2000) : null;
+      if (id === null || id < 1 || text === null)
+        return { ok: false, error: 'set_value needs the field\'s number as "id" and the "text"' };
+      return { ok: true, action: { type, id: Math.round(id), text, target: str(o['target'], 80), say, risky } };
+    }
     case 'wait':
       return { ok: true, action: { type, ms: Math.max(200, Math.min(5000, num(o['ms']) ?? 1000)), say, risky } };
     case 'done':
@@ -354,6 +383,11 @@ wanted, judged from the new screenshot. Examples:
 {"action":"key","keys":"ctrl+s","say":"Saving"}
 
 Actions:
+- click_element: {"id":N,"target":"…"} clicks control number N from the "Controls" list (the window
+  in front, read from Windows itself). This is the most exact way to click: when what you want is in
+  the list, use it instead of click. double_click_element and right_click_element work the same way.
+- set_value: {"id":N,"text":"…"} puts text into field number N from the "Controls" list (it replaces
+  what's there). Then press enter with key if the field needs it.
 - click, double_click, right_click: x,y are the centre of the element in thousandths of the
   screenshot (0–1000 across, 0–1000 down; 0,0 is the top-left corner). Add "screen":N if it is not on the first screenshot. Always include "target".
 - type: {"text": "..."} types into the focused field. Click the field first if it isn't focused.
@@ -485,10 +519,42 @@ export interface AgentDeps {
   openWindows?(): Promise<string[]>;
   /** What was said and done earlier in this conversation (recent questions, answers and tasks). */
   conversation?: string;
+  /** The controls of the window in front, numbered, in global DIP (UI Automation). */
+  elements?(): Promise<UiElement[]>;
+  /** What another agent driving this PC shows ("Claude started debugging this browser"), or null. */
+  otherAgent?(): Promise<string | null>;
+  /** How often to look for another agent while waiting for it to finish (default 3 s). */
+  otherAgentPollMs?: number;
   /** Check the screen before accepting "done" (default true). */
   verifyDone?: boolean;
   /** Progress for the step strip. */
   onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
+}
+
+/** One control of the window in front: what it is, its name and its box (global DIP). */
+export interface UiElement {
+  id: number;
+  kind: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Controls listed for the model, so a long page doesn't crowd out the task. */
+const MAX_ELEMENTS = 120;
+
+/** The "Controls" block: number, kind, name and where it is on the screenshots. */
+export function elementsText(list: readonly UiElement[], screens: ScreenCapture): string {
+  const lines: string[] = [];
+  for (const e of list.slice(0, MAX_ELEMENTS)) {
+    const at = placeGlobal({ x: e.x + e.w / 2, y: e.y + e.h / 2 }, screens.geometry);
+    if (!at) continue;
+    const name = e.name ? `"${e.name.replace(/"/g, "'")}"` : '(no name)';
+    lines.push(`${e.id} ${e.kind} ${name} at ${at.x},${at.y}${at.screen > 1 ? ` screen${at.screen}` : ''}`);
+  }
+  return lines.join('\n');
 }
 
 export interface AgentResult {
@@ -560,6 +626,10 @@ function actionSignature(a: AgentAction): string | null {
       return `key:${a.keys.join('+')}`;
     case 'type':
       return `type:${a.text}`;
+    case 'click_element':
+      return `${a.op}:${a.target.toLowerCase() || a.id}`;
+    case 'set_value':
+      return `set:${a.id}:${a.text}`;
     case 'note':
       return `note:${a.text}|${a.row?.join('|') ?? ''}`;
     default:
@@ -597,6 +667,10 @@ function describe(a: AgentAction): string {
       return `saved the sheet "${a.name}"`;
     case 'close_window':
       return `closed the window "${a.title.slice(0, 80)}"`;
+    case 'click_element':
+      return `${a.op === 'click' ? 'clicked' : a.op === 'double' ? 'double-clicked' : 'right-clicked'} control ${a.id}${a.target ? ` "${a.target}"` : ''}`;
+    case 'set_value':
+      return `set control ${a.id}${a.target ? ` "${a.target}"` : ''} to "${a.text.length > 60 ? `${a.text.slice(0, 60)}…` : a.text}"`;
     default:
       return a.type;
   }
@@ -619,6 +693,37 @@ came from speech recognition: names may be spelled differently ("Clicky Test Fol
 /** Reasons to give up that only the user can fix; the run doesn't retry these. */
 const NEEDS_USER =
   /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch|passkey|windows security|security key|user account control|\buac\b/i;
+
+/** Another agent finishing up is given this long before Clicky gives up waiting. */
+const OTHER_AGENT_MAX_WAIT_MS = 30 * 60_000;
+
+/**
+ * Another agent is driving this PC (a browser shows "Claude started debugging this browser"): say
+ * so, and wait until it's gone before taking the next step, so the two don't fight over the mouse.
+ * True if the run was stopped meanwhile.
+ */
+async function waitForOtherAgent(deps: AgentDeps): Promise<boolean> {
+  const first = await deps.otherAgent?.().catch(() => null);
+  if (!first) return false;
+  deps.log?.(`agent waiting: another agent is driving the PC (${first})`);
+  const say = 'Another agent is using this PC right now. I will wait until it finishes.';
+  deps.onStep?.(say);
+  deps.overlay.message(say, 'info');
+  const started = Date.now();
+  while (!deps.signal.aborted && Date.now() - started < OTHER_AGENT_MAX_WAIT_MS) {
+    await delay(deps.otherAgentPollMs ?? 3000);
+    if (deps.signal.aborted) break;
+    const still = await deps.otherAgent?.().catch(() => null);
+    if (!still) {
+      deps.log?.(`agent resuming: the other agent finished after ${Math.round((Date.now() - started) / 1000)} s`);
+      deps.overlay.message('The other agent is done. Carrying on.', 'info');
+      // Give its last page a moment to settle.
+      await delay(1000);
+      return deps.signal.aborted;
+    }
+  }
+  return deps.signal.aborted;
+}
 
 /** The final check before "done": what's still missing, or null if the task looks finished (or the check failed). */
 async function verify(
@@ -747,6 +852,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       await deps.waitForUser?.(deps.signal);
       if (deps.signal.aborted) return stopped();
     }
+    if (await waitForOtherAgent(deps)) return stopped();
     const blocked = await deps.blockedApp?.();
     if (blocked) {
       deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
@@ -763,7 +869,12 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       screens = await deps.capture.take(deps.signal);
     }
     if (deps.signal.aborted) return stopped();
-    const windows = await deps.openWindows?.().catch(() => []);
+    const [windows, controls] = await Promise.all([
+      deps.openWindows?.().catch(() => []),
+      deps.elements?.().catch(() => [] as UiElement[]),
+    ]);
+    const controlsText = controls?.length ? elementsText(controls, screens) : '';
+    const byId = new Map((controls ?? []).map((e) => [e.id, e]));
     const question = [
       `Task: ${goal}`,
       deps.conversation
@@ -773,6 +884,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         ? `Earlier attempts in this run went wrong. Do it differently this time:\n${reflections.join('\n')}`
         : '',
       windows?.length ? `Open windows (front first):\n${windows.map((w) => `- ${w}`).join('\n')}` : '',
+      controlsText
+        ? `Controls in the window in front (number, kind, name, position in thousandths; use click_element or set_value with the number):\n${controlsText}`
+        : '',
       deps.skills ?? '',
       deps.hints ? `What worked before for similar tasks (use it if it fits):\n${deps.hints}` : '',
       notes.length ? `Your notes so far:\n${notes.map((n) => `- ${n}`).join('\n')}` : '',
@@ -988,6 +1102,21 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     } else if (a.type === 'close_window') {
       deps.overlay.message(say, 'info');
       input = { kind: 'close', title: a.title };
+    } else if (a.type === 'click_element' || a.type === 'set_value') {
+      const el = byId.get(a.id);
+      if (!el) {
+        note = `There is no control number ${a.id} in the list. Use a number from "Controls", or click by position.`;
+        steps.push(`(skipped: no control ${a.id})`);
+        continue;
+      }
+      // The companion flies to the control first, like a click.
+      const at = placeGlobal({ x: el.x + el.w / 2, y: el.y + el.h / 2 }, screens.geometry);
+      if (at) deps.overlay.point(at.point, a.target || el.name || say);
+      else deps.overlay.message(say, 'info');
+      input =
+        a.type === 'set_value'
+          ? { kind: 'element', id: a.id, op: 'set', text: a.text }
+          : { kind: 'element', id: a.id, op: a.op };
     } else if (a.type === 'type') {
       deps.atCaret?.();
       deps.overlay.message(say, 'info');
@@ -1001,7 +1130,12 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (a.risky || deps.confirmMode === 'always') {
       const ok = await deps.confirm(say, deps.signal);
       if (!ok || deps.signal.aborted) return stopped();
-    } else if (input?.kind === 'click' || input?.kind === 'scroll' || input?.kind === 'drag') {
+    } else if (
+      input?.kind === 'click' ||
+      input?.kind === 'scroll' ||
+      input?.kind === 'drag' ||
+      input?.kind === 'element'
+    ) {
       // Let the companion land on the target and rest there a moment, so the user sees where it acts.
       await delay(deps.flightMs ?? 950);
     } else if (input) {

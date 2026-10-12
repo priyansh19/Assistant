@@ -100,6 +100,8 @@ export interface OrchestratorDeps {
     | 'onProgress'
     | 'saveSheet'
     | 'openWindows'
+    | 'elements'
+    | 'otherAgent'
     | 'listFiles'
     | 'moveFiles'
   >;

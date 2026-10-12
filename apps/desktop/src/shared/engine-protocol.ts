@@ -20,6 +20,7 @@ import type {
   WriteContext,
   AppInfo,
   Settings,
+  UiElement,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
 
@@ -78,6 +79,8 @@ export type MainToEngine =
   | { type: 'writeContext.reply'; id: number; context: WriteContext }
   | { type: 'foreground.reply'; id: number; app: AppInfo | null }
   | { type: 'windows.reply'; id: number; windows: string[] }
+  | { type: 'elements.reply'; id: number; elements: UiElement[] }
+  | { type: 'otherAgent.reply'; id: number; text: string | null }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }
@@ -119,12 +122,16 @@ export type EngineToMain =
   /** The app in front (never-touch check before each agent step). */
   | { type: 'foreground'; id: number }
   | { type: 'windows'; id: number }
+  /** The controls of the window in front, for agent steps. */
+  | { type: 'elements'; id: number }
+  /** Is another agent driving this PC (checked before each agent step)? */
+  | { type: 'otherAgent'; id: number }
   /** Agent mode was asked for but isn't set up: open its rules screen. */
   | { type: 'agentSetup' }
   /** Step strip: progress, a question waiting for Allow, or the end of the run. */
   | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
   | { type: 'agentAsk'; text: string | null }
-  | { type: 'agentPaused'; on: boolean; reason?: 'user' }
+  | { type: 'agentPaused'; on: boolean; reason?: 'user' | 'agent' }
   | { type: 'allowAll'; on: boolean }
   /** Something learned about how the user writes (main stores it). */
   | { type: 'styleLearned'; context: StyleContext; notes: string[]; examples: string[] }

@@ -12,6 +12,8 @@ export interface StripState {
   paused: boolean;
   /** Paused because the user is using the mouse (resumes by itself). */
   pausedForUser?: boolean;
+  /** Waiting while another agent drives the PC (resumes by itself, or with play). */
+  pausedForAgent?: boolean;
   /** Allow all is on: risky steps run without asking. */
   allowAll?: boolean;
   /** The user's cursor colour, as the accent. */

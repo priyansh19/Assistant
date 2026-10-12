@@ -29,6 +29,7 @@ import {
   type SttProvider,
   type TtsProvider,
   type VisionChatProvider,
+  type UiElement,
 } from '@clicky/core';
 import { createChat, createStt, createTts } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
@@ -94,6 +95,8 @@ const OWN_KEYS_MS = 300;
 const TAKEOVER_PX = 60;
 /** After the user takes over, carry on once they've left the mouse and keyboard alone this long. */
 const RESUME_IDLE_MS = 3000;
+/** After the user presses play to go on while another agent works, Clicky stops checking this long. */
+const IGNORE_OTHER_AGENT_MS = 10 * 60_000;
 
 /**
  * The data plane (architecture §4): hold-to-talk hook, orchestrator and providers. It runs in
@@ -120,6 +123,7 @@ export class Engine {
   private readonly contexts = new Map<number, (c: WriteContext) => void>();
   private readonly foregrounds = new Map<number, (a: AppInfo | null) => void>();
   private readonly windowLists = new Map<number, (w: string[]) => void>();
+  private readonly mainReplies = new Map<number, (v: unknown) => void>();
   /** Last mouse or key use that wasn't Clicky's own input. */
   private lastUserInputAt = 0;
   /** Mouse events until then are Clicky's own clicks moving the pointer. */
@@ -127,6 +131,9 @@ export class Engine {
   /** When the current agent step started, to tell if the user acted since. */
   private stepStartedAt = 0;
   private agentPaused = false;
+  /** Waiting for another agent to finish (the strip shows it as a pause). */
+  private waitingForAgent = false;
+  private ignoreOtherAgentUntil = 0;
   /** "Allow all" on the notch: every risky step runs without asking, for this session. */
   private allowAll = false;
   /** Steps the user allowed; similar ones (not deletes or closes) run without asking again. */
@@ -219,6 +226,12 @@ export class Engine {
       agentHooks: () => ({
         blockedApp: () => this.blockedApp(),
         whilePaused: async (signal) => {
+          // A wait for another agent that a stopped run left behind isn't a pause.
+          if (this.waitingForAgent) {
+            this.waitingForAgent = false;
+            this.agentPaused = false;
+            this.post({ type: 'agentPaused', on: false });
+          }
           while (this.agentPaused && !signal.aborted) await new Promise((r) => setTimeout(r, 150));
         },
         userInterrupted: () => {
@@ -240,6 +253,8 @@ export class Engine {
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
         openWindows: () => this.openWindows(),
+        elements: () => this.askMain<UiElement[]>('elements', [], 4000),
+        otherAgent: () => this.otherAgent(),
         listFiles: async (path) => listFiles(this.realPath(path)),
         moveFiles: async (from, pattern, to, copy) => moveFiles(this.realPath(from), pattern, this.realPath(to), copy),
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
@@ -427,6 +442,14 @@ export class Engine {
         else p.resolve();
         return;
       }
+      case 'elements.reply':
+        this.mainReplies.get(msg.id)?.(msg.elements);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'otherAgent.reply':
+        this.mainReplies.get(msg.id)?.(msg.text);
+        this.mainReplies.delete(msg.id);
+        return;
       case 'windows.reply': {
         const done = this.windowLists.get(msg.id);
         this.windowLists.delete(msg.id);
@@ -623,6 +646,47 @@ export class Engine {
   /** "C:\\Users\\me\\Desktop" when the real Desktop is elsewhere (OneDrive): the folder the user sees. */
   private realPath(path: string): string {
     return mapKnownFolder(path, this.cfg().inventory.folders);
+  }
+
+  /**
+   * Another agent driving the PC, for the agent's wait. While it waits the strip says so; pressing
+   * play there means "go anyway", and Clicky stops looking for a while.
+   */
+  private async otherAgent(): Promise<string | null> {
+    if (Date.now() < this.ignoreOtherAgentUntil) return null;
+    const found = await this.askMain<string | null>('otherAgent', null, 9000);
+    if (this.waitingForAgent && !this.agentPaused) {
+      // Play was pressed on the strip.
+      this.waitingForAgent = false;
+      this.ignoreOtherAgentUntil = Date.now() + IGNORE_OTHER_AGENT_MS;
+      return null;
+    }
+    if (found && !this.waitingForAgent) {
+      this.waitingForAgent = true;
+      this.agentPaused = true;
+      this.post({ type: 'agentPaused', on: true, reason: 'agent' });
+    } else if (!found && this.waitingForAgent) {
+      this.waitingForAgent = false;
+      this.agentPaused = false;
+      this.post({ type: 'agentPaused', on: false });
+    }
+    return found;
+  }
+
+  /** Ask main for something; `fallback` if it doesn't answer within `ms`. */
+  private askMain<T>(type: 'elements' | 'otherAgent', fallback: T, ms: number): Promise<T> {
+    const id = this.nextPlanId++;
+    return new Promise<T>((resolve) => {
+      const timer = setTimeout(() => {
+        this.mainReplies.delete(id);
+        resolve(fallback);
+      }, ms);
+      this.mainReplies.set(id, (v) => {
+        clearTimeout(timer);
+        resolve(v as T);
+      });
+      this.post({ type, id });
+    });
   }
 
   /** The open windows from main (empty if main is slow). */
