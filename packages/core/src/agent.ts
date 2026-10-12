@@ -243,7 +243,10 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
 const AGENT_PROMPT = `You are Clicky's agent. You operate the user's Windows PC with the mouse and keyboard to complete
 the task they asked for. Every turn you get fresh screenshots and the list of steps taken so far.
 
-Reply with ONLY one JSON object, no other text, describing the single next action. From the second
+Reply with ONLY one JSON object, no other text, describing the single next action. In your
+first reply only, add "understood": the task in one short sentence as you are going to do it
+(for example "Make a folder called Receipts on your Desktop"); the user sees it. Speech recognition
+often drops or changes small words, so read the task for what the user most likely meant. From the second
 step on, include "check": "worked" or "failed" saying whether your previous step had the effect you
 wanted, judged from the new screenshot. Examples:
 {"action":"click","x":412,"y":88,"target":"Save button","say":"Clicking Save"}
@@ -559,6 +562,8 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   const checked: { step: string; ok: boolean | null }[] = [];
   const stopped = (): AgentResult => ({ outcome: 'stopped', summary: 'Okay, I stopped.', steps });
   let recoveries = 0;
+  /** The task as shown to the user: what Clicky understood, once it said. */
+  let shown = goal;
   const reflections: string[] = [];
   /**
    * The run hit a problem: instead of giving up, look back at what was done and what's on screen,
@@ -676,6 +681,12 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     bad = 0;
     note = '';
     const a = viaOpen(parsed.action, deps.inventory?.apps);
+    // What Clicky understood, shown before it acts, so a misheard request can be stopped at once.
+    const understood = steps.length === 0 ? /"understood"\s*:\s*"([^"]{3,200})"/.exec(reply)?.[1] : undefined;
+    if (understood) {
+      deps.log?.(`agent understood: ${understood}`);
+      shown = understood;
+    }
     // The per-step check: did the previous step do what it should have?
     const check = parseStepCheck(reply);
     const prev = checked[checked.length - 1];
@@ -735,7 +746,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     const say = a.say || describe(a);
     deps.log?.(`agent step ${i}: ${describe(a)}${a.say ? ` — "${a.say}"` : ''}${a.risky ? ' (risky)' : ''}`);
     deps.onStep?.(say);
-    deps.onProgress?.({ goal, step: i, max, say });
+    deps.onProgress?.({ goal: shown, step: i, max, say });
     // Notes and sheets don't touch the screen.
     if (a.type === 'note') {
       scrolls = 0;

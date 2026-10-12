@@ -361,3 +361,15 @@ describe('apps are launched, not hunted for on the taskbar', () => {
     expect(f.inputs[0]).toEqual({ kind: 'open', app: 'Notepad' });
   });
 });
+
+describe('showing what Clicky understood', () => {
+  it('puts the restated task on the notch from the first step', async () => {
+    const f = fakes([
+      '{"action":"open","app":"Notepad","understood":"Open Notepad and write a shopping list"}',
+      '{"action":"done","say":"Done.","check":"worked"}',
+    ]);
+    const progress: string[] = [];
+    await runAgent('an notepad and right a shopping list', { ...f.deps, onProgress: (p) => progress.push(p.goal) });
+    expect(progress[0]).toBe('Open Notepad and write a shopping list');
+  });
+});
