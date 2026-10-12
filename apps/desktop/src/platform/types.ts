@@ -54,6 +54,11 @@ export interface InputDriver {
   foreground(): Promise<{ process: string; title: string } | null>;
   /** Where the control with this name is right now (physical px), searched near the hint point. */
   locate(name: string, x: number, y: number): Promise<{ x: number; y: number } | null>;
+  /**
+   * For answer pointing: the control the model named, scored by name, kind and distance from its
+   * guess (physical px), searching for at most budgetMs. Null when nothing matches well enough.
+   */
+  snap(name: string, x: number, y: number, budgetMs: number): Promise<{ x: number; y: number } | null>;
   /** Installed apps (Start menu, including Store apps). */
   apps(): Promise<{ name: string; id: string }[]>;
   /** Launch an installed app by its id from apps(). */
