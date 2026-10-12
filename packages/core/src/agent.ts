@@ -63,6 +63,12 @@ export function agentGoal(question: string): string | null {
   if (!woke && !m) return null;
   const goal = (woke ? rest : (m?.[1] ?? '')).trim().replace(/[.!]+$/, '');
   if (goal.length < 3 || QUESTION_START.test(goal)) return null;
+  // "Draw a star on my screen" is drawn by Clicky itself, over the screen; "draw … in Paint" is a task.
+  if (
+    /^(?:please\s+)?(?:draw|sketch|circle|highlight|underline|mark)\b/i.test(goal) &&
+    !/\bin\s+\w+/i.test(goal.replace(/\bon (?:my|the) screen\b/i, ''))
+  )
+    return null;
   return goal;
 }
 
@@ -664,7 +670,16 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
       return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
     }
-    const screens = await deps.capture.take(deps.signal);
+    // A screenshot can time out while the PC is busy (an app starting): try again before giving up.
+    let screens: ScreenCapture;
+    try {
+      screens = await deps.capture.take(deps.signal);
+    } catch (e) {
+      if (deps.signal.aborted) return stopped();
+      deps.log?.(`agent screenshot failed, retrying: ${e instanceof Error ? e.message : String(e)}`);
+      await delay(1500);
+      screens = await deps.capture.take(deps.signal);
+    }
     if (deps.signal.aborted) return stopped();
     const windows = await deps.openWindows?.().catch(() => []);
     const question = [

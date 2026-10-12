@@ -373,3 +373,11 @@ describe('showing what Clicky understood', () => {
     expect(progress[0]).toBe('Open Notepad and write a shopping list');
   });
 });
+
+describe('drawing on the screen is not an agent task', () => {
+  it('leaves "draw … on my screen" to the answer, keeps "draw … in Paint" a task', () => {
+    expect(agentGoal('Clicky, draw a star on my screen.')).toBeNull();
+    expect(agentGoal('Clicky, circle the save button')).toBeNull();
+    expect(agentGoal('Clicky, draw a house in Paint')).toBe('draw a house in Paint');
+  });
+});
