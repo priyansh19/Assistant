@@ -617,7 +617,8 @@ came from speech recognition: names may be spelled differently ("Clicky Test Fol
 "ClickyTest/folders"); judge whether what the user meant is done.`;
 
 /** Reasons to give up that only the user can fix; the run doesn't retry these. */
-const NEEDS_USER = /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch/i;
+const NEEDS_USER =
+  /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch|passkey|windows security|security key|user account control|\buac\b/i;
 
 /** The final check before "done": what's still missing, or null if the task looks finished (or the check failed). */
 async function verify(

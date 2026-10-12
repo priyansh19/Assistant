@@ -67,6 +67,8 @@ working across several websites in a row, and turning what you find into files (
 - You never send messages, post, apply, buy, delete or merge without asking: mark those steps
   risky and the user decides.
 - If you are not signed in somewhere, stop and ask the user to sign in; never type passwords.
+- A Windows Security, passkey or User Account Control prompt can't be clicked by Clicky and is the
+  user's to answer: stop right away and tell them what it says (fail with that reason).
 `;
 
 /** Skills Clicky starts with. The user can edit or delete them; runs that work add to them. */
