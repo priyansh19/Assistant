@@ -468,6 +468,7 @@ export class Orchestrator {
       run.speed.speculate &&
       !listen.direct &&
       !this.agentRequest(partial) &&
+      !DRAW_REQUEST.test(partial) &&
       worthSpeculating(partial, this.now() - listen.partialAt)
         ? this.speculate(run, screens, partial)
         : null;
