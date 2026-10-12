@@ -7,6 +7,7 @@ Checked 2026-10-11 against two sources: the open-source app (github.com/farzaa/c
 Like the official app, ours teaches by talking and pointing. It does not click or type for you.
 
 A source-level teardown of the open-source app, feature by feature, is in [official-clicky-teardown.md](official-clicky-teardown.md) (2026-10-12).
+REA (Reverse Engineer Anything) results for our own build are in [rea-findings.md](rea-findings.md).
 
 Legend: ✅ done · 🟡 partial · ❌ missing
 
