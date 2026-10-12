@@ -52,6 +52,31 @@ public static class ClickyInput {
       Thread.Sleep(60);
     }
   }
+  // A pen stroke: press at the first point, glide through the rest in small steps (each a real
+  // mouse move, so Paint and canvases draw a continuous line), release. "x,y;x,y;…"
+  public static void Drag(string pts) {
+    var parts = pts.Split(';');
+    var xs = new int[parts.Length]; var ys = new int[parts.Length];
+    for (int i = 0; i < parts.Length; i++) { var q = parts[i].Split(','); xs[i] = int.Parse(q[0]); ys[i] = int.Parse(q[1]); }
+    Move(xs[0], ys[0]); Thread.Sleep(40);
+    timeBeginPeriod(1);
+    bool down = false;
+    try {
+      Send(new[] { Mouse(2u, 0) }); down = true; Thread.Sleep(30);
+      for (int i = 1; i < xs.Length; i++) {
+        int steps = Math.Max(1, (int)(Math.Sqrt(Math.Pow(xs[i] - xs[i - 1], 2) + Math.Pow(ys[i] - ys[i - 1], 2)) / 6));
+        for (int k = 1; k <= steps; k++) {
+          SetCursorPos(xs[i - 1] + (xs[i] - xs[i - 1]) * k / steps, ys[i - 1] + (ys[i] - ys[i - 1]) * k / steps);
+          Send(new[] { Mouse(1u, 0) }); // a zero move, so the app sees WM_MOUSEMOVE with the button down
+          Thread.Sleep(3);
+        }
+      }
+      Thread.Sleep(30);
+    } finally {
+      if (down) Send(new[] { Mouse(4u, 0) });
+      timeEndPeriod(1);
+    }
+  }
   public static void Scroll(int x, int y, int notches) {
     Move(x, y); Thread.Sleep(30);
     Send(new[] { Mouse(0x0800, unchecked((uint)(-notches * 120))) });
@@ -363,6 +388,7 @@ while ($true) {
     switch ($p[1]) {
       'click'  { [ClickyInput]::Click([int]$p[2], [int]$p[3], $p[4] -eq 'right', [int]$p[5]) }
       'scroll' { [ClickyInput]::Scroll([int]$p[2], [int]$p[3], [int]$p[4]) }
+      'drag'   { [ClickyInput]::Drag($p[2]) }
       'text'   { [ClickyInput]::Text([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       'keys'   { [ClickyInput]::Keys([int[]]($p[2].Split(',')), [bool[]]($p[3].Split(',') | ForEach-Object { $_ -eq '1' })) }
       'back'   { [ClickyInput]::Backspace([int]$p[2]) }
@@ -523,6 +549,17 @@ export function createWin32InputDriver(): InputDriver {
     warm: () => void start().catch(() => undefined),
     click: (x, y, button, count) => done(send(`click ${int(x)} ${int(y)} ${button} ${count}`)),
     scroll: (x, y, amount) => done(send(`scroll ${int(x)} ${int(y)} ${int(amount)}`)),
+    drag: (points) => {
+      // ~4 ms per 6 px step, so a long stroke gets time to finish.
+      let length = 0;
+      for (let i = 1; i < points.length; i++)
+        length += Math.hypot(
+          (points[i]?.x ?? 0) - (points[i - 1]?.x ?? 0),
+          (points[i]?.y ?? 0) - (points[i - 1]?.y ?? 0),
+        );
+      const path = points.map((p) => `${int(p.x)},${int(p.y)}`).join(';');
+      return done(send(`drag ${path}`, COMMAND_TIMEOUT_MS + Math.round(length)));
+    },
     // Typing is paced (~10 ms a character), so long text gets time to finish.
     type: (text) =>
       done(send(`text ${Buffer.from(text, 'utf8').toString('base64')}`, COMMAND_TIMEOUT_MS + text.length * 15)),

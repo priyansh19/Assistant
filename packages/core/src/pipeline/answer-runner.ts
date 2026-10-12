@@ -13,7 +13,7 @@ import { fromThousandths, mapPointToDisplay } from '../coordinates.js';
 import type { MappedPoint } from '../coordinates.js';
 import { classifyFailure, StageError, type Stage } from '../errors.js';
 import type { PointTarget } from '../point-parser.js';
-import { mapShapeToDisplay, type DrawShape, type MappedShape } from '../shapes.js';
+import { mapShapeToDisplay, scaleShape, type DrawShape, type MappedShape } from '../shapes.js';
 import type { ScreenCapture } from '../ports.js';
 import { buildSystemPrompt } from '../prompt.js';
 import type { ChatTurn, VisionChatProvider, VisionChatRequest } from '../providers.js';
@@ -225,15 +225,15 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
 function shapeFromThousandths(s: DrawShape, screens: ScreenCapture): DrawShape {
   const cap = screens.geometry[(s.screen ?? 1) - 1];
   if (!cap) return s;
-  const fx = (v: number): number => (v / 1000) * cap.imageWidth;
-  const fy = (v: number): number => (v / 1000) * cap.imageHeight;
-  if (s.kind === 'box') return { ...s, x: fx(s.x), y: fy(s.y), w: fx(s.w), h: fy(s.h) };
-  if (s.kind === 'arrow') return { ...s, x1: fx(s.x1), y1: fy(s.y1), x2: fx(s.x2), y2: fy(s.y2) };
-  return { ...s, x: fx(s.x), y: fy(s.y), r: fx(s.r) };
+  return scaleShape(s, cap.imageWidth / 1000, cap.imageHeight / 1000);
 }
 
-/** At most this many drawings per answer, so a confused model can't cover the screen. */
-export const MAX_DRAWINGS = 4;
+/**
+ * At most this many drawings per answer: enough for a sketch the user asked for (a face, a house,
+ * a few notes), not enough for a confused model to cover the screen. The prompt asks for at most
+ * three when a drawing only helps explain an answer.
+ */
+export const MAX_DRAWINGS = 12;
 
 function drawShape(shape: DrawShape, screens: ScreenCapture, drawn: { count: number }, input: AnswerRunInput): void {
   if (drawn.count >= MAX_DRAWINGS || !input.hooks.draw) return;
