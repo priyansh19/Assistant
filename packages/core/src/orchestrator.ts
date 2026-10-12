@@ -145,7 +145,7 @@ export interface Timeouts {
 
 /** An answer admitting the screen doesn't show it ("I can't see how much space is left"). */
 const CANT_SEE =
-  /\b(?:can'?t|cannot|can not|unable to|don'?t|do not)\s+(?:see|tell|find|determine|show)\b|\bnot (?:visible|shown|on (?:the|your) screen)\b|\byou (?:may|might|would|will) need to (?:open|check|go)\b/i;
+  /\b(?:can'?t|cannot|can not|unable to|don'?t|do not)\s+(?:see|tell|find|determine|show)\b|\b(?:not|isn'?t|aren'?t)\s+(?:currently\s+)?(?:visible|shown|displayed|available|on (?:the|this|your) screen)\b|\byou (?:may|might|would|will) need to (?:open|check|go)\b/i;
 
 /**
  * The answer model said it can't do something, or claimed it did something only the agent can do
