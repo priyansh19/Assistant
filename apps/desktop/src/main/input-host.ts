@@ -2,9 +2,63 @@ import { app, clipboard, ClipboardItem, screen, shell } from 'electron';
 import { join, sep } from 'node:path';
 import { isTerminal, type AppInfo, type InputAction, type UiElement, type WriteContext } from '@clicky/core';
 import type { InputDriver } from '../platform/types';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { opensWithAnApp } from '../platform';
 import { log } from './log';
+
+/** Processes Clicky never closes: the Claude app (it may be driving Clicky's tests) and Clicky itself. */
+const PROTECTED = ['claude', 'clicky'];
+
+/** How often Clicky notes which window is in front. */
+const USE_POLL_MS = 3000;
+
+/** A title that says the document has unsaved changes ("*notes.txt - Notepad", "● main.ts - VS Code"). */
+export function looksUnsaved(title: string): boolean {
+  return /^\s*[*●•]|\*\s+-\s|[*●]\s*$|\(unsaved\)|\bunsaved\b|\bnot saved\b|\(modified\)|\bedited\b\s*$/i.test(title);
+}
+
+/** A tab's title without the browser's notes ("- Inactive tab - 147 MB freed up", "- Memory usage - 47 MB"). */
+export function cleanTab(title: string): string {
+  return title.replace(/\s+-\s+(?:inactive tab|memory usage|audio playing|muted)\b.*$/i, '').trim();
+}
+
+/** "4 min ago", "2 h ago". */
+function ago(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 90) return 'just now';
+  if (s < 90 * 60) return `${Math.round(s / 60)} min ago`;
+  if (s < 36 * 3600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+/** When each window and each browser tab was last in front (since Clicky started). */
+export class UseTracker {
+  private readonly windows = new Map<string, number>();
+  private readonly tabs = new Map<string, number>();
+
+  saw(handle: string, title: string, browser: boolean, now = Date.now()): void {
+    this.windows.set(handle, now);
+    // A browser window's title is its active tab's title plus " - Comet".
+    if (browser)
+      this.tabs.set(
+        `${handle}|${title
+          .replace(/\s+-\s+[^-]+$/, '')
+          .trim()
+          .toLowerCase()}`,
+        now,
+      );
+    if (this.tabs.size > 2000) this.tabs.delete(this.tabs.keys().next().value as string);
+  }
+
+  lastUsed(handle: string): number | undefined {
+    return this.windows.get(handle);
+  }
+
+  tabSeen(handle: string, tabTitle: string): number | undefined {
+    return this.tabs.get(`${handle}|${tabTitle.trim().toLowerCase()}`);
+  }
+}
 
 /** A follow-up within this long reuses the tab Clicky opened instead of opening another. */
 const REUSE_TAB_MS = 15 * 60_000;
@@ -56,6 +110,15 @@ export class InputHost {
   /** The browser window Clicky last opened a site in, to reuse its tab for follow-ups. */
   private lastBrowser: { handle: string; at: number } | null = null;
 
+  /**
+   * Fly Clicky's cursor to a point on screen (physical px) and let it land there, so the user always
+   * sees where Clicky is about to act. Set by the controller.
+   */
+  pointAt: ((p: { x: number; y: number }, label: string) => Promise<void>) | null = null;
+
+  /** The default browser (from Windows' https handler): its process and its name on the taskbar. */
+  private browser: { process: string; label: string } | null = null;
+
   /** Called when a click target was found somewhere else than the screenshot said (the screen changed). */
   onRetarget: ((at: { x: number; y: number }, label: string) => void) | null = null;
 
@@ -83,6 +146,39 @@ export class InputHost {
       case 'element':
         await d.elementAct(action.id, action.op, action.text ?? '');
         return;
+      case 'control': {
+        const at = await this.findControl(action.name, action.controlKind ?? '');
+        if (!at) throw new Error(`there is no "${action.name}" in the window in front`);
+        await this.show(at, action.name);
+        if (action.op === 'set') {
+          await d.click(at.x, at.y, 'left', 1);
+          await delay(120);
+          await d.keys(['ctrl', 'a']);
+          await d.type(action.text ?? '');
+          return;
+        }
+        return d.click(at.x, at.y, action.op === 'right' ? 'right' : 'left', action.op === 'double' ? 2 : 1);
+      }
+      case 'closeTab': {
+        const list = await d.windows();
+        const want = action.window.toLowerCase().trim();
+        const fgh = await d.foregroundHandle().catch(() => '0');
+        const browsers = list.filter((w) => BROWSERS.split(',').includes(w.process));
+        const win =
+          (want && browsers.find((w) => w.title.toLowerCase() === want || w.title.toLowerCase().includes(want))) ||
+          browsers.find((w) => w.handle === fgh) ||
+          browsers[0];
+        if (!win) throw new Error('no browser window is open');
+        const tabs = await d.tabs(win.handle);
+        const t = action.tab.toLowerCase();
+        const tab =
+          tabs.find((x) => cleanTab(x.title).toLowerCase() === t) ??
+          tabs.find((x) => x.title.toLowerCase().includes(t));
+        if (!tab) throw new Error(`no tab called "${action.tab}" in ${win.title}`);
+        await this.show({ x: tab.x, y: tab.y }, `Close tab ${cleanTab(tab.title).slice(0, 40)}`);
+        if (!(await d.closeTab(win.handle, tab.index))) throw new Error(`couldn't close the tab "${action.tab}"`);
+        return;
+      }
       case 'close': {
         const want = action.title.toLowerCase().trim();
         const list = await d.windows();
@@ -90,9 +186,27 @@ export class InputHost {
           list.find((x) => x.title.toLowerCase() === want) ??
           list.find((x) => x.title.toLowerCase().includes(want) || want.includes(x.title.toLowerCase()));
         if (!w) throw new Error(`no open window is called "${action.title}"`);
+        if (looksUnsaved(w.title))
+          throw new Error(`"${w.title}" has unsaved changes, so I left it open (closing it would lose that work)`);
+        if (PROTECTED.includes(w.process) || this.protectedHandles().has(w.handle))
+          throw new Error(`"${w.title}" is one I never close`);
+        // The cursor goes to the window's close button first.
+        const box = await d.windowBox(w.handle).catch(() => null);
+        if (box) {
+          const s = this.scaleAt(box.x + box.w / 2, box.y + 10);
+          await this.show({ x: box.x + box.w - Math.round(23 * s), y: box.y + Math.round(16 * s) }, `Close ${w.title}`);
+        }
         return d.closeWindow(w.handle);
       }
       case 'open': {
+        // Opened the way a person would, with the cursor at each step: the app's taskbar icon, the
+        // browser's address bar. Launching in the background is only a fallback, and even then the
+        // cursor goes to Start first.
+        if (action.url) return this.openUrl(action.url);
+        if (action.app) {
+          const a = this.findApp(action.app);
+          if (a) return this.openApp(a);
+        }
         // Whatever opens is maximised once its window comes to the front (folders and files too).
         const before = await d.foregroundHandle().catch(() => '0');
         // Waited for (up to 3 s), so the next screenshot shows what was opened, in front.
@@ -129,6 +243,7 @@ export class InputHost {
         }
         if (action.path) {
           const target = knownFolder(action.path);
+          await this.show(await this.taskbarButton('File Explorer'), 'File Explorer');
           // A file no app opens (an .xlsx on a PC without Excel) would only bring up Windows'
           // "pick an app" box: show it selected in File Explorer instead.
           if (!opensWithAnApp(target)) return shell.showItemInFolder(target);
@@ -149,6 +264,7 @@ export class InputHost {
         return d.scroll(p.x, p.y, action.amount);
       }
       case 'type': {
+        await this.showTyping(action.text);
         // Several lines are pasted, not typed: apps like Windows 11 Notepad autocorrect and mix up
         // typed lines ("delta" came out as "eelta"), found by the live suite.
         if (action.text.includes('\n')) {
@@ -160,8 +276,191 @@ export class InputHost {
       case 'backspace':
         return d.backspace(action.count);
       case 'keys':
+        await this.showTyping(action.keys.join('+'));
         return d.keys(action.keys);
     }
+  }
+
+  /** Fly the cursor to a point (physical px); false if there's nowhere to go. */
+  private async show(p: { x: number; y: number } | null | undefined, label: string): Promise<boolean> {
+    if (!p || !this.pointAt) return false;
+    await this.pointAt(p, label);
+    return true;
+  }
+
+  /** Display scale at a physical point. */
+  private scaleAt(x: number, y: number): number {
+    return screen.getDisplayNearestPoint(screen.screenToDipPoint({ x, y })).scaleFactor || 1;
+  }
+
+  /** Before typing: the cursor goes to the text caret, or to the box that has the focus. */
+  private async showTyping(what: string): Promise<void> {
+    const d = this.need();
+    const caret = await d.caret().catch(() => null);
+    if (caret) return void (await this.show({ x: caret.x, y: caret.y + caret.height / 2 }, 'Typing here'));
+    const box = await d.focusBox().catch(() => null);
+    if (box && box.w < 2500)
+      await this.show({ x: box.x + Math.min(box.w / 2, 60), y: box.y + box.h / 2 }, `Typing ${what.slice(0, 30)}`);
+  }
+
+  /** A taskbar button by app name ("Comet - 2 running windows pinned" matches "Comet"). */
+  private async taskbarButton(name: string): Promise<{ x: number; y: number; name: string } | null> {
+    const list = await this.need()
+      .taskbar()
+      .catch(() => []);
+    const n = name.toLowerCase().trim();
+    return (
+      list.find((b) => {
+        const t = b.name.toLowerCase();
+        return t === n || t.startsWith(`${n} `);
+      }) ?? null
+    );
+  }
+
+  /** Waits up to ms for the window in front to change; the new handle, or null. */
+  private async frontChange(before: string, ms: number): Promise<string | null> {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      const now = await this.need()
+        .foregroundHandle()
+        .catch(() => before);
+      if (now && now !== before && now !== '0') return now;
+      await delay(120);
+    }
+    return null;
+  }
+
+  /**
+   * Open an app like a person: click its taskbar icon (pinned or running). Not on the taskbar: the
+   * cursor goes to Start and the app is launched from there. The window ends up in front, maximised.
+   */
+  private async openApp(a: { name: string; id: string }): Promise<void> {
+    const d = this.need();
+    const before = await d.foregroundHandle().catch(() => '0');
+    const fg = await d.foreground().catch(() => null);
+    const btn = await this.taskbarButton(a.name);
+    const first = a.name.toLowerCase().split(/\s+/)[0] ?? '';
+    const inFront = !!fg && !!first && (fg.process.includes(first) || (fg.title ?? '').toLowerCase().endsWith(first));
+    if (btn) {
+      await this.show(btn, a.name);
+      const running = /running window/i.test(btn.name);
+      const windows = Number(/(\d+) running window/i.exec(btn.name)?.[1] ?? 0);
+      if (inFront) return; // clicking the icon of the app in front would minimise it
+      if (!running || windows === 1) {
+        await d.click(btn.x, btn.y, 'left', 1);
+        if (await this.frontChange(before, 4000)) {
+          if (!running) await d.maximizeNew(before, 3000, '').catch(() => undefined);
+          log.info(`opened ${a.name} from its taskbar icon`);
+          return this.showWindow(a.name);
+        }
+      }
+      // Several windows (the icon would only show thumbnails) or the click didn't bring one up.
+      await d.launch(a.id);
+      await d.maximizeNew(before, 3000, '').catch(() => undefined);
+      return this.showWindow(a.name);
+    }
+    await this.show(await this.taskbarButton('Start'), `Start: ${a.name}`);
+    await d.launch(a.id);
+    await d.maximizeNew(before, 3000, '').catch(() => undefined);
+    log.info(`opened ${a.name} from Start`);
+    return this.showWindow(a.name);
+  }
+
+  /** The cursor goes to the title of the window in front (what just opened). */
+  private async showWindow(label: string): Promise<void> {
+    const d = this.need();
+    const h = await d.foregroundHandle().catch(() => '0');
+    const box = h && h !== '0' ? await d.windowBox(h).catch(() => null) : null;
+    if (box)
+      await this.show(
+        { x: box.x + Math.round(box.w / 2), y: box.y + Math.round(18 * this.scaleAt(box.x, box.y)) },
+        label,
+      );
+  }
+
+  /** The default browser, read once from Windows' https handler. */
+  private defaultBrowser(): { process: string; label: string } {
+    if (this.browser) return this.browser;
+    let prog = '';
+    try {
+      prog = execFileSync(
+        'reg',
+        [
+          'query',
+          'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice',
+          '/v',
+          'ProgId',
+        ],
+        { encoding: 'utf8', windowsHide: true, timeout: 3000 },
+      );
+    } catch {
+      // no handler set
+    }
+    const known: [RegExp, string, string][] = [
+      [/comet/i, 'comet', 'Comet'],
+      [/chrome/i, 'chrome', 'Google Chrome'],
+      [/msedge/i, 'msedge', 'Microsoft Edge'],
+      [/brave/i, 'brave', 'Brave'],
+      [/firefox/i, 'firefox', 'Firefox'],
+      [/opera/i, 'opera', 'Opera'],
+      [/vivaldi/i, 'vivaldi', 'Vivaldi'],
+    ];
+    const hit = known.find(([re]) => re.test(prog));
+    this.browser = hit ? { process: hit[1], label: hit[2] } : { process: 'msedge', label: 'Microsoft Edge' };
+    log.info(`default browser: ${this.browser.label}`);
+    return this.browser;
+  }
+
+  /**
+   * Open a website like a person: bring the browser up from its taskbar icon, open a new tab (or
+   * reuse the one Clicky opened for a follow-up), click the address bar, type the address, Enter.
+   */
+  private async openUrl(url: string): Promise<void> {
+    const d = this.need();
+    const b = this.defaultBrowser();
+    let fg = await d.foreground().catch(() => null);
+    let fresh = false;
+    if (fg?.process !== b.process) {
+      const app = this.findApp(b.label);
+      const btn = await this.taskbarButton(b.label);
+      if (app) {
+        fresh = !btn || !/running window/i.test(btn.name);
+        await this.openApp(app);
+      } else {
+        await this.show(btn ?? (await this.taskbarButton('Start')), b.label);
+        await shell.openExternal(url);
+        await d.maximizeNew('0', 3000, BROWSERS).catch(() => undefined);
+        return;
+      }
+      fg = await d.foreground().catch(() => null);
+    }
+    const handle = await d.foregroundHandle().catch(() => '0');
+    if (fg?.process !== b.process) {
+      // The browser didn't come up: open the site the quick way.
+      await shell.openExternal(url);
+      await d.maximizeNew('0', 3000, BROWSERS).catch(() => undefined);
+      return;
+    }
+    const last = this.lastBrowser;
+    const reuse = !!last && last.handle === handle && Date.now() - last.at < REUSE_TAB_MS;
+    if (!fresh && !reuse) {
+      const plus = await d.findControl(handle, 'button', 'New tab', 700).catch(() => null);
+      if (plus && (await this.show(plus, 'New tab'))) await d.click(plus.x, plus.y, 'left', 1);
+      else await d.keys(['ctrl', 't']);
+      await delay(350);
+    }
+    const bar = await d.findControl(handle, 'edit', 'Address', 900).catch(() => null);
+    if (bar && (await this.show(bar, 'Address bar'))) {
+      await d.click(bar.x, bar.y, 'left', 1);
+      await delay(120);
+      await d.keys(['ctrl', 'a']);
+    } else await d.keys(['ctrl', 'l']);
+    await delay(100);
+    await d.type(url);
+    await d.keys(['enter']);
+    this.lastBrowser = { handle, at: Date.now() };
+    log.info(`opened ${url} in ${b.label}${reuse ? ' (same tab)' : ''}`);
+    await delay(800);
   }
 
   /** The app in front (never-touch check for agent mode). */
@@ -203,10 +502,79 @@ export class InputHost {
     return (await this.driver?.otherAgent().catch(() => null)) ?? null;
   }
 
-  /** Open windows for the agent, front first: "Title — app". */
+  /**
+   * Open windows for the agent, front first: "Title — app — used 4 min ago — unsaved changes", and
+   * each browser window's tabs ("active", "asleep" when the browser put it to sleep for not being
+   * used, and when Clicky last saw it in front).
+   */
   async windows(): Promise<string[]> {
-    const list = (await this.driver?.windows().catch(() => [])) ?? [];
-    return list.slice(0, 40).map((w) => `${w.title.slice(0, 120)} — ${w.process || 'app'}`);
+    const d = this.driver;
+    const list = (await d?.windows().catch(() => [])) ?? [];
+    const out: string[] = [];
+    for (const w of list.slice(0, 40)) {
+      const used = this.tracker.lastUsed(w.handle);
+      const parts = [w.title.slice(0, 120), w.process || 'app'];
+      if (used) parts.push(`used ${ago(used)}`);
+      if (looksUnsaved(w.title)) parts.push('unsaved changes');
+      if (PROTECTED.includes(w.process)) parts.push('never close');
+      out.push(parts.join(' — '));
+      if (d && BROWSERS.split(',').includes(w.process)) {
+        const tabs = await d.tabs(w.handle).catch(() => []);
+        for (const t of tabs.slice(0, 30)) {
+          const title = cleanTab(t.title);
+          const seen = this.tracker.tabSeen(w.handle, title);
+          const bits = [
+            t.selected ? 'active' : '',
+            /inactive tab/i.test(t.title) ? 'asleep (not used for a while)' : '',
+            seen ? `last in front ${ago(seen)}` : '',
+          ].filter(Boolean);
+          out.push(`    tab: ${title.slice(0, 100)}${bits.length ? ` (${bits.join(', ')})` : ''}`);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Remembers when each window (and each browser tab) was last in front. */
+  readonly tracker = new UseTracker();
+
+  /** Start noting which window is in front, every few seconds. */
+  watchUse(): void {
+    const d = this.driver;
+    if (!d || this.useTimer) return;
+    this.useTimer = setInterval(() => {
+      void Promise.all([d.foregroundHandle().catch(() => ''), d.foreground().catch(() => null)]).then(([h, fg]) => {
+        if (h && h !== '0' && fg) this.tracker.saw(h, fg.title, BROWSERS.split(',').includes(fg.process));
+      });
+    }, USE_POLL_MS);
+  }
+  private useTimer: NodeJS.Timeout | null = null;
+
+  /** Windows the user asked Clicky never to close (userData/protect.json: handles or title parts). */
+  private protectedHandles(): Set<string> {
+    try {
+      const raw = JSON.parse(readFileSync(join(app.getPath('userData'), 'protect.json'), 'utf8')) as unknown;
+      return new Set(Array.isArray(raw) ? raw.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /** A control by name in the window in front, waiting up to 4 s for it to appear (pages load). */
+  private async findControl(name: string, kind: string): Promise<{ x: number; y: number } | null> {
+    const d = this.need();
+    const end = Date.now() + 4000;
+    while (Date.now() < end) {
+      const at = await d.findControl('0', kind, name, 900).catch(() => null);
+      if (at) return at;
+      // The kind may be off ("button" for a link): try any kind once too.
+      if (kind) {
+        const any = await d.findControl('0', '', name, 700).catch(() => null);
+        if (any) return any;
+      }
+      await delay(400);
+    }
+    return null;
   }
 
   async foreground(): Promise<AppInfo | null> {

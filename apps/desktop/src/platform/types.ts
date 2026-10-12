@@ -61,6 +61,18 @@ export interface InputDriver {
   ): Promise<{ id: number; kind: string; name: string; x: number; y: number; w: number; h: number }[]>;
   /** Act on control number id from the last elements() list; resolves to where (physical px). */
   elementAct(id: number, op: 'click' | 'double' | 'right' | 'set', text?: string): Promise<{ x: number; y: number }>;
+  /** The taskbar's buttons (pinned and running apps, Start, Search) with their centres (physical px). */
+  taskbar(): Promise<{ x: number; y: number; name: string }[]>;
+  /** A window's frame (physical px), or null. */
+  windowBox(handle: string): Promise<{ x: number; y: number; w: number; h: number } | null>;
+  /** Centre of a control by kind ("edit", "button"… or "") and part of its name; handle "0" = the window in front. */
+  findControl(handle: string, kind: string, part: string, budgetMs?: number): Promise<{ x: number; y: number } | null>;
+  /** The focused control's box, or the window in front (physical px). */
+  focusBox(): Promise<{ x: number; y: number; w: number; h: number } | null>;
+  /** A browser window's tabs, in order. */
+  tabs(handle: string): Promise<{ index: number; selected: boolean; x: number; y: number; title: string }[]>;
+  /** Close tab number index of a window; false if it isn't there. */
+  closeTab(handle: string, index: number): Promise<boolean>;
   /** A message from a browser that another agent is driving it, or null. */
   otherAgent(): Promise<string | null>;
   /**

@@ -101,6 +101,7 @@ export interface OrchestratorDeps {
     | 'saveSheet'
     | 'openWindows'
     | 'elements'
+    | 'planFirst'
     | 'otherAgent'
     | 'listFiles'
     | 'moveFiles'

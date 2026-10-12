@@ -49,6 +49,18 @@ export type AgentAction =
       say: string;
       risky: boolean;
     }
+  /** A control found by its name when the step runs (a plan's steps can't know numbers yet). */
+  | {
+      type: 'control';
+      name: string;
+      kind: string;
+      op: 'click' | 'double' | 'right' | 'set';
+      text: string;
+      say: string;
+      risky: boolean;
+    }
+  /** Close one browser tab by its title. */
+  | { type: 'close_tab'; window: string; tab: string; say: string; risky: boolean }
   /** Put text into a field from the "Controls" list (replaces what's there). */
   | { type: 'set_value'; id: number; text: string; target: string; say: string; risky: boolean }
   | { type: 'done' | 'fail'; say: string; risky: boolean };
@@ -339,7 +351,7 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
     case 'close_window': {
       const title = str(o['title'] ?? o['window'], 200);
       if (!title) return { ok: false, error: 'close_window needs the window title' };
-      return { ok: true, action: { type, title, say, risky: true } };
+      return { ok: true, action: { type, title, say, risky } };
     }
     case 'click_element':
     case 'double_click_element':
@@ -351,6 +363,32 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
         ok: true,
         action: { type: 'click_element', id: Math.round(id), op, target: str(o['target'], 80), say, risky },
       };
+    }
+    case 'click_control':
+    case 'double_click_control':
+    case 'right_click_control':
+    case 'set_control': {
+      const name = str(o['name'] ?? o['target'] ?? o['control'], 120);
+      if (!name) return { ok: false, error: `${type} needs the control's "name"` };
+      const text = typeof o['text'] === 'string' ? o['text'].slice(0, 2000) : '';
+      if (type === 'set_control' && !text) return { ok: false, error: 'set_control needs the "text"' };
+      const op =
+        type === 'set_control'
+          ? 'set'
+          : type === 'double_click_control'
+            ? 'double'
+            : type === 'right_click_control'
+              ? 'right'
+              : 'click';
+      return {
+        ok: true,
+        action: { type: 'control', name, kind: str(o['kind'], 20).toLowerCase(), op, text, say, risky },
+      };
+    }
+    case 'close_tab': {
+      const tab = str(o['tab'] ?? o['title'], 200);
+      if (!tab) return { ok: false, error: 'close_tab needs the tab\'s "tab" title' };
+      return { ok: true, action: { type, tab, window: str(o['window'], 200), say, risky } };
     }
     case 'set_value': {
       const id = num(o['id'] ?? o['element']);
@@ -389,6 +427,12 @@ Actions:
 - set_value: {"id":N,"text":"…"} puts text into field number N from the "Controls" list (it replaces
   what's there). Then press enter with key if the field needs it. Use either type or set_value for
   a piece of text, never both: once the screenshot shows the text in place, go on.
+- click_control: {"name":"…","kind":"button"} finds the control with that name in the window in front
+  when the step runs and clicks it ("kind" is optional: button, edit, menuitem, hyperlink, tabitem,
+  listitem…). Use it when you know a control's name but not its number. set_control {"name":"…",
+  "text":"…"} clicks a box by name and types into it, replacing what's there.
+- close_tab: {"tab":"…","window":"…"} closes one browser tab by (part of) its title; "window" is the
+  browser window's title from "Open windows" (leave it out for the one in front).
 - click, double_click, right_click: x,y are the centre of the element in thousandths of the
   screenshot (0–1000 across, 0–1000 down; 0,0 is the top-left corner). Add "screen":N if it is not on the first screenshot. Always include "target".
 - type: {"text": "..."} types into the focused field. Click the field first if it isn't focused.
@@ -416,9 +460,11 @@ Actions:
   (.xlsx) file in Documents\\Clicky with every row you noted (or give "rows": [[…],[…]] yourself).
   The next step tells you where it was saved; open it with {"path": …} so the user sees it.
 - close_window: {"title":"…"} closes one window by its exact title from "Open windows". This is
-  the reliable way to close windows: use it once per window instead of hunting for X buttons. If
-  the app asks to save changes, choose "Cancel" (never "Don't save"), note the window as having
-  unsaved work and move on; tell the user about it at the end.
+  the reliable way to close windows: use it once per window instead of hunting for X buttons. Never
+  close a window marked "unsaved changes" (Clicky refuses; the user's work would be lost). If an app
+  asks to save changes, choose "Cancel" (never "Don't save"), note the window as having unsaved work
+  and move on; tell the user about it at the end. Tidying up (closing tabs and windows the user
+  hasn't used for a long time) doesn't need "risky".
 - done: {"say":"..."} when the task is complete. "say" is one or two short spoken sentences with
   the result: what you found (numbers, names, titles) or what you did.
 - fail: {"say":"..."} when the task is impossible or unsafe; say why in one short sentence.
@@ -458,8 +504,9 @@ function agentSystemPrompt(
   userContext?: string,
   inventory?: { apps: string[]; folders: string[] },
   briefing?: string,
+  base = AGENT_PROMPT,
 ): string {
-  const lines = [AGENT_PROMPT];
+  const lines = [base];
   if (briefing?.trim()) lines.push('', briefing.trim().slice(0, 6000));
   lines.push('', 'Screenshots in this message:');
   screens.images.forEach((img, i) =>
@@ -526,6 +573,13 @@ export interface AgentDeps {
   elements?(): Promise<UiElement[]>;
   /** What another agent driving this PC shows ("Claude started debugging this browser"), or null. */
   otherAgent?(): Promise<string | null>;
+  /**
+   * Plan first: before acting, the model writes the whole route as Clicky's own steps, and Clicky
+   * carries them out with its cursor, falling back to step-by-step when one doesn't work.
+   */
+  planFirst?: boolean;
+  /** The plan, for the step strip ("1. Click Comet…"). */
+  onPlan?(steps: string[]): void;
   /** How often to look for another agent while waiting for it to finish (default 3 s). */
   otherAgentPollMs?: number;
   /** Check the screen before accepting "done" (default true). */
@@ -631,6 +685,8 @@ function actionSignature(a: AgentAction): string | null {
       return `type:${a.text}`;
     case 'click_element':
       return `${a.op}:${a.target.toLowerCase() || a.id}`;
+    case 'control':
+      return `control:${a.op}:${a.name.toLowerCase()}:${a.text}`;
     case 'set_value':
       return `set:${a.id}:${a.text}`;
     case 'note':
@@ -672,6 +728,12 @@ function describe(a: AgentAction): string {
       return `closed the window "${a.title.slice(0, 80)}"`;
     case 'click_element':
       return `${a.op === 'click' ? 'clicked' : a.op === 'double' ? 'double-clicked' : 'right-clicked'} control ${a.id}${a.target ? ` "${a.target}"` : ''}`;
+    case 'control':
+      return a.op === 'set'
+        ? `typed "${a.text.length > 60 ? `${a.text.slice(0, 60)}…` : a.text}" into "${a.name}"`
+        : `${a.op === 'click' ? 'clicked' : a.op === 'double' ? 'double-clicked' : 'right-clicked'} "${a.name}"`;
+    case 'close_tab':
+      return `closed the tab "${a.tab.slice(0, 80)}"`;
     case 'set_value':
       return `set control ${a.id}${a.target ? ` "${a.target}"` : ''} to "${a.text.length > 60 ? `${a.text.slice(0, 60)}…` : a.text}"`;
     default:
@@ -703,6 +765,146 @@ function typesIntoFocus(input: InputAction): boolean {
   if (input.kind !== 'keys') return false;
   const k = input.keys.join('+');
   return /^(?:enter|shift\+enter|backspace|delete|ctrl\+[avxz]|ctrl\+backspace)$/.test(k);
+}
+
+/** Thrown internally to skip the model call for a step that comes from the plan. */
+const PLANNED = Symbol('planned');
+
+const PLAN_PROMPT = `You plan for Clicky, an assistant that lives next to the user's mouse pointer on their Windows
+PC and does tasks with its own visible cursor, like a person would. Before Clicky acts, you write the
+definite route to the state the user wants, as Clicky's own steps. Clicky then carries the steps out
+one by one, moving its cursor to each thing it opens, clicks or types into, and comes back to you
+(with a new screenshot) when a step can't be done or the plan runs out.
+
+Reply with ONLY one JSON object:
+{"understood": "the task in one short sentence, as you will do it",
+ "steps": [ {"action": …}, … ]}
+
+Steps can use only these actions (each has "say": a few words the user sees, like "Opening Comet"):
+- {"action":"open","app":"<exact name from Apps on this PC>"} opens an installed app from its taskbar
+  icon (or Start). {"action":"open","url":"https://…"} opens a website in the user's own browser
+  (where they're signed in): Clicky brings the browser up, clicks the address bar, types the address
+  and presses Enter. {"action":"open","path":"C:\\…"} opens a folder or file.
+- {"action":"click_control","name":"…","kind":"button"} clicks the control with that name in the
+  window in front (kind optional: button, edit, menuitem, hyperlink, tabitem, listitem, checkbox).
+  Use the names from "Controls" or the names such an app always shows (Comet's "Address and search
+  bar", Notepad's "File" menu, "Search" boxes).
+- {"action":"set_control","name":"…","text":"…"} clicks the box with that name and types the text.
+- {"action":"type","text":"…"} types into the box that has the focus.
+- {"action":"key","keys":"ctrl+s"} presses a key or shortcut.
+- {"action":"wait","ms":1500} waits for a page or app to load.
+- {"action":"close_window","title":"…"} and {"action":"close_tab","tab":"…","window":"…"}.
+- {"action":"note","text":"…"} writes something down for the user.
+- {"action":"done","say":"what was done, in one or two short sentences"} ends the plan when the
+  steps above surely finish the task.
+
+Rules:
+- The shortest definite route, at most 12 steps. Prefer open with an app name or a URL (direct links
+  like https://www.youtube.com/results?search_query=lo-fi) over clicking through menus.
+- If part of the task needs looking at the screen first (choosing from search results, reading
+  something, judging what's on a page), plan the steps up to that point and stop there without done:
+  Clicky will look and carry on.
+- Add "risky": true to steps that send, post, buy, delete files, install, merge or submit.
+- Never plan clicks by position; Clicky finds controls by name when it gets there.`;
+
+/** The steps of a plan reply (only actions that don't need coordinates). */
+export function parsePlan(reply: string): { understood: string; steps: AgentAction[] } {
+  const start = reply.indexOf('{');
+  const end = reply.lastIndexOf('}');
+  if (start === -1 || end <= start) return { understood: '', steps: [] };
+  let o: Record<string, unknown>;
+  try {
+    const v: unknown = JSON.parse(reply.slice(start, end + 1));
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return { understood: '', steps: [] };
+    o = v as Record<string, unknown>;
+  } catch {
+    return { understood: '', steps: [] };
+  }
+  const raw = Array.isArray(o['steps']) ? o['steps'] : Array.isArray(o['plan']) ? o['plan'] : [];
+  const steps: AgentAction[] = [];
+  for (const s of raw.slice(0, 15)) {
+    if (typeof s !== 'object' || s === null) continue;
+    const p = parseAgentAction(JSON.stringify(s));
+    if (!p.ok) continue;
+    // Positions and numbers from the first screenshot are stale by the time a later step runs.
+    if (
+      ['click', 'double_click', 'right_click', 'scroll', 'drag', 'click_element', 'set_value'].includes(p.action.type)
+    )
+      break;
+    steps.push(p.action);
+    if (p.action.type === 'done') break;
+  }
+  return { understood: str(o['understood'], 200), steps };
+}
+
+/** Websites people ask to open by name, and their addresses. */
+const SITES: Record<string, string> = {
+  youtube: 'https://www.youtube.com/',
+  'youtube music': 'https://music.youtube.com/',
+  linkedin: 'https://www.linkedin.com/feed/',
+  instagram: 'https://www.instagram.com/',
+  facebook: 'https://www.facebook.com/',
+  twitter: 'https://x.com/home',
+  x: 'https://x.com/home',
+  reddit: 'https://www.reddit.com/',
+  gmail: 'https://mail.google.com/',
+  mail: 'https://mail.google.com/',
+  'google drive': 'https://drive.google.com/',
+  drive: 'https://drive.google.com/',
+  'google docs': 'https://docs.google.com/',
+  'google sheets': 'https://sheets.google.com/',
+  'google calendar': 'https://calendar.google.com/',
+  calendar: 'https://calendar.google.com/',
+  'google maps': 'https://maps.google.com/',
+  maps: 'https://maps.google.com/',
+  google: 'https://www.google.com/',
+  github: 'https://github.com/',
+  'whatsapp web': 'https://web.whatsapp.com/',
+  whatsapp: 'https://web.whatsapp.com/',
+  chatgpt: 'https://chatgpt.com/',
+  claude: 'https://claude.ai/',
+  perplexity: 'https://www.perplexity.ai/',
+  netflix: 'https://www.netflix.com/',
+  amazon: 'https://www.amazon.in/',
+  wikipedia: 'https://www.wikipedia.org/',
+  outlook: 'https://outlook.live.com/',
+  notion: 'https://www.notion.so/',
+  figma: 'https://www.figma.com/',
+  spotify: 'https://open.spotify.com/',
+  'hacker news': 'https://news.ycombinator.com/',
+  stackoverflow: 'https://stackoverflow.com/',
+  'stack overflow': 'https://stackoverflow.com/',
+  naukri: 'https://www.naukri.com/',
+  naukrigulf: 'https://www.naukrigulf.com/',
+  wellfound: 'https://wellfound.com/',
+};
+
+/**
+ * "Open YouTube", "launch VS Code", "open LinkedIn in Comet": a known route, done straight away
+ * without asking the model. An installed app wins over its website (WhatsApp, Claude, Spotify).
+ */
+export function quickOpen(goal: string, apps: readonly string[] | undefined): AgentAction[] | null {
+  const m =
+    /^(?:please\s+)?(?:can you\s+|could you\s+)?(?:open|launch|start|go to|bring up|show me)\s+(?:up\s+)?(?:the\s+|my\s+)?(.+?)(?:\s+(?:app|application|website|site|page|for me))?(?:\s+(?:in|on|using)\s+(?:comet|chrome|edge|the browser|my browser))?\s*[.!]?$/i.exec(
+      goal.trim(),
+    );
+  const what = m?.[1]?.trim().toLowerCase();
+  if (!what || what.split(/\s+/).length > 4) return null;
+  const asSite = /\b(?:website|site|web|in comet|in chrome|in the browser)\b/i.test(goal);
+  const app = asSite ? undefined : apps?.find((a) => a.toLowerCase() === what || a.toLowerCase() === `${what} desktop`);
+  if (app) {
+    return [
+      { type: 'open', app, url: '', path: '', say: `Opening ${app}`, risky: false },
+      { type: 'done', say: `${app} is open.`, risky: false },
+    ];
+  }
+  const site = SITES[what] ?? SITES[what.replace(/\.com$/, '')];
+  if (!site) return null;
+  const name = what.replace(/\b\w/g, (c) => c.toUpperCase());
+  return [
+    { type: 'open', app: '', url: site, path: '', say: `Opening ${name}`, risky: false },
+    { type: 'done', say: `${name} is open.`, risky: false },
+  ];
 }
 
 /** Another agent finishing up is given this long before Clicky gives up waiting. */
@@ -814,6 +1016,59 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
    * so the text never lands in whatever the user clicked into meanwhile.
    */
   let focusClick: InputAction | null = null;
+  /** Steps of the plan still to do, and the last screenshot (planned steps don't need a new one). */
+  let planQueue: AgentAction[] = [];
+  let planned: string[] = [];
+  let lastScreens: ScreenCapture | null = null;
+  const makePlan = async (why: string): Promise<void> => {
+    try {
+      const screens = await deps.capture.take(deps.signal);
+      lastScreens = screens;
+      const [windows, controls] = await Promise.all([
+        deps.openWindows?.().catch(() => []),
+        deps.elements?.().catch(() => [] as UiElement[]),
+      ]);
+      const reply = await ask(
+        deps,
+        agentSystemPrompt(screens, deps.userContext, deps.inventory, deps.briefing, PLAN_PROMPT),
+        [
+          `Task: ${goal}`,
+          deps.conversation ? `Earlier in this conversation:\n${deps.conversation}` : '',
+          why,
+          windows?.length ? `Open windows (front first):\n${windows.map((w) => `- ${w}`).join('\n')}` : '',
+          controls?.length ? `Controls in the window in front:\n${elementsText(controls, screens)}` : '',
+          deps.skills ?? '',
+          deps.hints ? `What worked before for similar tasks:\n${deps.hints}` : '',
+          steps.length ? `Steps already done:\n${steps.map((s, n) => `${n + 1}. ${s}`).join('\n')}` : '',
+          'Write the plan.',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        screens,
+      );
+      const plan = parsePlan(reply);
+      if (plan.understood && !steps.length) {
+        deps.log?.(`agent understood: ${plan.understood}`);
+        shown = plan.understood;
+      }
+      planQueue = plan.steps.map((s) => viaOpen(s, deps.inventory?.apps));
+      planned = planQueue.map(describe);
+      deps.log?.(`agent plan: ${planned.map((p, n) => `${n + 1}. ${p}`).join('; ') || '(none)'}`);
+      if (planned.length) deps.onPlan?.(planned);
+    } catch (e) {
+      if (deps.signal.aborted) return;
+      deps.log?.(`agent plan failed: ${e instanceof Error ? e.message : String(e)}`);
+      planQueue = [];
+    }
+  };
+  // "Open YouTube": no thinking needed, the route is known.
+  const quick = quickOpen(goal, deps.inventory?.apps);
+  if (quick) {
+    planQueue = quick;
+    planned = quick.map(describe);
+    deps.log?.(`agent quick route: ${planned.join('; ')}`);
+  } else if (deps.planFirst) await makePlan('');
+  if (deps.signal.aborted) return stopped();
   let focusLabel = '';
   let tookOver = false;
   /**
@@ -859,6 +1114,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     lastSig = null;
     scrolls = 0;
     note = 'Start the new approach from your review now.';
+    if (deps.planFirst) await makePlan(`The first approach went wrong: ${problem}. ${review}`);
     return true;
   };
   for (let i = 0; i < max;) {
@@ -878,21 +1134,29 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
       return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
     }
+    const fromPlan = planQueue.shift() ?? null;
+    if (!fromPlan && planned.length) {
+      note = `You carried out your plan (${planned.join('; ')}). Look at the screen: finish the task from here, or reply done if it is finished.`;
+      planned = [];
+    }
     // A screenshot can time out while the PC is busy (an app starting): try again before giving up.
     let screens: ScreenCapture;
-    try {
-      screens = await deps.capture.take(deps.signal);
-    } catch (e) {
-      if (deps.signal.aborted) return stopped();
-      deps.log?.(`agent screenshot failed, retrying: ${e instanceof Error ? e.message : String(e)}`);
-      await delay(1500);
-      screens = await deps.capture.take(deps.signal);
+    if (fromPlan && lastScreens) screens = lastScreens;
+    else {
+      try {
+        screens = await deps.capture.take(deps.signal);
+      } catch (e) {
+        if (deps.signal.aborted) return stopped();
+        deps.log?.(`agent screenshot failed, retrying: ${e instanceof Error ? e.message : String(e)}`);
+        await delay(1500);
+        screens = await deps.capture.take(deps.signal);
+      }
+      lastScreens = screens;
     }
     if (deps.signal.aborted) return stopped();
-    const [windows, controls] = await Promise.all([
-      deps.openWindows?.().catch(() => []),
-      deps.elements?.().catch(() => [] as UiElement[]),
-    ]);
+    const [windows, controls] = fromPlan
+      ? [[] as string[], [] as UiElement[]]
+      : await Promise.all([deps.openWindows?.().catch(() => []), deps.elements?.().catch(() => [] as UiElement[])]);
     const controlsText = controls?.length ? elementsText(controls, screens) : '';
     const byId = new Map((controls ?? []).map((e) => [e.id, e]));
     const question = [
@@ -920,8 +1184,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     ]
       .filter(Boolean)
       .join('\n\n');
-    let reply: string;
+    let reply = '';
     try {
+      if (fromPlan) throw PLANNED;
       reply = await ask(
         deps,
         agentSystemPrompt(screens, deps.userContext, deps.inventory, deps.briefing),
@@ -929,16 +1194,21 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         screens,
       );
     } catch (e) {
-      if (deps.signal.aborted) return stopped();
-      // A busy model, a slow first word or a cut-off reply: try the step again before giving up.
-      if (++retries > STEP_RETRIES) throw e;
-      deps.log?.(`agent step retry ${retries}: ${e instanceof Error ? e.message : String(e)}`);
-      await delay(1500 * retries);
-      continue;
+      if (e === PLANNED) reply = '';
+      else {
+        if (deps.signal.aborted) return stopped();
+        // A busy model, a slow first word or a cut-off reply: try the step again before giving up.
+        if (++retries > STEP_RETRIES) throw e;
+        deps.log?.(`agent step retry ${retries}: ${e instanceof Error ? e.message : String(e)}`);
+        await delay(1500 * retries);
+        continue;
+      }
     }
     retries = 0;
     if (deps.signal.aborted) return stopped();
-    const parsed = parseAgentAction(reply);
+    const parsed: ReturnType<typeof parseAgentAction> = fromPlan
+      ? { ok: true, action: fromPlan }
+      : parseAgentAction(reply);
     if (!parsed.ok) {
       deps.log?.(`agent reply rejected: ${parsed.error}: ${reply.slice(0, 200)}`);
       if (++bad > MAX_BAD_REPLIES)
@@ -1122,6 +1392,19 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     } else if (a.type === 'close_window') {
       deps.overlay.message(say, 'info');
       input = { kind: 'close', title: a.title };
+    } else if (a.type === 'control') {
+      // Clicky's cursor goes to the control when it's found (in main), then acts.
+      deps.overlay.message(say, 'info');
+      input = {
+        kind: 'control',
+        name: a.name,
+        ...(a.kind ? { controlKind: a.kind } : {}),
+        op: a.op,
+        ...(a.op === 'set' ? { text: a.text } : {}),
+      };
+    } else if (a.type === 'close_tab') {
+      deps.overlay.message(say, 'info');
+      input = { kind: 'closeTab', window: a.window, tab: a.tab };
     } else if (a.type === 'click_element' || a.type === 'set_value') {
       const el = byId.get(a.id);
       if (!el) {
@@ -1189,6 +1472,15 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
             };
             focusLabel = el.name;
           }
+        } else if (input.kind === 'control' && input.op !== 'right') {
+          // Clicking back into it later finds it by name again.
+          focusClick = {
+            kind: 'control',
+            name: input.name,
+            ...(input.controlKind ? { controlKind: input.controlKind } : {}),
+            op: 'click',
+          };
+          focusLabel = input.name;
         } else if (input.kind === 'open') focusClick = null;
         if (input.kind !== 'type' && input.kind !== 'keys') tookOver = false;
       } catch (e) {
@@ -1205,6 +1497,11 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
           continue;
         }
         note = `That step failed: ${why}. Try a different way (check the exact name or path in the lists above).`;
+        if (planQueue.length || fromPlan) {
+          note += ' Your plan stopped at that step: look at the screen and carry on from here.';
+          planQueue = [];
+          planned = [];
+        }
         steps.push(`(failed: ${describe(a)}: ${why.slice(0, 120)})`);
         checked.push({ step: describe(a), ok: false });
         failedChecks++;

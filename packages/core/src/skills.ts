@@ -53,6 +53,22 @@ working across several websites in a row, and turning what you find into files (
 - Repeating a step is fine while it keeps working (closing twenty windows is twenty steps).
 - If an app asks to save changes, press Cancel, note the window as unsaved and go on.
 
+## Knowing this PC (screen awareness)
+- "Apps on this PC" lists every installed app; "Open windows" lists what is open now, front first,
+  with when each was last used, which have unsaved changes, and each browser window's tabs (active,
+  asleep, last in front). Answer questions about what is open, where something is and what the user
+  was doing from these lists before looking anywhere else.
+- Websites open in the user's own browser (Comet), where they are signed in: open {"url": …}.
+  Installed apps (WhatsApp, Claude, VS Code, the Microsoft Store) open with {"app": …}.
+- To install software, open the Microsoft Store app, search for it, open its page and press Get or
+  Install (risky); for things like WSL say what the Store or Windows will ask.
+
+## Tidying up windows and tabs
+- Tabs marked "asleep" or not in front for hours, and windows not used for a long time, are stale:
+  close them without asking when the user asks to tidy up. Duplicate tabs of the same page: keep one.
+- Never close a window marked "unsaved changes" or "never close", or a tab the user is on (active);
+  leave them and tell the user which ones you kept and why.
+
 ## When something goes wrong
 - If a step didn't work, don't repeat it: try a different element, a keyboard shortcut or the
   open action. If several things fail, you'll be asked to review what went wrong; follow that.

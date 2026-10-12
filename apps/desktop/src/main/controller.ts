@@ -59,6 +59,8 @@ const HELLO_QUESTION =
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 /** Longest wait for an answer's point to be matched to a real control (the flight takes ~0.4–1.1 s). */
 const SNAP_TIMEOUT_MS = 900;
+/** How long Clicky's cursor takes to fly to a target and settle before the action. */
+const POINT_LAND_MS = 650;
 
 /**
  * Main's side of the interaction loop. The loop itself runs in the engine (architecture §4); this
@@ -119,6 +121,18 @@ export class Controller {
       log.info(`click target "${label}" moved; clicking it at its live position`);
       this.overlays.point({ displayId: d.id, local, global: at }, label);
     };
+    // Clicky's cursor flies to where it's about to act (opening, closing, typing) and lands first.
+    this.input.pointAt = async (p, label) => {
+      const at = screen.screenToDipPoint(p);
+      const d = screen.getDisplayNearestPoint(at);
+      log.info(`cursor to "${label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
+      this.overlays.point(
+        { displayId: d.id, local: { x: at.x - d.bounds.x, y: at.y - d.bounds.y }, global: at },
+        label,
+      );
+      await new Promise((r) => setTimeout(r, POINT_LAND_MS));
+    };
+    this.input.watchUse();
     this.engine.onMessage((msg) => this.onEngine(msg));
     // The overlay waveform: levels come from the media renderer through main, only while listening.
     worker.on((e) => {

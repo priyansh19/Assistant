@@ -52,6 +52,10 @@ export type InputAction =
   | { kind: 'open'; app?: string; url?: string; path?: string }
   /** Close a top-level window by its title (the app may still ask to save). */
   | { kind: 'close'; title: string }
+  /** Find a control in the window in front by name (waiting a moment for it), then click it or put text in it. */
+  | { kind: 'control'; name: string; controlKind?: string; op: 'click' | 'double' | 'right' | 'set'; text?: string }
+  /** Close a browser tab by (part of) its title, in the window whose title matches `window` (or the one in front). */
+  | { kind: 'closeTab'; window: string; tab: string }
   /** Act on control number `id` from the last list of controls (click it, or set its text). */
   | { kind: 'element'; id: number; op: 'click' | 'double' | 'right' | 'set'; text?: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }

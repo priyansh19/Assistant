@@ -6,7 +6,9 @@ import {
   lessonFrom,
   lessonHints,
   parseAgentAction,
+  parsePlan,
   parseStepCheck,
+  quickOpen,
   parseKeys,
   runAgent,
   type AgentDeps,
@@ -346,10 +348,10 @@ describe('recovering within the run', () => {
     expect(f.inputs.filter((i) => i.kind === 'keys')).toHaveLength(5);
   });
 
-  it('closes windows by title and always asks first', async () => {
+  it('closes windows by title without asking (tidying up)', async () => {
     const f = fakes(['{"action":"close_window","title":"Untitled - Notepad","say":"Closing Notepad"}']);
     await runAgent('close notepad', { ...f.deps, openWindows: async () => ['Untitled - Notepad — notepad'] });
-    expect(f.confirms).toEqual(['Closing Notepad']);
+    expect(f.confirms).toEqual([]);
     expect(f.inputs).toEqual([{ kind: 'close', title: 'Untitled - Notepad' }]);
     expect(f.questions[0]).toContain('Open windows (front first):\n- Untitled - Notepad — notepad');
   });
@@ -454,6 +456,78 @@ describe('the user clicks somewhere else while Clicky works', () => {
     });
     expect(f.questions[1]).toContain('never type into the box the user moved to');
     expect(f.questions[1]).toContain('stopped typing: the focus moved');
+  });
+});
+
+describe('plan first', () => {
+  it('opens known sites and installed apps straight away, without asking the model', async () => {
+    expect(quickOpen('open YouTube', [])?.[0]).toMatchObject({ type: 'open', url: 'https://www.youtube.com/' });
+    expect(quickOpen('open linkedin in comet', ['LinkedIn'])?.[0]).toMatchObject({
+      url: 'https://www.linkedin.com/feed/',
+    });
+    expect(quickOpen('open WhatsApp', ['WhatsApp'])?.[0]).toMatchObject({ app: 'WhatsApp', url: '' });
+    expect(quickOpen('launch visual studio code', ['Visual Studio Code'])?.[0]).toMatchObject({
+      app: 'Visual Studio Code',
+    });
+    expect(quickOpen('open the report I was writing yesterday and fix it', [])).toBeNull();
+    expect(quickOpen('open my downloads folder', [])).toBeNull();
+
+    const f = fakes([]);
+    const r = await runAgent('open YouTube', { ...f.deps, planFirst: true, verifyDone: false });
+    expect(r.outcome).toBe('done');
+    expect(f.questions).toEqual([]);
+    expect(f.inputs).toEqual([{ kind: 'open', url: 'https://www.youtube.com/' }]);
+  });
+
+  it('keeps only steps that need no positions', () => {
+    const p = parsePlan(
+      '{"understood":"Search YouTube","steps":[{"action":"open","url":"https://www.youtube.com/"},{"action":"set_control","name":"Search","text":"lofi"},{"action":"click","x":5,"y":5},{"action":"key","keys":"enter"}]}',
+    );
+    expect(p.understood).toBe('Search YouTube');
+    expect(p.steps.map((s) => s.type)).toEqual(['open', 'control']);
+  });
+
+  it('asks once for a plan, does its steps, then looks again when it runs out', async () => {
+    const f = fakes([
+      '{"understood":"Write hello in Notepad","steps":[{"action":"open","app":"Notepad","say":"Opening Notepad"},{"action":"click_control","name":"Text editor","kind":"document"},{"action":"type","text":"hello"}]}',
+      '{"action":"done","say":"Done.","check":"worked"}',
+    ]);
+    const r = await runAgent('write hello in notepad', {
+      ...f.deps,
+      planFirst: true,
+      verifyDone: false,
+      inventory: { apps: ['Notepad'], folders: [] },
+    });
+    expect(r.outcome).toBe('done');
+    expect(f.inputs).toEqual([
+      { kind: 'open', app: 'Notepad' },
+      { kind: 'control', name: 'Text editor', controlKind: 'document', op: 'click' },
+      { kind: 'type', text: 'hello' },
+    ]);
+    // One plan, then one look at the end.
+    expect(f.questions).toHaveLength(2);
+    expect(f.questions[1]).toContain('You carried out your plan');
+  });
+
+  it('drops the rest of the plan when a step fails and carries on step by step', async () => {
+    const f = fakes([
+      '{"steps":[{"action":"click_control","name":"Missing"},{"action":"type","text":"never typed"}]}',
+      '{"action":"done","say":"Done."}',
+    ]);
+    const inputs: InputAction[] = [];
+    await runAgent('do it', {
+      ...f.deps,
+      planFirst: true,
+      verifyDone: false,
+      input: {
+        run: async (a) => {
+          inputs.push(a);
+          if (a.kind === 'control') throw new Error('there is no "Missing" in the window in front');
+        },
+      },
+    });
+    expect(inputs.map((i) => i.kind)).toEqual(['control']);
+    expect(f.questions[1]).toContain('Your plan stopped at that step');
   });
 });
 

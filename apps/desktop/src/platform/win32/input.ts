@@ -377,6 +377,128 @@ public static class ClickyInput {
     }, IntPtr.Zero);
     return found;
   }
+  // ---- Where things are on screen, so Clicky's cursor can go there before it acts.
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] static extern int DwmRect(IntPtr h, int attr, out RECT r, int size);
+  static System.Windows.Automation.AutomationElement Taskbar() {
+    var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ClassNameProperty, "Shell_TrayWnd");
+    return System.Windows.Automation.AutomationElement.RootElement.FindFirst(System.Windows.Automation.TreeScope.Children, cond);
+  }
+  // The taskbar buttons: "x|y|name" per line (physical px). Pinned and running apps, Start, Search.
+  public static string TaskbarButtons() {
+    Aware();
+    var sb = new System.Text.StringBuilder();
+    var tb = Taskbar();
+    if (tb == null) return "";
+    var btn = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Button);
+    foreach (System.Windows.Automation.AutomationElement b in tb.FindAll(System.Windows.Automation.TreeScope.Descendants, btn)) {
+      try {
+        var c = b.Current; var r = c.BoundingRectangle;
+        if (r.IsEmpty || c.IsOffscreen) continue;
+        var name = (c.Name ?? "").Replace("\r", " ").Replace("\n", " ").Replace("|", "/");
+        sb.Append((int)(r.X + r.Width / 2)).Append('|').Append((int)(r.Y + r.Height / 2)).Append('|').Append(name).Append('\n');
+      } catch { }
+    }
+    return sb.ToString();
+  }
+  // A window's frame "x y w h" (physical px, without the invisible resize border).
+  public static string WindowBox(long handle) {
+    Aware();
+    var h = new IntPtr(handle); RECT r;
+    if (DwmRect(h, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0 && !GetWindowRect(h, out r)) return "";
+    return r.Left + " " + r.Top + " " + (r.Right - r.Left) + " " + (r.Bottom - r.Top);
+  }
+  // Centre of the first control in the window in front (or handle) whose name contains part, of the
+  // given kind ("" for any): "x y". The page itself is skipped, so this finds the browser's own UI
+  // (address bar, New tab) quickly.
+  public static string FindControl(long handle, string kind, string part, int budgetMs) {
+    Aware();
+    IntPtr h = handle != 0 ? new IntPtr(handle) : GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    var end = DateTime.Now.AddMilliseconds(budgetMs);
+    var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
+    var st = new System.Collections.Generic.Stack<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+    try { st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(System.Windows.Automation.AutomationElement.FromHandle(h), 0)); } catch { return ""; }
+    while (st.Count > 0 && DateTime.Now < end) {
+      var top = st.Pop();
+      try {
+        var c = top.Key.Current;
+        var k = c.ControlType.ProgrammaticName.Replace("ControlType.", "").ToLowerInvariant();
+        if ((kind.Length == 0 || k == kind) && (c.Name ?? "").IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0 && !c.IsOffscreen) {
+          var r = c.BoundingRectangle;
+          if (!r.IsEmpty) return (int)(r.X + r.Width / 2) + " " + (int)(r.Y + r.Height / 2);
+        }
+        if (top.Value < 18 && c.ControlType != System.Windows.Automation.ControlType.Document)
+          for (var ch = walker.GetLastChild(top.Key); ch != null; ch = walker.GetPreviousSibling(ch))
+            st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(ch, top.Value + 1));
+      } catch { }
+    }
+    return "";
+  }
+  // Where typing goes: the focused control's box "x y w h", or the window in front.
+  public static string FocusBox() {
+    Aware();
+    try {
+      var f = System.Windows.Automation.AutomationElement.FocusedElement;
+      if (f != null) {
+        var r = f.Current.BoundingRectangle;
+        if (!r.IsEmpty && r.Width > 2 && r.Height > 2 && r.Width < 4000) return (int)r.X + " " + (int)r.Y + " " + (int)r.Width + " " + (int)r.Height;
+      }
+    } catch { }
+    var fg = GetForegroundWindow();
+    return fg == IntPtr.Zero ? "" : WindowBox(fg.ToInt64());
+  }
+  // Browser tabs of a window: "index|selected|x|y|name" per line (the tab strip, in order).
+  public static string Tabs(long handle) {
+    Aware();
+    var sb = new System.Text.StringBuilder();
+    System.Windows.Automation.AutomationElement w;
+    try { w = System.Windows.Automation.AutomationElement.FromHandle(new IntPtr(handle)); } catch { return ""; }
+    var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
+    var st = new System.Collections.Generic.Stack<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+    st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(w, 0));
+    var end = DateTime.Now.AddMilliseconds(1500);
+    int n = 0;
+    while (st.Count > 0 && DateTime.Now < end) {
+      var top = st.Pop();
+      try {
+        var c = top.Key.Current;
+        if (c.ControlType == System.Windows.Automation.ControlType.TabItem) {
+          object sp; bool sel = false;
+          if (top.Key.TryGetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern, out sp)) sel = ((System.Windows.Automation.SelectionItemPattern)sp).Current.IsSelected;
+          var r = c.BoundingRectangle;
+          sb.Append(n++).Append('|').Append(sel ? 1 : 0).Append('|').Append((int)(r.X + r.Width / 2)).Append('|').Append((int)(r.Y + r.Height / 2)).Append('|')
+            .Append((c.Name ?? "").Replace("|", "/").Replace("\n", " ")).Append('\n');
+          continue;
+        }
+        if (top.Value < 14 && c.ControlType != System.Windows.Automation.ControlType.Document)
+          for (var ch = walker.GetLastChild(top.Key); ch != null; ch = walker.GetPreviousSibling(ch))
+            st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(ch, top.Value + 1));
+      } catch { }
+    }
+    return sb.ToString();
+  }
+  // Close tab number index (from Tabs) in a window with its own close button; false if not found.
+  public static bool CloseTab(long handle, int index) {
+    Aware();
+    var w = System.Windows.Automation.AutomationElement.FromHandle(new IntPtr(handle));
+    var tabs = w.FindAll(System.Windows.Automation.TreeScope.Descendants,
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.TabItem));
+    if (index < 0 || index >= tabs.Count) return false;
+    var tab = tabs[index];
+    var close = tab.FindFirst(System.Windows.Automation.TreeScope.Descendants,
+      new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Button));
+    object ip;
+    if (close != null && close.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out ip)) { ((System.Windows.Automation.InvokePattern)ip).Invoke(); return true; }
+    // No close button (a pinned tab): select it and press ctrl+w.
+    object sp;
+    if (tab.TryGetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern, out sp)) {
+      ((System.Windows.Automation.SelectionItemPattern)sp).Select(); Thread.Sleep(150);
+      Send(new[] { Key(0x11, 0, 0), Key(0x57, 0, 0), Key(0x57, 0, KEYUP), Key(0x11, 0, KEYUP) });
+      return true;
+    }
+    return false;
+  }
   public static string Foreground() {
     IntPtr h = GetForegroundWindow();
     if (h == IntPtr.Zero) return "";
@@ -635,6 +757,12 @@ while ($true) {
       'windows' { $out = [ClickyInput]::Windows() }
       'elements' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::Elements([int]$p[2], [int]$p[3]))) }
       'elact'   { $out = [ClickyInput]::ElementAct([int]$p[2], $p[3], $(if ($p.Length -gt 4) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[4])) } else { '' })) }
+      'taskbar' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::TaskbarButtons())) }
+      'winbox'  { $out = [ClickyInput]::WindowBox([long]$p[2]) }
+      'findctl' { $out = [ClickyInput]::FindControl([long]$p[2], $p[3], [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[4])), [int]$p[5]) }
+      'focusbox' { $out = [ClickyInput]::FocusBox() }
+      'tabs'    { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::Tabs([long]$p[2]))) }
+      'closetab' { $out = [ClickyInput]::CloseTab([long]$p[2], [int]$p[3]) }
       'otheragent' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::OtherAgent())) }
       'altgr'   { $out = [ClickyInput]::UsesAltGr() }
       'fgh'     { $out = [ClickyInput]::ForegroundHandle() }
@@ -783,6 +911,11 @@ export function createWin32InputDriver(): InputDriver {
   const b64 = (s: string): string => Buffer.from(s, 'base64').toString('utf8');
 
   const int = (n: number): number => Math.round(n);
+  /** "x y w h" from the helper, or null. */
+  const box = (r: string): { x: number; y: number; w: number; h: number } | null => {
+    const [x, y, w, h] = r.trim().split(' ').map(Number);
+    return x === undefined || y === undefined || !w || !h || Number.isNaN(x) ? null : { x, y, w, h };
+  };
   return {
     warm: () => void start().catch(() => undefined),
     click: (x, y, button, count) => done(send(`click ${int(x)} ${int(y)} ${button} ${count}`)),
@@ -829,6 +962,37 @@ export function createWin32InputDriver(): InputDriver {
       const [x, y] = r.split(' ').map(Number);
       return { x: x ?? 0, y: y ?? 0 };
     },
+    taskbar: async () =>
+      b64(await send('taskbar', 8000))
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [x = '0', y = '0', ...name] = line.split('|');
+          return { x: Number(x), y: Number(y), name: name.join('|') };
+        }),
+    windowBox: async (handle) => box(await send(`winbox ${int(Number(handle))}`)),
+    findControl: async (handle, kind, part, budgetMs = 800) => {
+      const r = (
+        await send(
+          `findctl ${int(Number(handle))} ${kind || '-'} ${Buffer.from(part, 'utf8').toString('base64')} ${int(budgetMs)}`,
+          budgetMs + 5000,
+        )
+      ).trim();
+      if (!r) return null;
+      const [x = 0, y = 0] = r.split(' ').map(Number);
+      return { x, y };
+    },
+    focusBox: async () => box(await send('focusbox', 6000)),
+    tabs: async (handle) =>
+      b64(await send(`tabs ${int(Number(handle))}`, 8000))
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [i = '0', sel = '0', x = '0', y = '0', ...name] = line.split('|');
+          return { index: Number(i), selected: sel === '1', x: Number(x), y: Number(y), title: name.join('|') };
+        }),
+    closeTab: async (handle, index) =>
+      (await send(`closetab ${int(Number(handle))} ${int(index)}`, 8000)).trim().toLowerCase() === 'true',
     otherAgent: async () => b64(await send('otheragent', 8000)).trim() || null,
     locate: async (name, x, y) => {
       const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);

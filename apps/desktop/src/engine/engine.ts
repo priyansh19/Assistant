@@ -253,6 +253,8 @@ export class Engine {
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
         openWindows: () => this.openWindows(),
+        // Clicky plans the whole route first, then does it with its cursor.
+        planFirst: true,
         elements: () => this.askMain<UiElement[]>('elements', [], 4000),
         otherAgent: () => this.otherAgent(),
         listFiles: async (path) => listFiles(this.realPath(path)),
@@ -757,8 +759,11 @@ export class Engine {
     const id = this.nextPlanId++;
     if (action.kind === 'keys' || action.kind === 'type' || action.kind === 'backspace')
       this.ownKeysUntil = Date.now() + 60_000;
-    if (action.kind === 'click' || action.kind === 'scroll' || action.kind === 'drag')
+    // Opening and closing click too now (the taskbar icon, the address bar), so their mouse moves are Clicky's.
+    if (action.kind !== 'keys' && action.kind !== 'type' && action.kind !== 'backspace')
       this.ownMouseUntil = Date.now() + 60_000;
+    if (action.kind === 'open' || action.kind === 'element' || action.kind === 'control')
+      this.ownKeysUntil = Date.now() + 60_000;
     this.moveAnchor = null;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {
