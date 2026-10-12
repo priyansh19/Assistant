@@ -64,17 +64,31 @@ export function agentGoal(question: string): string | null {
   const goal = (woke ? rest : (m?.[1] ?? '')).trim().replace(/[.!]+$/, '');
   if (goal.length < 3 || QUESTION_START.test(goal)) return null;
   // "Draw a star on my screen" is drawn by Clicky itself, over the screen; "draw … in Paint" is a task.
-  if (/^(?:please\s+)?(?:draw|sketch|circle|highlight|underline|mark)\b/i.test(goal) && !DRAW_APP.test(goal))
-    return null;
+  if (onScreenDrawing(goal)) return null;
   return goal;
 }
 
 const ACTION_START =
   /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
 
+/**
+ * A request to mark the screen itself ("draw a star", "put a box around the taskbar", "write hello
+ * in the middle of the screen", "box the top-left corner"), not inside an app: Clicky draws it.
+ */
+export function onScreenDrawing(text: string): boolean {
+  const t = splitWake(text).rest.replace(/^(?:can|could|would|will)\s+you\s+|^please\s+/i, '');
+  if (DRAW_APP.test(t)) return false;
+  return (
+    /^(?:draw|sketch|circle|highlight|underline|mark|box|outline|cross out|tick|point an arrow)\b/i.test(t) ||
+    /^put (?:a |an )?(?:box|circle|ring|arrow|line|tick|cross|mark)s?\b/i.test(t) ||
+    /^write\b[^.?!]*\b(?:on|in the middle of|across|at the (?:top|bottom)[\w ]*of) (?:my|the|this) screen\b/i.test(t) ||
+    /^(?:can you |could you )?draw on (?:my|the) screen\b/i.test(t)
+  );
+}
+
 /** Drawing inside an app ("draw a house in Paint") is a task; drawing on the screen is an answer. */
 /** A drawing app named in the request ("in Paint", "on the whiteboard"): drawing there is a task. */
-const DRAW_APP =
+export const DRAW_APP =
   /\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+|microsoft\s+)?(?:paint(?:\s*3d)?|whiteboard|excalidraw|tldraw|canva|figma|photoshop|krita|gimp)\b/i;
 
 const DRAW_IN_APP =

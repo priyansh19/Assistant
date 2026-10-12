@@ -12,7 +12,7 @@
  * nothing late from an old interaction can touch the new one.
  */
 
-import { agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
+import { agentGoal, onScreenDrawing, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
 import { bareGreeting, memoryNote } from './memory.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
@@ -578,7 +578,7 @@ export class Orchestrator {
       ...(run.speed.eagerFirstClause ? { eagerFirstClause: true } : {}),
       ...(p.confirm ? { confirm: p.confirm } : {}),
       ...(run.cacheWarmed ? { cache: true } : {}),
-      ...this.taskRouting(),
+      ...this.taskRouting(p.question),
       hooks: {
         point: (target, label, opts) => this.deps.overlay.point(target, label, opts),
         draw: (shape) => this.deps.overlay.draw?.(shape),
@@ -734,7 +734,10 @@ export class Orchestrator {
   }
 
   /** Let the answer model hand requests to agent mode, when agent mode is on and can act here. */
-  private taskRouting(): { tasks?: true } {
+  private taskRouting(question = ''): { tasks?: true } {
+    // Drawing on the screen is always answered with marks, never handed to the agent (it would
+    // open Paint, or drag the mouse over the desktop).
+    if (question && onScreenDrawing(question)) return {};
     const cfg = this.deps.agent?.();
     return cfg?.enabled && cfg.ready !== false && this.deps.input && this.deps.confirm ? { tasks: true } : {};
   }

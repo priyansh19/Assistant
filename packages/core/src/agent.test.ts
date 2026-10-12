@@ -1,3 +1,4 @@
+import { onScreenDrawing } from './agent.js';
 import { describe, expect, it } from 'vitest';
 import {
   actionGoal,
@@ -390,5 +391,20 @@ describe('tool-call markup instead of JSON', () => {
       '<invoke name="click"><parameter name="x">412</parameter><parameter name="y">88</parameter><parameter name="target">Save</parameter></invoke>',
     );
     expect(r.ok && r.action).toMatchObject({ type: 'click', x: 412, y: 88, target: 'Save' });
+  });
+});
+
+describe('on-screen drawing requests', () => {
+  it('are drawn by Clicky, drawing in an app is a task', () => {
+    for (const t of [
+      'Clicky, put a box around the taskbar.',
+      'Clicky, write Hello Priyansh in the middle of the screen.',
+      'Clicky, box the very top left corner of the screen.',
+      'Clicky, can you draw on my screen?',
+      'Clicky, draw a sun in the top right corner.',
+    ])
+      expect(onScreenDrawing(t)).toBe(true);
+    expect(onScreenDrawing('Clicky, draw a heart in Paint')).toBe(false);
+    expect(onScreenDrawing('Clicky, open Notepad and write a list')).toBe(false);
   });
 });
