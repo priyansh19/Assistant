@@ -16,7 +16,11 @@ import { fileURLToPath } from 'node:url';
 import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING];
+// --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
+const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING].map((t) =>
+  process.argv.includes('--nameless') ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) } : t,
+);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (n) => {
@@ -124,7 +128,9 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     if (asks.length > answered) {
       answered = asks.length;
       // Allow only what the task scopes it to (e.g. the Notepads it opened itself).
-      const ok = t.allow instanceof RegExp ? t.allow.test(asks.at(-1)) : t.allow === 'allow';
+      // Without the name, Clicky asks "Do this for you?" first: a person who asked would say yes.
+      const offer = /asking to allow: Do this for you/.test(asks.at(-1));
+      const ok = offer || (t.allow instanceof RegExp ? t.allow.test(asks.at(-1)) : t.allow === 'allow');
       say(`${asks.at(-1)} -> ${ok ? 'allow' : 'leave it (declined)'}`);
       if (ok) {
         await wait(800);
