@@ -473,7 +473,13 @@ export class Controller {
     const id = this.current.interactionId;
     const started = Date.now();
     void this.input.snap(label, target.global, SNAP_TIMEOUT_MS).then((at) => {
-      if (!at || this.current.interactionId !== id) return;
+      if (this.current.interactionId !== id) return;
+      if (!at) {
+        log.info(
+          `point "${label}": no matching control near it, kept the model's position (${Date.now() - started} ms)`,
+        );
+        return;
+      }
       const d = screen.getDisplayNearestPoint(at);
       if (d.id !== target.displayId) return;
       log.info(

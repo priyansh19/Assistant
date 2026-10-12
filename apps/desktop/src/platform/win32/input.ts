@@ -352,7 +352,7 @@ public static class ClickyInput {
   static System.Windows.Automation.ControlType[] KindHint(string label) {
     var t = System.Windows.Automation.ControlType.Edit;
     if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\bmenu\b")) return new[] { System.Windows.Automation.ControlType.MenuItem, System.Windows.Automation.ControlType.Menu };
-    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(bar|field|box|search|input)\b") && !label.Contains("toolbar") && !label.Contains("scroll")) return new[] { t, System.Windows.Automation.ControlType.ComboBox };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(bar|field|box|search|input|url|omnibox)\b") && !label.Contains("toolbar") && !label.Contains("scroll")) return new[] { t, System.Windows.Automation.ControlType.ComboBox };
     if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\btab\b")) return new[] { System.Windows.Automation.ControlType.TabItem };
     if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(button|icon)\b")) return new[] { System.Windows.Automation.ControlType.Button, System.Windows.Automation.ControlType.SplitButton };
     if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\blink\b")) return new[] { System.Windows.Automation.ControlType.Hyperlink };
@@ -388,6 +388,10 @@ public static class ClickyInput {
     if (want.Length == 0) return "";
     var kinds = KindHint(label);
     string best = ""; double bestScore = 0;
+    // Fallback for a label that names a kind of control ("address bar"): the nearest control of that
+    // kind right at the guess, whatever it's called. Browsers name their address box differently
+    // ("Address and search bar", "Ask anything or type a URL"), and some name it nothing at all.
+    string near = ""; double nearD = double.MaxValue;
     var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
     Func<System.Windows.Automation.AutomationElement, bool> consider = (el) => {
       System.Windows.Rect r; string n; System.Windows.Automation.ControlType kind;
@@ -398,6 +402,11 @@ public static class ClickyInput {
       if (ox * ox + oy * oy > SnapRadius * SnapRadius) return false;
       bool wide = kind == System.Windows.Automation.ControlType.Edit || kind == System.Windows.Automation.ControlType.ComboBox;
       bool sized = wide ? r.Width <= 2600 && r.Height <= 120 : r.Width <= 420 && r.Height <= 160;
+      bool kindMatch = kinds != null && Array.IndexOf(kinds, kind) >= 0;
+      if (sized && kindMatch) {
+        double d = Math.Sqrt(ox * ox + oy * oy);
+        if (d <= KindRadius && d < nearD) { nearD = d; near = ((int)(r.X + r.Width / 2)) + " " + ((int)(r.Y + r.Height / 2)); }
+      }
       if (sized && n.Length > 0) {
         double s = NameScore(n, want);
         if (s > 0) {
@@ -429,8 +438,11 @@ public static class ClickyInput {
       } catch { }
     }
     // An exact name, or a close one of the right kind; a loose name alone isn't trusted.
-    return bestScore >= 1.5 ? best : "";
+    if (bestScore >= 1.5) return best;
+    return near;
   }
+  // How close (physical px) a control of the right kind but another name must be to the guess.
+  const double KindRadius = 60;
 
   // The text caret in physical screen pixels: "x y height", or "" when the app doesn't expose one.
   public static string Caret() {

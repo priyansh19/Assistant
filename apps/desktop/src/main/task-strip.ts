@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { BrowserWindow, ipcMain, screen } from 'electron';
+import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import type { StripState } from '../preload/strip';
 import { IPC } from '../shared/ipc';
 
@@ -17,10 +17,13 @@ export class TaskStrip {
   private hideTimer: NodeJS.Timeout | null = null;
 
   constructor(handlers: { pause(on: boolean): void; stop(): void; allow(): void; allowAll(on: boolean): void }) {
-    ipcMain.on(IPC.stripPause, (_e, on: unknown) => handlers.pause(on === true));
-    ipcMain.on(IPC.stripStop, () => handlers.stop());
-    ipcMain.on(IPC.stripAllow, () => handlers.allow());
-    ipcMain.on(IPC.stripAllowAll, (_e, on: unknown) => handlers.allowAll(on === true));
+    // Allow and Allow all let Clicky act without asking: only the strip's own window may send them.
+    const mine = (e: IpcMainEvent): boolean =>
+      !!this.win && !this.win.isDestroyed() && e.sender === this.win.webContents;
+    ipcMain.on(IPC.stripPause, (e, on: unknown) => mine(e) && handlers.pause(on === true));
+    ipcMain.on(IPC.stripStop, (e) => mine(e) && handlers.stop());
+    ipcMain.on(IPC.stripAllow, (e) => mine(e) && handlers.allow());
+    ipcMain.on(IPC.stripAllowAll, (e, on: unknown) => mine(e) && handlers.allowAll(on === true));
   }
 
   update(patch: Partial<StripState>): void {
