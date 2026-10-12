@@ -132,6 +132,8 @@ export const STARTER_SKILLS: AgentSkill[] = [
     name: 'Browsing in Comet',
     triggers: ['comet', 'browser', 'tab', 'website', '.com', 'site'],
     body: `- Comet is the user's default browser: {"url": …} opens pages there.
+- After typing an address into the address bar, press delete before enter: the bar fills in the rest
+  from history (an old page), and delete removes that.
 - ctrl+l focuses the address bar, ctrl+t opens a new tab, ctrl+tab or ctrl+<n> switches tabs,
   ctrl+w closes the tab.
 - Comet's assistant side panel is not part of the page; ignore it unless the task is about it.`,

@@ -452,7 +452,12 @@ export class InputHost {
       else await d.keys(['ctrl', 't']);
       await delay(350);
     }
-    const bar = await d.findControl(handle, 'edit', 'Address', 900).catch(() => null);
+    // A new tab takes a moment to draw its address bar.
+    let bar: { x: number; y: number } | null = null;
+    for (let i = 0; i < 3 && !bar; i++) {
+      bar = await d.findControl(handle, 'edit', 'Address', 1200).catch(() => null);
+      if (!bar) await delay(400);
+    }
     if (bar && (await this.show(bar, 'Address bar'))) {
       await d.click(bar.x, bar.y, 'left', 1);
       await delay(120);
@@ -460,6 +465,10 @@ export class InputHost {
     } else await d.keys(['ctrl', 'l']);
     await delay(100);
     await d.type(url);
+    // The address bar completes what's typed from history ("youtube.com/" becomes an old search
+    // page, found live): Delete drops that completion so Enter goes to the address as typed.
+    await delay(150);
+    await d.keys(['delete']);
     await d.keys(['enter']);
     this.lastBrowser = { handle, at: Date.now() };
     log.info(`opened ${url} in ${b.label}${reuse ? ' (same tab)' : ''}`);
