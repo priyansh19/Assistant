@@ -49,6 +49,8 @@ export type InputAction =
   /** Close a top-level window by its title (the app may still ask to save). */
   | { kind: 'close'; title: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
+  /** Hold the left button and move through these points, then let go (drawing in Paint, sliders). */
+  | { kind: 'drag'; path: MappedPoint[] }
   | { kind: 'type'; text: string }
   /** Delete this many characters before the text cursor (undo of a write). */
   | { kind: 'backspace'; count: number }

@@ -44,6 +44,8 @@ export interface InputDriver {
   /** Start the helper ahead of first use. */
   warm(): void;
   click(x: number, y: number, button: 'left' | 'right', count: 1 | 2): Promise<void>;
+  /** Press the left button at the first point, move through the rest (interpolated), release. */
+  drag(points: { x: number; y: number }[]): Promise<void>;
   /** Positive scrolls down. */
   scroll(x: number, y: number, amount: number): Promise<void>;
   type(text: string): Promise<void>;

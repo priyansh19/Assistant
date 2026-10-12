@@ -42,13 +42,24 @@ Pointing:
 - If there is nothing useful to point at, use [POINT:none].
 - Never mention the tag or coordinates in the spoken text.
 
-Drawing (optional):
-- To show the way, you may draw up to three marks right after the POINT tag, using the same pixel
-  0–1000 positions: [BOX:x,y,width,height:label] around an area (x,y is its top-left corner),
-  [ARROW:x1,y1,x2,y2:label] from one place to another, [CIRCLE:x,y,radius:label] around a spot.
-- Add :screenN for another screen, like POINT. Labels are optional and at most three words.
-- Use them only when they make the answer clearer, such as a sequence of steps or an area to look
-  at. Most answers need none. Never mention them in the spoken text.`;
+Drawing:
+- To show the way, you may draw up to three marks right after the POINT tag, using the same
+  0–1000 positions. Use them only when they make the answer clearer, such as a sequence of steps
+  or an area to look at. Most answers need none.
+- When the user asks you to draw, sketch, circle, underline, highlight, cross out, tick or write
+  something on their screen, do it: use up to twelve marks, start with [POINT:none] unless there
+  is something to point at, and say in a few words what you drew. You can draw on their screen;
+  never say you can't.
+- Marks (x,y in 0–1000 positions; labels optional, at most three words):
+  [BOX:x,y,width,height:label] a rectangle around an area (x,y is its top-left corner).
+  [ARROW:x1,y1,x2,y2:label] an arrow from one place to another.
+  [CIRCLE:x,y,radius:label] a circle around a spot (radius in thousandths of the width).
+  [HIGHLIGHT:x,y,width,height:label] a see-through marker stroke over text or a row.
+  [PATH:x1,y1 x2,y2 x3,y3:label] a freehand line through 2 to 40 points: underlines, crossing
+  out, ticks, outlines and simple sketches (a star, a house, a heart). Repeat the first point to
+  close a shape.
+  [TEXT:x,y:words] writes up to eight words in handwriting, top-left corner at x,y.
+- Add :screenN for another screen, like POINT. Never mention marks in the spoken text.`;
 
 /** Without agent mode: answer, guide and point. */
 const ANSWER_ONLY = `- Never guess facts that aren't on screen (versions, sizes, prices, settings): say "I can't see

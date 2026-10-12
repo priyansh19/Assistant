@@ -4,7 +4,7 @@
  *   [POINT:x,y:label]            point on the screen the image came from
  *   [POINT:x,y:label:screenN]    point on screen N (1-based, in the order images were sent)
  *   [POINT:none]                 nothing to point at
- *   [BOX:…] [ARROW:…] [CIRCLE:…] drawings, see shapes.ts
+ *   [BOX:…] [ARROW:…] [CIRCLE:…] [HIGHLIGHT:…] [PATH:…] [TEXT:…] drawings, see shapes.ts
  *   [TASK:goal]                  the user wants something done on the PC, not answered: hand the
  *                                goal (restated in full by the model) to agent mode
  *
@@ -13,7 +13,7 @@
  * reaches TTS. Tags may appear anywhere; the prompt asks for one at the start.
  */
 
-import { parseDrawTag, type DrawShape } from './shapes.js';
+import { DRAW_TAGS, parseDrawTag, type DrawShape } from './shapes.js';
 
 export interface PointTarget {
   kind: 'point';
@@ -41,14 +41,17 @@ export type ParserEvent =
   | { type: 'invalid-tag'; raw: string };
 
 /** Tag openings the parser holds back from speech. */
-const OPENERS = ['[POINT:', '[BOX:', '[ARROW:', '[CIRCLE:', '[TASK:'];
-const OPEN_RE = /\[(?:POINT|BOX|ARROW|CIRCLE|TASK):/i;
+const OPENERS = ['[POINT:', '[TASK:', ...DRAW_TAGS.map((t) => `[${t}:`)];
+const OPEN_RE = new RegExp(`\\[(?:POINT|TASK|${DRAW_TAGS.join('|')}):`, 'i');
 /** A tag longer than this is not a tag; release it as text so a stray "[POINT:" can't swallow the answer. */
 export const MAX_TAG_LENGTH = 160;
 /** A task goal is a whole restated request ("open Calculator, work out 18% of 2450 and…"), so it may run longer. */
 export const MAX_TASK_TAG_LENGTH = 600;
+/** A PATH carries up to 40 points, so it may run longer. */
+export const MAX_PATH_TAG_LENGTH = 520;
 
-const maxLength = (buffer: string): number => (/^\[TASK:/i.test(buffer) ? MAX_TASK_TAG_LENGTH : MAX_TAG_LENGTH);
+const maxLength = (s: string): number =>
+  /^\[TASK:/i.test(s) ? MAX_TASK_TAG_LENGTH : /^\[PATH:/i.test(s) ? MAX_PATH_TAG_LENGTH : MAX_TAG_LENGTH;
 
 /** The goal in a complete `[TASK:goal]` tag, or null if it's empty. */
 export function parseTaskTag(raw: string): string | null {
@@ -89,7 +92,7 @@ function partialOpenSuffix(s: string): number {
 
 /** Length of the tag opening at the start of `s` (the buffer always starts with one here). */
 function openLength(s: string): number {
-  const head = s.slice(0, 8).toUpperCase(); // the longest opening, "[CIRCLE:", is 8 characters
+  const head = s.slice(0, 12).toUpperCase();
   return (OPENERS.find((o) => head.startsWith(o)) ?? OPENERS[0] ?? '').length;
 }
 

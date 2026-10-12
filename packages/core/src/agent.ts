@@ -5,7 +5,7 @@
  * (the interaction signal), and risky steps wait for the user's go-ahead.
  */
 
-import { fromThousandths, mapPointToDisplay } from './coordinates.js';
+import { fromThousandths, mapPointToDisplay, type MappedPoint } from './coordinates.js';
 import { splitWake } from './wake.js';
 import { StageError } from './errors.js';
 import { delay, withTimeout } from './pipeline/budget.js';
@@ -27,6 +27,8 @@ export type AgentAction =
   | { type: 'key'; keys: string[]; say: string; risky: boolean }
   | { type: 'scroll'; x: number; y: number; screen: number | null; amount: number; say: string; risky: boolean }
   | { type: 'wait'; ms: number; say: string; risky: boolean }
+  /** Hold the left button down along a path: draw in Paint or a whiteboard, move a slider, drag a file. */
+  | { type: 'drag'; path: { x: number; y: number }[]; screen: number | null; say: string; risky: boolean }
   | { type: 'open'; app: string; url: string; path: string; say: string; risky: boolean }
   /** Write down something seen on screen (free text and/or one table row) to use in later steps. */
   | { type: 'note'; text: string; row: string[] | null; say: string; risky: boolean }
@@ -67,6 +69,10 @@ export function agentGoal(question: string): string | null {
 const ACTION_START =
   /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
 
+/** Drawing inside an app ("draw a house in Paint") is a task; drawing on the screen is an answer. */
+const DRAW_IN_APP =
+  /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:draw|sketch|paint|doodle)\b.*\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+|microsoft\s+)?(?:paint(?:\s*3d)?|whiteboard|excalidraw|tldraw|canva|figma|photoshop|krita|gimp)\b.*)$/is;
+
 /**
  * A request to do something on the PC without the "Agent" prefix ("can you open LinkedIn and
  * scroll my feed"). The caller asks the user before handing it to agent mode; questions about how
@@ -75,7 +81,8 @@ const ACTION_START =
 export function actionGoal(question: string): string | null {
   const q = question.trim().replace(/[?.!]+$/, '');
   if (QUESTION_START.test(splitWake(q).rest)) return null;
-  const goal = ACTION_START.exec(splitWake(q).rest)?.[1]?.trim() ?? '';
+  const rest = splitWake(q).rest;
+  const goal = (ACTION_START.exec(rest)?.[1] ?? DRAW_IN_APP.exec(rest)?.[1])?.trim() ?? '';
   return goal.split(/\s+/).length >= 2 ? goal : null;
 }
 
@@ -130,6 +137,22 @@ export function parseKeys(combo: string): string[] | null {
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v: unknown, max = 200): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+/** Most points in one drag: a detailed drawing is several drags, one stroke each. */
+export const MAX_DRAG_POINTS = 200;
+
+/** [[x,y],…] or [{x,y},…] → points; null unless there are 2 to MAX_DRAG_POINTS valid ones. */
+function dragPath(v: unknown): { x: number; y: number }[] | null {
+  if (!Array.isArray(v) || v.length < 2 || v.length > MAX_DRAG_POINTS) return null;
+  const out: { x: number; y: number }[] = [];
+  for (const p of v) {
+    const x = num(Array.isArray(p) ? p[0] : (p as Record<string, unknown> | null)?.['x']);
+    const y = num(Array.isArray(p) ? p[1] : (p as Record<string, unknown> | null)?.['y']);
+    if (x === null || y === null) return null;
+    out.push({ x, y });
+  }
+  return out;
+}
 
 /** Parse the model's reply (one JSON object, possibly wrapped in prose or a code fence). */
 export function parseStepCheck(reply: string): StepCheck {
@@ -190,6 +213,11 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
         ok: true,
         action: { type, x, y, screen: scr, amount: Math.max(-30, Math.min(30, Math.round(amount))), say, risky },
       };
+    }
+    case 'drag': {
+      const path = dragPath(o['path'] ?? (o['from'] && o['to'] ? [o['from'], o['to']] : null));
+      if (!path) return { ok: false, error: `drag needs "path": 2 to ${MAX_DRAG_POINTS} [x,y] points` };
+      return { ok: true, action: { type, path, screen: scr, say, risky } };
     }
     case 'open': {
       const app = str(o['app'], 120);
@@ -262,6 +290,11 @@ Actions:
 - open: {"app":"Grok Bot"} launches an installed app by its exact name from the list below;
   {"url":"https://…"} opens a website in the user's default browser; {"path":"C:\\…"} opens a folder or file.
   This is the fastest, most reliable way to open things: use it instead of clicking around.
+- drag: {"path":[[x1,y1],[x2,y2],…]} holds the left mouse button down, moves through the points
+  (thousandths, like click) and lets go. Use it to draw in Paint, a whiteboard or any canvas, and to
+  move sliders or drag things. One drag is one pen stroke (2 to 200 points): draw a shape as one
+  or more strokes, closing it by ending at its first point. In drawing apps pick the tool and
+  colour first, and keep strokes inside the canvas.
 - wait: {"ms":N} when something is still loading.
 - note: {"text":"..."} and/or {"row":["…","…"]} writes down what you see now (facts, names, links,
   counts, one table row) so you still have it after leaving the page. Your notes come back every turn.
@@ -465,6 +498,10 @@ function describe(a: AgentAction): string {
       return `scrolled ${a.amount > 0 ? 'down' : 'up'} ${Math.abs(a.amount)} at ${a.x},${a.y}`;
     case 'wait':
       return `waited ${a.ms} ms`;
+    case 'drag': {
+      const [first, last] = [a.path[0], a.path[a.path.length - 1]];
+      return `dragged through ${a.path.length} points from ${first?.x},${first?.y} to ${last?.x},${last?.y}${a.screen ? ` (screen${a.screen})` : ''}`;
+    }
     case 'open':
       return `opened ${a.app || a.url || a.path}`;
     case 'note':
@@ -804,6 +841,21 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
               count: a.type === 'double_click' ? 2 : 1,
               ...(a.target ? { target: a.target } : {}),
             };
+    } else if (a.type === 'drag') {
+      const path: MappedPoint[] = [];
+      for (const p of a.path) {
+        const m = mapPointToDisplay(fromThousandths({ ...p, screen: a.screen }, screens.geometry), screens.geometry);
+        if (m.ok) path.push(m.point);
+      }
+      const start = path[0];
+      if (!start || path.length !== a.path.length) {
+        note = 'Part of that drag was off the screenshot. Use coordinates inside the image.';
+        steps.push(`(skipped: ${describe(a)} was off screen)`);
+        continue;
+      }
+      // The companion flies to where the stroke starts, so the user sees where Clicky will draw.
+      deps.overlay.point(start, say);
+      input = { kind: 'drag', path };
     } else if (a.type === 'open') {
       deps.overlay.message(say, 'info');
       input = {
@@ -828,7 +880,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (a.risky || deps.confirmMode === 'always') {
       const ok = await deps.confirm(say, deps.signal);
       if (!ok || deps.signal.aborted) return stopped();
-    } else if (input?.kind === 'click' || input?.kind === 'scroll') {
+    } else if (input?.kind === 'click' || input?.kind === 'scroll' || input?.kind === 'drag') {
       // Let the companion land on the target and rest there a moment, so the user sees where it acts.
       await delay(deps.flightMs ?? 950);
     } else if (input) {
