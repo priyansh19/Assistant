@@ -381,3 +381,12 @@ describe('drawing on the screen is not an agent task', () => {
     expect(agentGoal('Clicky, draw a house in Paint')).toBe('draw a house in Paint');
   });
 });
+
+describe('tool-call markup instead of JSON', () => {
+  it('reads <parameter> replies the same way', () => {
+    const r = parseAgentAction(
+      '<invoke name="click"><parameter name="x">412</parameter><parameter name="y">88</parameter><parameter name="target">Save</parameter></invoke>',
+    );
+    expect(r.ok && r.action).toMatchObject({ type: 'click', x: 412, y: 88, target: 'Save' });
+  });
+});

@@ -166,17 +166,45 @@ export function parseStepCheck(reply: string): StepCheck {
   return m?.[1] ? (m[1].toLowerCase() as StepCheck) : null;
 }
 
+/**
+ * Some models answer in tool-call markup instead of JSON
+ * (`<parameter name="action">click</parameter><parameter name="x">412</parameter>…`): read it the
+ * same way, values that look like JSON (numbers, arrays) parsed as JSON. Null if there's none.
+ */
+function fromMarkup(reply: string): Record<string, unknown> | null {
+  const o: Record<string, unknown> = {};
+  for (const m of reply.matchAll(/<parameter name="([\w-]+)">([\s\S]*?)<\/parameter>/g)) {
+    const raw = (m[2] ?? '').trim();
+    let v: unknown = raw;
+    if (/^(?:-?\d+(?:\.\d+)?|true|false|\[[\s\S]*\]|\{[\s\S]*\})$/.test(raw)) {
+      try {
+        v = JSON.parse(raw);
+      } catch {
+        // keep the text
+      }
+    }
+    if (m[1]) o[m[1]] = v;
+  }
+  const invoke = /<invoke name="([\w-]+)"/.exec(reply)?.[1];
+  if (invoke && o['action'] === undefined) o['action'] = invoke;
+  return Object.keys(o).length ? o : null;
+}
+
 export function parseAgentAction(reply: string): { ok: true; action: AgentAction } | { ok: false; error: string } {
   const start = reply.indexOf('{');
   const end = reply.lastIndexOf('}');
-  if (start === -1 || end <= start) return { ok: false, error: 'no JSON object in the reply' };
+  const markup = fromMarkup(reply);
   let o: Record<string, unknown>;
-  try {
-    const v: unknown = JSON.parse(reply.slice(start, end + 1));
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) return { ok: false, error: 'not a JSON object' };
-    o = v as Record<string, unknown>;
-  } catch (e) {
-    return { ok: false, error: `invalid JSON (${e instanceof Error ? e.message : String(e)})` };
+  if (markup && (start === -1 || end <= start || reply.indexOf('<parameter') < start)) o = markup;
+  else {
+    if (start === -1 || end <= start) return { ok: false, error: 'no JSON object in the reply' };
+    try {
+      const v: unknown = JSON.parse(reply.slice(start, end + 1));
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) return { ok: false, error: 'not a JSON object' };
+      o = v as Record<string, unknown>;
+    } catch (e) {
+      return { ok: false, error: `invalid JSON (${e instanceof Error ? e.message : String(e)})` };
+    }
   }
   const type = str(o['action'] ?? o['type']).toLowerCase();
   const say = str(o['say'], 160);
