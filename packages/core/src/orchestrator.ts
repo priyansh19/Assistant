@@ -147,6 +147,14 @@ export interface Timeouts {
 const CANT_SEE =
   /\b(?:can'?t|cannot|can not|unable to|don'?t|do not)\s+(?:see|tell|find|determine|show)\b|\bnot (?:visible|shown|on (?:the|your) screen)\b|\byou (?:may|might|would|will) need to (?:open|check|go)\b/i;
 
+/**
+ * The answer model said it can't do something, or claimed it did something only the agent can do
+ * ("I've opened your Downloads", "I can't open applications", "you can open YouTube by clicking…"):
+ * the request was a task, so hand it to the agent instead of leaving the user with that answer.
+ */
+const NOT_DONE =
+  /\b(?:i(?:'ve| have)? (?:opened|created|made|written|typed|saved|closed|moved|copied)|i (?:can'?t|cannot|am unable to|'m unable to|am not able to) (?:open|create|make|access|write|type|save|move|copy|check|control|browse|go to)|you can (?:open|go to|find|access) (?:it|them|\w+)(?: \w+){0,4} by (?:clicking|opening|going|pressing|typing))\b/i;
+
 const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, answerMs: 90000 };
 
 /** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
@@ -1063,14 +1071,19 @@ export class Orchestrator {
     if (outcome === 'answered' && this.shouldFindOut(run))
       queueMicrotask(() => {
         this.deps.log?.(`not on screen; finding it out: ${run.question}`);
-        void this.ask(`Clicky, find out and tell me: ${splitWake(run.question).rest}`, 'action');
+        const rest = splitWake(run.question).rest;
+        // A refused or claimed action is the request itself; a missing fact is something to find out.
+        void this.ask(
+          NOT_DONE.test(run.answer) ? `Clicky, ${rest}` : `Clicky, find out and tell me: ${rest}`,
+          'action',
+        );
       });
   }
 
   /** The answer said it can't see that on screen, and agent mode can go and look. */
   private shouldFindOut(run: Run): boolean {
-    if (run.mode !== 'answer' || run.source === 'action' || !CANT_SEE.test(run.answer)) return false;
-    if (!splitWake(run.question).woke) return false;
+    if (run.mode !== 'answer' || run.source === 'action') return false;
+    if (!CANT_SEE.test(run.answer) && !NOT_DONE.test(run.answer)) return false;
     const cfg = this.deps.agent?.();
     return !!cfg?.enabled && cfg.ready !== false;
   }
