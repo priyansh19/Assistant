@@ -51,6 +51,7 @@ export const DRAWING = [
   overlay('DRS3', 'Clicky, can you draw on my screen?', (_o, r) => marks(r) >= 1 && !/can'?t|cannot/i.test(r.answer)),
   {
     id: 'DR42',
+    cleanup: ['Close-TestPaint'],
     say: 'Clicky, open Paint and draw a straight line.',
     shot: true,
     maxMinutes: 5,
@@ -59,6 +60,7 @@ export const DRAWING = [
   },
   {
     id: 'DR44',
+    cleanup: ['Close-TestPaint'],
     say: 'Clicky, draw a circle in Paint using the ellipse tool.',
     shot: true,
     maxMinutes: 5,
@@ -67,6 +69,7 @@ export const DRAWING = [
   },
   {
     id: 'DR47',
+    cleanup: ['Close-TestPaint'],
     say: 'Clicky, write my name in Paint with the text tool.',
     shot: true,
     maxMinutes: 5,

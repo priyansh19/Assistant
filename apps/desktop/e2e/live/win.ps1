@@ -90,3 +90,27 @@ function New-SpokenWav([string]$Text, [string]$Wav) {
   $s.Speak($Text)
   $s.Dispose()
 }
+
+# Close the Paint windows a test opened, discarding the test drawing (Don't save).
+function Close-TestPaint {
+  Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+  $btnType = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+  for ($round = 0; $round -lt 20; $round++) {
+    $p = Get-Process mspaint -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if (-not $p) { 'no Paint left'; break }
+    [void]$p.CloseMainWindow()
+    Start-Sleep -Milliseconds 1500
+    $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
+    $done = $false
+    foreach ($b in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnType)) {
+      if ($b.Current.Name -match "^Don.t save$") {
+        $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        "discarded Paint $($p.Id)"
+        $done = $true
+        break
+      }
+    }
+    if (-not $done) { "no save prompt for $($p.Id)" }
+    Start-Sleep -Milliseconds 1500
+  }
+}

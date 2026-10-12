@@ -198,6 +198,8 @@ interface Speculation {
 }
 
 interface Run {
+  /** Marks drawn by this answer (a drawing request that drew nothing is retried once). */
+  drawn?: number;
   /** 'dictate': the transcript is typed into the focused app; no screenshot, no AI, no history. */
   mode: 'answer' | 'dictate';
   /** Keep this interaction in history (false for plain dictation). */
@@ -581,7 +583,12 @@ export class Orchestrator {
       ...this.taskRouting(p.question),
       hooks: {
         point: (target, label, opts) => this.deps.overlay.point(target, label, opts),
-        draw: (shape) => this.deps.overlay.draw?.(shape),
+        draw: (shape) => {
+          run.drawn = (run.drawn ?? 0) + 1;
+          // A sketch is a picture, not an annotation: no "eye", "roof", "smile" labels on its parts.
+          const sketch = onScreenDrawing(p.question) && /\b(?:draw|sketch)\b/i.test(p.question);
+          this.deps.overlay.draw?.(sketch && shape.kind !== 'text' && 'label' in shape ? { ...shape, label: '' } : shape);
+        },
         caption: (text) => {
           run.answer = text;
           this.deps.overlay.caption?.(text);
@@ -718,6 +725,11 @@ export class Orchestrator {
     run.latency.mark('done');
     this.machine.dispatch({ type: 'speechDone' });
     this.finish(run, 'answered');
+    // Asked to draw on the screen and nothing was drawn ("I've written hello" with no marks): try once more.
+    if (!run.drawn && run.source !== 'action' && onScreenDrawing(question)) {
+      this.deps.log?.(`asked to draw but nothing was drawn; asking again: ${question}`);
+      queueMicrotask(() => void this.ask(`${question} (Draw it now with marks on the screen.)`, 'action'));
+    }
   }
 
   /** The task, if this question asks agent mode to do something and agent mode is on. */
