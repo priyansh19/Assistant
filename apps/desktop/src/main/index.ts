@@ -59,6 +59,7 @@ if (!app.requestSingleInstanceLock()) {
       actions: () => history.listActions(),
       runAction: (id) => void dashboard.runAction(id),
       needsSetup: () => !settings.get().onboardingDone || ctl.missingKeys().length > 0,
+      showDrawing: () => overlays?.sketch(),
     });
     controller.onState((s) => tray?.setState(s));
     history.onChange(() => tray?.refresh());

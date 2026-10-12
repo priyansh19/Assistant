@@ -64,12 +64,27 @@ let lastFrame = performance.now();
 let idleSince = 0; // when the interaction finished, for dismissing the label
 let message: { text: string; kind: 'error' | 'info'; until: number } | null = null;
 let pendingPoint: { p: OverlayPoint; label: string } | null = null;
-/** Arrows, boxes and circles from the answer, with when each arrived. */
-let drawings: { d: OverlayDrawing; at: number }[] = [];
-/** How long a drawing stays up, and how long it takes to draw itself / fade out. */
-const DRAWING_MS = 14000;
-const DRAW_IN_MS = 450;
+/** A point that arrived while the pen was busy, flown to when the drawing finishes. */
+let afterDrawing: { at: Pt; label: string } | null = null;
+/**
+ * Marks from the answer (or the tray's example), drawn one after another like a pen would: each
+ * has a start time after the previous one ends, and the companion rides the tip while it draws.
+ */
+let drawings: { d: OverlayDrawing; start: number; dur: number }[] = [];
+/** When the pen finishes everything queued so far. */
+let penFree = 0;
+/** Where the pen is this frame on this display (the companion's tip goes there), or null. */
+let pen: Pt | null = null;
+/** How long a finished drawing stays up, and how long it takes to fade out. */
+const DRAWING_MS = 20000;
 const FADE_MS = 600;
+/** Pen speed in px per ms, the pause between strokes, and the glide to the first stroke. */
+const PEN_SPEED = 1.5;
+const STROKE_GAP_MS = 220;
+const LEAD_MS = 380;
+/** The companion holds its tip down-left onto the line, like a pen in a right hand. */
+const PEN_HEADING = Math.PI * 0.75;
+const HANDWRITING = '600 30px "Ink Free", "Segoe Print", "Comic Sans MS", cursive';
 
 // ------------------------------------------------------------- geometry helpers
 
@@ -274,69 +289,243 @@ function wrap(text: string, maxW: number): string[] {
   return lines.slice(0, 5);
 }
 
-/** Draw every live drawing, revealing each stroke over DRAW_IN_MS and fading out at the end. */
+const dist = (a: Pt, b: Pt): number => Math.hypot(b.x - a.x, b.y - a.y);
+
+/** The arrow's gentle bend: a curve reads as a gesture rather than a ruler line. */
+function arrowControl(a: Pt, b: Pt): Pt {
+  const len = dist(a, b) || 1;
+  return {
+    x: (a.x + b.x) / 2 - ((b.y - a.y) / len) * len * 0.12,
+    y: (a.y + b.y) / 2 + ((b.x - a.x) / len) * len * 0.12,
+  };
+}
+
+/** Corners of a box or highlight, padded a little so the line doesn't cover what it frames. */
+function boxCorners(d: OverlayDrawing): Pt[] {
+  const [a, b] = d.points;
+  if (!a || !b) return [];
+  const x0 = Math.min(a.x, b.x) - 4;
+  const y0 = Math.min(a.y, b.y) - 4;
+  const x1 = Math.max(a.x, b.x) + 4;
+  const y1 = Math.max(a.y, b.y) + 4;
+  return [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+    { x: x0, y: y0 },
+  ];
+}
+
+function polyLength(pts: Pt[]): number {
+  let n = 0;
+  for (let i = 1; i < pts.length; i++) n += dist(pts[i - 1] as Pt, pts[i] as Pt);
+  return n;
+}
+
+/** The point `len` along a polyline. */
+function alongPoly(pts: Pt[], len: number): Pt {
+  let left = len;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1] as Pt;
+    const b = pts[i] as Pt;
+    const seg = dist(a, b);
+    if (left <= seg) {
+      const t = seg ? left / seg : 0;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    left -= seg;
+  }
+  return pts[pts.length - 1] ?? { x: 0, y: 0 };
+}
+
+/** Stroke a polyline up to `len` along it. */
+function strokePoly(pts: Pt[], len: number): void {
+  const first = pts[0];
+  if (!first) return;
+  ctx.beginPath();
+  ctx.moveTo(first.x, first.y);
+  let left = len;
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const a = pts[i - 1] as Pt;
+    const b = pts[i] as Pt;
+    const seg = dist(a, b);
+    const t = Math.min(1, seg ? left / seg : 1);
+    ctx.lineTo(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+    left -= seg;
+  }
+  ctx.stroke();
+}
+
+function textWidth(text: string): number {
+  ctx.save();
+  ctx.font = HANDWRITING;
+  const w = ctx.measureText(text).width;
+  ctx.restore();
+  return w;
+}
+
+/** Where handwriting starts, nudged so the whole line stays on screen. */
+function textOrigin(d: OverlayDrawing): Pt {
+  const a = d.points[0] ?? { x: 0, y: 0 };
+  return {
+    x: Math.max(8, Math.min(a.x, window.innerWidth - textWidth(d.label) - 12)),
+    y: Math.max(8, Math.min(a.y, window.innerHeight - 44)),
+  };
+}
+
+/** How long the pen takes over a mark: by its length, so a long line takes longer than a tick. */
+function drawDuration(d: OverlayDrawing): number {
+  const [a, b] = d.points;
+  if (d.kind === 'text') return Math.min(2600, Math.max(450, d.label.length * 55));
+  const len =
+    d.kind === 'circle'
+      ? 2 * Math.PI * ((d.r ?? 20) + 4)
+      : d.kind === 'box'
+        ? polyLength(boxCorners(d))
+        : d.kind === 'highlight' && a && b
+          ? Math.abs(b.x - a.x)
+          : polyLength(d.points);
+  return Math.min(1800, Math.max(300, len / PEN_SPEED));
+}
+
+/** Where the pen starts a mark (the companion glides there first). */
+function strokeStart(d: OverlayDrawing): Pt {
+  const a = d.points[0] ?? { x: 0, y: 0 };
+  if (d.kind === 'circle') return { x: a.x, y: a.y - ((d.r ?? 20) + 4) };
+  if (d.kind === 'box') return boxCorners(d)[0] ?? a;
+  if (d.kind === 'highlight') {
+    const b = d.points[1] ?? a;
+    return { x: Math.min(a.x, b.x), y: (a.y + b.y) / 2 };
+  }
+  if (d.kind === 'text') {
+    const o = textOrigin(d);
+    return { x: o.x, y: o.y + 26 };
+  }
+  return a;
+}
+
+function rgba(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+/**
+ * Draw one mark `t` (0–1) of the way and return where the pen tip is, plus where its label goes.
+ */
+function drawMark(d: OverlayDrawing, t: number): { tip: Pt | null; label: Pt | null } {
+  const [a, b] = d.points;
+  if ((d.kind === 'box' || d.kind === 'path') && d.points.length >= 2) {
+    const pts = d.kind === 'box' ? boxCorners(d) : d.points;
+    const len = polyLength(pts);
+    strokePoly(pts, len * t);
+    return {
+      tip: alongPoly(pts, len * t),
+      // A path's label goes under its lowest point, clear of the drawing.
+      label:
+        d.kind === 'box'
+          ? { x: (pts[0]?.x ?? 0) + 4, y: pts[2]?.y ?? 0 }
+          : { x: Math.min(...pts.map((p) => p.x)), y: Math.max(...pts.map((p) => p.y)) },
+    };
+  }
+  if (d.kind === 'highlight' && a && b) {
+    const x0 = Math.min(a.x, b.x);
+    const y0 = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.max(6, Math.abs(b.y - a.y));
+    ctx.save();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = rgba(color(), 0.3);
+    roundRect(x0 - 2, y0 - 2, w * t + 4, h + 4, Math.min(8, h / 2));
+    ctx.fill();
+    ctx.restore();
+    return { tip: { x: x0 + w * t, y: y0 + h / 2 }, label: { x: x0, y: y0 + h + 2 } };
+  }
+  if (d.kind === 'circle' && a) {
+    const r = (d.r ?? 20) + 4;
+    const end = -Math.PI / 2 + Math.PI * 2 * t;
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, r, -Math.PI / 2, end);
+    ctx.stroke();
+    return {
+      tip: { x: a.x + Math.cos(end) * r, y: a.y + Math.sin(end) * r },
+      label: { x: a.x + r * 0.7, y: a.y + r * 0.7 },
+    };
+  }
+  if (d.kind === 'arrow' && a && b) {
+    const c = arrowControl(a, b);
+    // The first part of the curve, split at t (de Casteljau), so the line grows along its final shape.
+    const c1 = { x: a.x + (c.x - a.x) * t, y: a.y + (c.y - a.y) * t };
+    const end = bezier(a, c, b, t);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(c1.x, c1.y, end.x, end.y);
+    ctx.stroke();
+    if (t > 0.85) {
+      const ang = Math.atan2(b.y - c.y, b.x - c.x);
+      const head = 12;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x - head * Math.cos(ang - 0.45), b.y - head * Math.sin(ang - 0.45));
+      ctx.lineTo(b.x - head * Math.cos(ang + 0.45), b.y - head * Math.sin(ang + 0.45));
+      ctx.closePath();
+      ctx.fill();
+    }
+    return { tip: end, label: a };
+  }
+  if (d.kind === 'text' && d.label) {
+    const o = textOrigin(d);
+    const shown = d.label.slice(0, Math.ceil(d.label.length * t));
+    ctx.save();
+    ctx.font = HANDWRITING;
+    ctx.textBaseline = 'top';
+    ctx.shadowBlur = 0;
+    // A white edge keeps the writing readable on dark and busy backgrounds alike.
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.strokeText(shown, o.x, o.y);
+    ctx.fillText(shown, o.x, o.y);
+    const w = ctx.measureText(shown).width;
+    ctx.restore();
+    return { tip: { x: o.x + w, y: o.y + 26 }, label: null };
+  }
+  return { tip: null, label: null };
+}
+
+/** Draw every live mark, each revealed by the pen in turn and fading out at the end. */
 function drawShapes(now: number): void {
-  drawings = drawings.filter((x) => now - x.at < DRAWING_MS);
-  for (const { d, at } of drawings) {
-    const age = now - at;
-    const t = easeInOut(Math.min(1, age / DRAW_IN_MS));
-    const alpha = Math.min(1, (DRAWING_MS - age) / FADE_MS);
+  pen = null;
+  drawings = drawings.filter((x) => now - (x.start + x.dur) < DRAWING_MS);
+  if (!drawings.length) penFree = 0;
+  let next: { d: OverlayDrawing; start: number } | null = null;
+  for (const { d, start, dur } of drawings) {
+    if (now < start) {
+      if (!next || start < next.start) next = { d, start };
+      continue;
+    }
+    const t = Math.min(1, (now - start) / dur);
+    const alpha = Math.min(1, (DRAWING_MS - (now - start - dur)) / FADE_MS);
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = color();
     ctx.fillStyle = color();
     ctx.shadowColor = color();
     ctx.shadowBlur = 10;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = d.kind === 'path' ? 4 : 3;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    let anchor: Pt | null = null;
-    const [a, b] = d.points;
-    if (d.kind === 'box' && a && b) {
-      const w = b.x - a.x;
-      const h = b.y - a.y;
-      const per = 2 * (Math.abs(w) + Math.abs(h));
-      ctx.setLineDash([per * t, per]);
-      roundRect(a.x - 4, a.y - 4, w + 8, h + 8, 8);
-      ctx.stroke();
-      anchor = { x: a.x, y: b.y + 4 };
-    } else if (d.kind === 'circle' && a) {
-      const r = (d.r ?? 20) + 4;
-      ctx.beginPath();
-      ctx.arc(a.x, a.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
-      ctx.stroke();
-      anchor = { x: a.x + r * 0.7, y: a.y + r * 0.7 };
-    } else if (d.kind === 'arrow' && a && b) {
-      const end = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-      // A gentle curve reads as a gesture rather than a ruler line.
-      const mx = (a.x + end.x) / 2;
-      const my = (a.y + end.y) / 2;
-      const len = Math.hypot(end.x - a.x, end.y - a.y) || 1;
-      const c = { x: mx - ((end.y - a.y) / len) * len * 0.12, y: my + ((end.x - a.x) / len) * len * 0.12 };
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.quadraticCurveTo(c.x, c.y, end.x, end.y);
-      ctx.stroke();
-      if (t > 0.6) {
-        const ang = Math.atan2(end.y - c.y, end.x - c.x);
-        const head = 12;
-        ctx.beginPath();
-        ctx.moveTo(end.x, end.y);
-        ctx.lineTo(end.x - head * Math.cos(ang - 0.45), end.y - head * Math.sin(ang - 0.45));
-        ctx.lineTo(end.x - head * Math.cos(ang + 0.45), end.y - head * Math.sin(ang + 0.45));
-        ctx.closePath();
-        ctx.fill();
-      }
-      anchor = { x: a.x, y: a.y };
-    }
+    const { tip, label } = drawMark(d, t);
     ctx.restore();
-    if (anchor && d.label && config.showLabels && t >= 1) {
+    if (t < 1 && tip) pen = tip;
+    if (label && d.label && d.kind !== 'text' && config.showLabels && t >= 1) {
       ctx.save();
       ctx.globalAlpha = alpha;
-      drawBubble(d.label, anchor, 'label');
+      drawBubble(d.label, label, 'label');
       ctx.restore();
     }
   }
+  // Between strokes the companion glides to where the next one starts.
+  if (!pen && next) pen = strokeStart(next.d);
 }
 
 function drawTargetRing(at: Pt, since: number, now: number): void {
@@ -366,7 +555,30 @@ function frame(now: number): void {
   let scale = 1;
   let heading = angle;
 
-  if (mode.kind === 'follow') {
+  // Draw the marks first: that tells us where the pen is this frame.
+  drawShapes(now);
+  // The pen wins over pointing: a model often points at what it is about to draw. The point is
+  // remembered and the companion flies back to it once the drawing is done.
+  const drawing = pen !== null && !anchor;
+  if (drawing && mode.kind !== 'follow') {
+    if (mode.kind === 'point') afterDrawing = { at: mode.at, label: mode.label };
+    else if (mode.then === 'point' && pendingPoint) afterDrawing = { at: mode.to, label: pendingPoint.label };
+    pendingPoint = null;
+    mode = { kind: 'follow' };
+  } else if (!drawing && afterDrawing && mode.kind === 'follow') {
+    startFlight(afterDrawing.at, 'point', afterDrawing.label);
+    afterDrawing = null;
+  }
+
+  if (drawing && pen) {
+    // The companion is the pen: its tip rides the line being drawn.
+    const s = SIZES[config.size] * TIP;
+    const want = { x: pen.x - Math.cos(PEN_HEADING) * s, y: pen.y - Math.sin(PEN_HEADING) * s };
+    const k = 1 - Math.pow(0.001, (dt / 1000) * 14);
+    pos = pos && dist(pos, want) > 2 ? { x: pos.x + (want.x - pos.x) * k, y: pos.y + (want.y - pos.y) * k } : want;
+    angle = lerpAngle(angle, PEN_HEADING, 0.3);
+    heading = angle;
+  } else if (mode.kind === 'follow') {
     if (!target) {
       visible = false;
       pos = null;
@@ -421,17 +633,16 @@ function frame(now: number): void {
   let trace: number | null = null;
   if (state === 'thinking' || state === 'transcribing') {
     spin += dt * (state === 'thinking' ? 0.0011 : 0.0007);
-    trace = spin % 1;
+    trace = drawing ? null : spin % 1;
     // Spin while working, as the original does; when it settles again it eases back to its heading.
     spinAngle += dt * (state === 'thinking' ? 0.0085 : 0.0055);
-    if (mode.kind === 'follow') heading = angle + spinAngle;
+    if (mode.kind === 'follow' && !drawing) heading = angle + spinAngle;
   } else {
     spin = 0;
     spinAngle = 0;
   }
-  if (state === 'speaking' && mode.kind === 'follow') scale *= 1 + 0.05 * Math.sin(now / 180);
+  if (state === 'speaking' && mode.kind === 'follow' && !drawing) scale *= 1 + 0.05 * Math.sin(now / 180);
 
-  drawShapes(now);
   // Only one companion on screen: hide here while another display is pointing or at the caret.
   if (owner !== null && config.displayId !== undefined && owner !== config.displayId) {
     visible = false;
@@ -497,12 +708,15 @@ window.clicky.onState((s) => {
     levels.fill(0);
     message = null;
     drawings = [];
+    penFree = 0;
+    afterDrawing = null;
   }
   kick();
 });
 
 window.clicky.onPoint((p) => {
-  startFlight({ x: p.x, y: p.y }, 'point', p.label);
+  if (pen) afterDrawing = { at: { x: p.x, y: p.y }, label: p.label };
+  else startFlight({ x: p.x, y: p.y }, 'point', p.label);
   kick();
 });
 
@@ -517,7 +731,12 @@ window.clicky.onAnchor((a) => {
 });
 
 window.clicky.onDraw((d) => {
-  drawings.push({ d, at: performance.now() });
+  // Queue behind whatever the pen is still drawing; the first stroke waits for the glide over.
+  const now = performance.now();
+  const start = penFree > now ? penFree + STROKE_GAP_MS : now + LEAD_MS;
+  const dur = drawDuration(d);
+  penFree = start + dur;
+  drawings.push({ d, start, dur });
   kick();
 });
 

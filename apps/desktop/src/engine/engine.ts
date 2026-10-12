@@ -676,7 +676,8 @@ export class Engine {
     const id = this.nextPlanId++;
     if (action.kind === 'keys' || action.kind === 'type' || action.kind === 'backspace')
       this.ownKeysUntil = Date.now() + 60_000;
-    if (action.kind === 'click' || action.kind === 'scroll') this.ownMouseUntil = Date.now() + 60_000;
+    if (action.kind === 'click' || action.kind === 'scroll' || action.kind === 'drag')
+      this.ownMouseUntil = Date.now() + 60_000;
     this.moveAnchor = null;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {

@@ -147,6 +147,10 @@ export interface Timeouts {
 const CANT_SEE =
   /\b(?:can'?t|cannot|can not|unable to|don'?t|do not)\s+(?:see|tell|find|determine|show)\b|\bnot (?:visible|shown|on (?:the|your) screen)\b|\byou (?:may|might|would|will) need to (?:open|check|go)\b/i;
 
+/** Asking Clicky to draw over the screen. */
+const DRAW_REQUEST =
+  /\b(?:draw|sketch|circle|underline|highlight|cross out|tick|write)\b[^.?!]*\b(?:on|over|around|across) (?:my|the|this) screen\b|^(?:\W*(?:hey\s+)?click(?:y|ey)\W+)?(?:please\s+)?(?:draw|sketch|circle|underline|highlight)\b/i;
+
 const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, answerMs: 90000 };
 
 /** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
@@ -453,6 +457,7 @@ export class Orchestrator {
       run.speed.speculate &&
       !listen.direct &&
       !this.agentRequest(partial) &&
+      !DRAW_REQUEST.test(partial) &&
       worthSpeculating(partial, this.now() - listen.partialAt)
         ? this.speculate(run, screens, partial)
         : null;
@@ -609,7 +614,9 @@ export class Orchestrator {
       ({ chat, speech } = spec);
     } else {
       try {
-        chat = this.deps.chat();
+        // Drawings need a model that follows the drawing tags reliably (the cheapest one often says
+        // "I've drawn a star" without drawing anything): use the agent model for them.
+        chat = DRAW_REQUEST.test(question) ? (this.deps.agentChat?.() ?? this.deps.chat()) : this.deps.chat();
         speech = this.deps.speech();
       } catch (e) {
         this.fail(run, e, 'config');

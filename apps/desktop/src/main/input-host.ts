@@ -139,6 +139,8 @@ export class InputHost {
         }
         return;
       }
+      case 'drag':
+        return d.drag(action.path.map((p) => screen.dipToScreenPoint(p.global)));
       case 'scroll': {
         const p = screen.dipToScreenPoint(action.at.global);
         return d.scroll(p.x, p.y, action.amount);

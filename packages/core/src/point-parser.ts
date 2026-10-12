@@ -4,14 +4,14 @@
  *   [POINT:x,y:label]            point on the screen the image came from
  *   [POINT:x,y:label:screenN]    point on screen N (1-based, in the order images were sent)
  *   [POINT:none]                 nothing to point at
- *   [BOX:…] [ARROW:…] [CIRCLE:…] drawings, see shapes.ts
+ *   [BOX:…] [ARROW:…] [CIRCLE:…] [HIGHLIGHT:…] [PATH:…] [TEXT:…] drawings, see shapes.ts
  *
  * Text arrives as LLM tokens split at arbitrary positions. The parser releases text that is
  * safe to speak and holds back anything that could still turn into a tag, so tag text never
  * reaches TTS. Tags may appear anywhere; the prompt asks for one at the start.
  */
 
-import { parseDrawTag, type DrawShape } from './shapes.js';
+import { DRAW_TAGS, parseDrawTag, type DrawShape } from './shapes.js';
 
 export interface PointTarget {
   kind: 'point';
@@ -37,10 +37,14 @@ export type ParserEvent =
   | { type: 'invalid-tag'; raw: string };
 
 /** Tag openings the parser holds back from speech. */
-const OPENERS = ['[POINT:', '[BOX:', '[ARROW:', '[CIRCLE:'];
-const OPEN_RE = /\[(?:POINT|BOX|ARROW|CIRCLE):/i;
+const OPENERS = ['[POINT:', ...DRAW_TAGS.map((t) => `[${t}:`)];
+const OPEN_RE = new RegExp(`\\[(?:POINT|${DRAW_TAGS.join('|')}):`, 'i');
 /** A tag longer than this is not a tag; release it as text so a stray "[POINT:" can't swallow the answer. */
 export const MAX_TAG_LENGTH = 160;
+/** A PATH carries up to 40 points, so it may run longer. */
+export const MAX_PATH_TAG_LENGTH = 520;
+
+const maxLength = (s: string): number => (/^\[PATH:/i.test(s) ? MAX_PATH_TAG_LENGTH : MAX_TAG_LENGTH);
 
 const TAG_RE =
   /^\[POINT:\s*(?:(none)|(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*:\s*([^\]]*?))?(?:\s*:\s*screen\s*(\d+))?)\s*\]$/i;
@@ -74,7 +78,7 @@ function partialOpenSuffix(s: string): number {
 
 /** Length of the tag opening at the start of `s` (the buffer always starts with one here). */
 function openLength(s: string): number {
-  const head = s.slice(0, 8).toUpperCase();
+  const head = s.slice(0, 12).toUpperCase();
   return (OPENERS.find((o) => head.startsWith(o)) ?? OPENERS[0] ?? '').length;
 }
 
@@ -117,7 +121,7 @@ export class PointStreamParser {
 
       const close = this.buffer.indexOf(']');
       if (close === -1) {
-        if (this.buffer.length > MAX_TAG_LENGTH || final) {
+        if (this.buffer.length > maxLength(this.buffer) || final) {
           // Never closed: this was prose, not a tag. Release the opening and keep scanning after it.
           emitText(this.buffer.slice(0, openLength(this.buffer)));
           this.buffer = this.buffer.slice(openLength(this.buffer));
@@ -126,7 +130,7 @@ export class PointStreamParser {
         return events; // wait for more input
       }
 
-      if (close + 1 > MAX_TAG_LENGTH) {
+      if (close + 1 > maxLength(this.buffer)) {
         // Too long to be a tag: prose with a tag opening in it. Release the opening and keep scanning.
         emitText(this.buffer.slice(0, openLength(this.buffer)));
         this.buffer = this.buffer.slice(openLength(this.buffer));

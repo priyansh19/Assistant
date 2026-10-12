@@ -373,3 +373,22 @@ describe('showing what Clicky understood', () => {
     expect(progress[0]).toBe('Open Notepad and write a shopping list');
   });
 });
+
+describe('drawing on the screen is not an agent task', () => {
+  it('leaves "draw … on my screen" to the answer, keeps "draw … in Paint" a task', () => {
+    expect(agentGoal('Clicky, draw a star on my screen.')).toBeNull();
+    expect(agentGoal('Clicky, circle the save button')).toBeNull();
+    expect(agentGoal('Clicky, draw a house in Paint')).toBe('draw a house in Paint');
+    expect(agentGoal('Clickey, draw a star on the whiteboard')).toBe('draw a star on the whiteboard');
+    expect(agentGoal('Clicky, draw a circle in the middle of the screen')).toBeNull();
+  });
+});
+
+describe('tool-call markup instead of JSON', () => {
+  it('reads <parameter> replies the same way', () => {
+    const r = parseAgentAction(
+      '<invoke name="click"><parameter name="x">412</parameter><parameter name="y">88</parameter><parameter name="target">Save</parameter></invoke>',
+    );
+    expect(r.ok && r.action).toMatchObject({ type: 'click', x: 412, y: 88, target: 'Save' });
+  });
+});

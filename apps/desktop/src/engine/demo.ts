@@ -1,4 +1,4 @@
-import type { SttProvider, VisionChatProvider } from '@clicky/core';
+import { drawingDemo, formatDrawTag, type SttProvider, type VisionChatProvider } from '@clicky/core';
 
 /**
  * Offline stand-ins for the cloud services, used when CLICKY_DEMO=1. They let the whole loop
@@ -15,7 +15,8 @@ export function demoStt(): SttProvider {
       return {
         pushAudio: () => void frames++,
         // Answer even if the mic produced nothing, so the loop can be tested on a silent machine.
-        finish: async () => 'Where is the start button?',
+        // CLICKY_DEMO_ASK changes the question, e.g. "Draw a smiley on my screen" for the drawing demo.
+        finish: async () => process.env['CLICKY_DEMO_ASK'] || 'Where is the start button?',
         close: () => undefined,
       };
     },
@@ -52,6 +53,23 @@ export function demoChat(): VisionChatProvider {
         yield req.question.includes('Steps so far')
           ? '{"action":"done","say":"The demo task is finished."}'
           : '{"action":"wait","ms":300,"say":"Waiting a moment"}';
+        return;
+      }
+      if (/\b(draw|sketch|doodle)\b/i.test(req.question)) {
+        // Drawing: the built-in sketch, streamed tag by tag the way a model would write it.
+        const img = req.images[0];
+        const aspect = img ? img.width / img.height : 16 / 9;
+        const parts = [
+          '[POINT:none]',
+          ...drawingDemo(aspect).map(formatDrawTag),
+          'I drew a smiley face and a star for you, ',
+          'and highlighted your taskbar.',
+        ];
+        for (const p of parts) {
+          await new Promise((r) => setTimeout(r, 120));
+          if (req.signal.aborted) throw new Error('aborted');
+          yield p;
+        }
         return;
       }
       // Point near the bottom-left of the first screenshot, where the Start button usually is.

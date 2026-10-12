@@ -1,6 +1,14 @@
 import { join } from 'node:path';
 import { BrowserWindow, screen, type Display } from 'electron';
-import type { InteractionState, MappedPoint, MappedShape, OverlayPort } from '@clicky/core';
+import {
+  drawingDemo,
+  scaleShape,
+  shapeOnDisplay,
+  type InteractionState,
+  type MappedPoint,
+  type MappedShape,
+  type OverlayPort,
+} from '@clicky/core';
 import type { Platform } from '../platform';
 import { IPC } from '../shared/ipc';
 import type {
@@ -13,6 +21,8 @@ import type {
 } from '../shared/overlay-protocol';
 
 const CURSOR_INTERVAL_MS = 16;
+/** How long a display keeps the companion after a drawing starts there (it draws, then goes back). */
+const DRAW_OWN_MS = 15000;
 /** Mic level updates are throttled; the waveform doesn't need more than ~30 fps. */
 const LEVEL_INTERVAL_MS = 33;
 
@@ -138,6 +148,8 @@ export class OverlayManager implements OverlayPort {
   draw(shape: MappedShape): void {
     const win = this.windows.get(shape.displayId);
     if (!win || win.isDestroyed()) return;
+    // The companion is the pen: it moves to the display being drawn on (unless it's pointing).
+    if (this.owner === null && !this.anchored) this.setOwner(shape.displayId, DRAW_OWN_MS);
     const d: OverlayDrawing = {
       kind: shape.kind,
       points: shape.points,
@@ -145,6 +157,15 @@ export class OverlayManager implements OverlayPort {
       ...(shape.r !== undefined ? { r: shape.r } : {}),
     };
     win.webContents.send(IPC.overlayDraw, d);
+  }
+
+  /** The built-in drawing example, on the display with the mouse (tray: "Show me a drawing"). */
+  sketch(): void {
+    const d = this.cursorDisplay();
+    const { width, height } = d.bounds;
+    if (!this.anchored) this.setOwner(d.id, DRAW_OWN_MS);
+    for (const s of drawingDemo(width / height))
+      this.draw(shapeOnDisplay(scaleShape(s, width / 1000, height / 1000), d.id));
   }
 
   message(text: string, kind: 'error' | 'info'): void {
