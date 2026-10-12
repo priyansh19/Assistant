@@ -114,3 +114,86 @@ function Close-TestPaint {
     Start-Sleep -Milliseconds 1500
   }
 }
+
+# ---- Screen-awareness suite helpers.
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$TestEdgeDir = Join-Path $env:TEMP 'clicky-test-edge'
+$ProtectFile = Join-Path $env:APPDATA 'Clicky\protect.json'
+
+# The process name of the window in front.
+function Get-FrontProcess {
+  Add-Type -Namespace LiveFg -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint p);' -ErrorAction SilentlyContinue
+  $p = 0; [void][LiveFg.W]::GetWindowThreadProcessId([LiveFg.W]::GetForegroundWindow(), [ref]$p)
+  (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName
+}
+
+# A browser only the tests use (Edge with its own profile), so tidy-up tests never touch the user's tabs.
+function Open-TestEdge([string[]]$Urls) {
+  $edge = @('C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe', 'C:\Program Files\Microsoft\Edge\Application\msedge.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
+  Start-Process $edge -ArgumentList (@("--user-data-dir=$TestEdgeDir", '--no-first-run', '--no-default-browser-check', '--new-window') + $Urls)
+  Start-Sleep 8
+}
+function Stop-TestEdge {
+  Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object CommandLine -like '*clicky-test-edge*' |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# The tab titles of the test Edge windows.
+function Get-TestEdgeTabs {
+  $pids = (Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object CommandLine -like '*clicky-test-edge*').ProcessId
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $tab = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+  foreach ($w in $root.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($w.Current.ProcessId -notin $pids) { continue }
+    foreach ($t in $w.FindAll('Descendants', $tab)) { $t.Current.Name }
+  }
+}
+# The tab titles of every Comet window (read only).
+function Get-CometTabs {
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $tab = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+  $pids = (Get-Process comet -ErrorAction SilentlyContinue).Id
+  foreach ($w in $root.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($w.Current.ProcessId -notin $pids) { continue }
+    foreach ($t in $w.FindAll('Descendants', $tab)) { $t.Current.Name }
+  }
+}
+
+# Every window open now goes on Clicky's never-close list for the test, so tidy-up tests can only
+# close what the test itself opened.
+function Protect-OpenWindows {
+  Add-Type -Namespace LiveEnum -Name W -MemberDefinition '
+    public delegate bool P(System.IntPtr h, System.IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(P f, System.IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);' -ErrorAction SilentlyContinue
+  $list = New-Object System.Collections.Generic.List[string]
+  [void][LiveEnum.W]::EnumWindows({ param($h, $l) if ([LiveEnum.W]::IsWindowVisible($h)) { $list.Add($h.ToInt64().ToString()) }; $true }, [IntPtr]::Zero)
+  ConvertTo-Json @($list) | Set-Content $ProtectFile
+  "protected $($list.Count) windows"
+}
+function Unprotect-Windows { Remove-Item $ProtectFile -ErrorAction SilentlyContinue }
+function Test-Protected { $ids = Get-Content $ProtectFile -Raw | ConvertFrom-Json; ($ids | Where-Object { [LiveEnum.W]::IsWindowVisible([IntPtr][long]$_) }).Count }
+
+# A Notepad window with typed, unsaved text.
+function New-UnsavedNotepad([string]$Text) {
+  Start-Process notepad.exe; Start-Sleep 2
+  Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.SendKeys]::SendWait($Text)
+  Start-Sleep 1
+}
+# Close the Notepad windows a test opened (never one on the protect list): WM_CLOSE, and if
+# Notepad asks to save, "Don't save" (the text is the test's own).
+function Close-TestNotepads {
+  Add-Type -Namespace LiveClose -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr h, uint m, System.IntPtr w, System.IntPtr l);' -ErrorAction SilentlyContinue
+  $keep = @(); if (Test-Path $ProtectFile) { $keep = @(Get-Content $ProtectFile -Raw | ConvertFrom-Json) }
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $pids = (Get-Process notepad -ErrorAction SilentlyContinue).Id
+  foreach ($w in $root.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($w.Current.ProcessId -notin $pids) { continue }
+    $h = $w.Current.NativeWindowHandle
+    if ("$h" -in $keep) { continue }
+    [void][LiveClose.W]::PostMessage([IntPtr]$h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)
+    Start-Sleep -Milliseconds 700
+    $dont = $w.FindFirst('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, "Don't save")))
+    if ($dont) { $dont.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+  }
+}

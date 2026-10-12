@@ -27,6 +27,63 @@ export function listFiles(dir: string): string[] {
   return out.sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)).map((x) => x.line);
 }
 
+/** Folders skipped when searching: build output, caches, version control. */
+const SKIP =
+  /^(?:node_modules|\.git|\.cache|\.venv|venv|__pycache__|dist|build|out|target|\.next|AppData|\$Recycle\.Bin)$/i;
+
+/**
+ * Files and folders whose name contains every word of the query, searched breadth first under the
+ * given folders (at most 6 levels, 40 000 entries): "path — size — modified", newest first.
+ */
+export function findFiles(query: string, roots: readonly string[], max = 25): string[] {
+  const words = query
+    .toLowerCase()
+    .replace(/[^a-z0-9.\s_-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2);
+  if (!words.length) return [];
+  const hits: { path: string; at: number; line: string }[] = [];
+  const queue: { dir: string; depth: number }[] = roots.filter((r) => existsSync(r)).map((dir) => ({ dir, depth: 0 }));
+  const seen = new Set<string>();
+  let visited = 0;
+  while (queue.length && visited < 40_000 && hits.length < 200) {
+    const { dir, depth } = queue.shift() as { dir: string; depth: number };
+    if (seen.has(dir.toLowerCase())) continue;
+    seen.add(dir.toLowerCase());
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      visited++;
+      if (name.startsWith('.') && name !== '.') continue;
+      const full = join(dir, name);
+      let s;
+      try {
+        s = statSync(full);
+      } catch {
+        continue;
+      }
+      const lower = name.toLowerCase();
+      if (words.every((w) => lower.includes(w))) {
+        const when = s.mtime.toISOString().slice(0, 16).replace('T', ' ');
+        hits.push({
+          path: full,
+          at: s.mtimeMs,
+          line: s.isDirectory() ? `${full}\\ — folder — ${when}` : `${full} — ${kb(s.size)} — ${when}`,
+        });
+      }
+      if (s.isDirectory() && depth < 6 && !SKIP.test(name)) queue.push({ dir: full, depth: depth + 1 });
+    }
+  }
+  return hits
+    .sort((a, b) => b.at - a.at)
+    .slice(0, max)
+    .map((h) => h.line);
+}
+
 /** "*.pdf", "report*", "*" → a test on the file name (case-insensitive). */
 function matcher(pattern: string): (name: string) => boolean {
   const parts = pattern

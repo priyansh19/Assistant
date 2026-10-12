@@ -32,6 +32,8 @@ export type AgentAction =
   | { type: 'open'; app: string; url: string; path: string; say: string; risky: boolean }
   /** Write down something seen on screen (free text and/or one table row) to use in later steps. */
   | { type: 'note'; text: string; row: string[] | null; rows?: string[][]; say: string; risky: boolean }
+  /** Find files and folders anywhere in the user's folders by (part of) their name. */
+  | { type: 'find_files'; name: string; say: string; risky: boolean }
   /** Read a folder's contents (names, sizes, dates) instead of squinting at File Explorer. */
   | { type: 'list_files'; path: string; say: string; risky: boolean }
   /** Move or copy the files matching a pattern from one folder to another in one step. */
@@ -316,6 +318,11 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
       if (!text && !row && !many.length) return { ok: false, error: 'note needs text, a row or rows' };
       return { ok: true, action: { type, text, row, ...(many.length ? { rows: many } : {}), say, risky } };
     }
+    case 'find_files': {
+      const name = str(o['name'] ?? o['query'], 120);
+      if (!name) return { ok: false, error: 'find_files needs the "name" to look for' };
+      return { ok: true, action: { type, name, say, risky } };
+    }
     case 'list_files': {
       const path = str(o['path'] ?? o['folder'], 400);
       if (!path) return { ok: false, error: 'list_files needs the folder path' };
@@ -451,6 +458,9 @@ Actions:
   counts, one table row) so you still have it after leaving the page. Your notes come back every turn.
 - note can also take {"rows": [[…],[…]]}: note EVERY item you can see on screen in one step
   (a whole page of search results), not one per step.
+- find_files: {"name":"resume"} finds files and folders whose name contains those words anywhere in
+  the user's folders (Desktop, Documents, Downloads, their projects), newest first, into your notes:
+  use it for "where is my…" and to open a file the user names.
 - list_files: {"path":"C:\\…"} reads a folder's files (name, size, date modified) into your notes:
   use it to find the biggest or newest file, count files, or plan a sort, instead of reading Explorer.
 - move_files: {"from":"C:\\…","pattern":"*.pdf","to":"C:\\…\\PDFs"} moves every matching file in
@@ -557,6 +567,8 @@ export interface AgentDeps {
   briefing?: string;
   /** Skills (task playbooks) that match this task. */
   skills?: string;
+  /** Files whose name contains the words, anywhere in the user's folders ("path — size — modified"). */
+  findFiles?(name: string): Promise<string[]>;
   /** The files in a folder ("name — size — modified"), or throws if it can't be read. */
   listFiles?(path: string): Promise<string[]>;
   /** Move or copy files matching a pattern; resolves to how many were moved. */
@@ -718,6 +730,8 @@ function describe(a: AgentAction): string {
       return `opened ${a.app || a.url || a.path}`;
     case 'list_files':
       return `listed the files in ${a.path}`;
+    case 'find_files':
+      return `looked for files named "${a.name}"`;
     case 'move_files':
       return `${a.copy ? 'copied' : 'moved'} ${a.pattern} from ${a.from} to ${a.to}`;
     case 'note':
@@ -1299,10 +1313,20 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       checked.push({ step: describe(a), ok: true });
       continue;
     }
-    if (a.type === 'list_files' || a.type === 'move_files') {
+    if (a.type === 'list_files' || a.type === 'move_files' || a.type === 'find_files') {
       deps.overlay.message(say, 'info');
       try {
-        if (a.type === 'list_files') {
+        if (a.type === 'find_files') {
+          if (!deps.findFiles) throw new Error('searching for files is not available here');
+          const found = await deps.findFiles(a.name);
+          notes.push(
+            found.length
+              ? `Files named like "${a.name}" (${found.length}, newest first): ${found.join('; ')}`
+              : `No files named like "${a.name}" in the user's folders.`,
+          );
+          notes.splice(0, Math.max(0, notes.length - MAX_NOTES));
+          steps.push(`found ${found.length} files named like "${a.name}"`);
+        } else if (a.type === 'list_files') {
           if (!deps.listFiles) throw new Error('reading folders is not available here');
           const files = await deps.listFiles(a.path);
           notes.push(`Files in ${a.path} (${files.length}): ${files.slice(0, 120).join('; ')}`);

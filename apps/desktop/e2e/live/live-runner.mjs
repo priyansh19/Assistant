@@ -15,11 +15,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { DRAWING } from './tasks-drawing.mjs';
+import { SCREEN } from './tasks-screen.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
 const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING].map((t) =>
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN].map((t) =>
   process.argv.includes('--nameless')
     ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }
     : t,
@@ -230,10 +231,17 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     recoveries: (log.match(/agent recovering/g) ?? []).length,
     stepTimes: [...log.matchAll(/^(\S+) INFO agent step \d+:/gm)].map((m) => Date.parse(m[1])),
   };
+  // Hard rule: Clicky's cursor goes to everything it opens, clicks, types into or closes. Every step
+  // that touches the screen needs a cursor move (an overlay point or a "cursor to" line) to match.
+  const acting = r.steps.filter(
+    (x) => !/: (noted|listed|found d+ files|looked for files|saved|waited|moved d+|copied d+)/.test(x),
+  ).length;
+  r.cursorMoves = (log.match(/overlay point on display|cursor to "/g) ?? []).length;
+  r.cursorOk = r.cursorMoves >= acting;
   r.checkOut = ps(t.check);
-  r.pass = !!entry && entry.outcome !== 'timeout' && t.pass(r.checkOut, r);
+  r.pass = !!entry && entry.outcome !== 'timeout' && t.pass(r.checkOut, r) && (t.noCursorRule || r.cursorOk);
   say(
-    `${r.pass ? 'PASS' : 'FAIL'} ${t.id} in ${r.seconds}s | heard: ${r.heard} | said: ${r.answer.slice(0, 160)} | check: ${r.checkOut.slice(0, 120)}`,
+    `${r.pass ? 'PASS' : 'FAIL'} ${t.id} in ${r.seconds}s | cursor ${r.cursorMoves}/${acting} | heard: ${r.heard} | said: ${r.answer.slice(0, 160)} | check: ${r.checkOut.slice(0, 120)}`,
   );
   results.push(r);
   // Step counts per task over time (the shortest-route review is a standing rule for every run).

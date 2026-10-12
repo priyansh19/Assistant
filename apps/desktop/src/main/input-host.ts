@@ -10,6 +10,9 @@ import { log } from './log';
 /** Processes Clicky never closes: the Claude app (it may be driving Clicky's tests) and Clicky itself. */
 const PROTECTED = ['claude', 'clicky'];
 
+/** Editors whose tabs say whether they have unsaved changes. */
+const TABBED_EDITORS = ['notepad'];
+
 /** How often Clicky notes which window is in front. */
 const USE_POLL_MS = 3000;
 
@@ -186,7 +189,7 @@ export class InputHost {
           list.find((x) => x.title.toLowerCase() === want) ??
           list.find((x) => x.title.toLowerCase().includes(want) || want.includes(x.title.toLowerCase()));
         if (!w) throw new Error(`no open window is called "${action.title}"`);
-        if (looksUnsaved(w.title))
+        if (await this.unsaved(w))
           throw new Error(`"${w.title}" has unsaved changes, so I left it open (closing it would lose that work)`);
         if (PROTECTED.includes(w.process) || this.protectedHandles().has(w.handle))
           throw new Error(`"${w.title}" is one I never close`);
@@ -511,12 +514,13 @@ export class InputHost {
     const d = this.driver;
     const list = (await d?.windows().catch(() => [])) ?? [];
     const out: string[] = [];
+    const keep = this.protectedHandles();
     for (const w of list.slice(0, 40)) {
       const used = this.tracker.lastUsed(w.handle);
       const parts = [w.title.slice(0, 120), w.process || 'app'];
       if (used) parts.push(`used ${ago(used)}`);
-      if (looksUnsaved(w.title)) parts.push('unsaved changes');
-      if (PROTECTED.includes(w.process)) parts.push('never close');
+      if (await this.unsaved(w)) parts.push('unsaved changes');
+      if (PROTECTED.includes(w.process) || keep.has(w.handle)) parts.push('never close');
       out.push(parts.join(' — '));
       if (d && BROWSERS.split(',').includes(w.process)) {
         const tabs = await d.tabs(w.handle).catch(() => []);
@@ -533,6 +537,14 @@ export class InputHost {
       }
     }
     return out;
+  }
+
+  /** Unsaved work in a window: its title says so, or (Notepad) one of its tabs is "Modified". */
+  private async unsaved(w: { handle: string; process: string; title: string }): Promise<boolean> {
+    if (looksUnsaved(w.title)) return true;
+    if (!TABBED_EDITORS.includes(w.process) || !this.driver) return false;
+    const tabs = await this.driver.tabs(w.handle).catch(() => []);
+    return tabs.some((t) => /\bmodified\b/i.test(t.title) && !/\bunmodified\b/i.test(t.title));
   }
 
   /** Remembers when each window (and each browser tab) was last in front. */

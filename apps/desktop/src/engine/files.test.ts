@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listFiles, mapKnownFolder, moveFiles } from './files';
+import { findFiles, listFiles, mapKnownFolder, moveFiles } from './files';
 
 describe('agent file operations', () => {
   it('lists, moves by pattern without replacing, and maps the usual Desktop path', () => {
@@ -19,5 +19,20 @@ describe('agent file operations', () => {
     expect(
       mapKnownFolder(String.raw`C:\Users\me\Desktop\x`, [String.raw`Desktop folder: C:\Users\me\OneDrive\Desktop`]),
     ).toBe(String.raw`C:\Users\me\OneDrive\Desktop\x`);
+  });
+});
+
+describe('findFiles', () => {
+  it('finds files by every word of their name, deep in folders, skipping build output', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clicky-find-'));
+    mkdirSync(join(root, 'jobs', 'uae', 'active'), { recursive: true });
+    mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true });
+    writeFileSync(join(root, 'jobs', 'uae', 'active', 'Priyansh Resume UAE.pdf'), 'x');
+    writeFileSync(join(root, 'jobs', 'cover letter.docx'), 'x');
+    writeFileSync(join(root, 'node_modules', 'pkg', 'resume uae.js'), 'x');
+    const hits = findFiles('resume uae', [root]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toContain(join('jobs', 'uae', 'active', 'Priyansh Resume UAE.pdf'));
+    expect(findFiles('invoice', [root])).toEqual([]);
   });
 });

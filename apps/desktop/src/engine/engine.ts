@@ -40,7 +40,7 @@ import { ModelFiles } from './local-speech/files';
 import { localStt, localTts } from './local-speech/providers';
 import type { MediaChannel } from './media-channel';
 import { saveXlsx } from './xlsx';
-import { listFiles, mapKnownFolder, moveFiles } from './files';
+import { findFiles, listFiles, mapKnownFolder, moveFiles } from './files';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './media-ports';
 
 export interface EngineOptions {
@@ -258,6 +258,14 @@ export class Engine {
         elements: () => this.askMain<UiElement[]>('elements', [], 4000),
         otherAgent: () => this.otherAgent(),
         listFiles: async (path) => listFiles(this.realPath(path)),
+        // The user's own folders (Desktop, Documents, Downloads… as Windows has them, OneDrive too).
+        findFiles: async (query) =>
+          findFiles(
+            query,
+            this.cfg()
+              .inventory.folders.map((f) => /^[A-Z][a-z]+ folder: (.+)$/.exec(f)?.[1])
+              .filter((f): f is string => !!f),
+          ),
         moveFiles: async (from, pattern, to, copy) => moveFiles(this.realPath(from), pattern, this.realPath(to), copy),
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),

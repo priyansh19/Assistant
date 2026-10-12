@@ -104,6 +104,7 @@ export interface OrchestratorDeps {
     | 'planFirst'
     | 'otherAgent'
     | 'listFiles'
+    | 'findFiles'
     | 'moveFiles'
   >;
   /** Ask the user to allow an agent step. */
