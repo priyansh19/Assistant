@@ -186,8 +186,14 @@ export class Controller {
             `overlay point on display ${o.target.displayId} at ${Math.round(o.target.local.x)},${Math.round(o.target.local.y)} (screen ${Math.round(o.target.global.x)},${Math.round(o.target.global.y)}) "${o.label}"`,
           );
           this.overlays.point(o.target, o.label);
-        } else if (o.op === 'draw') this.overlays.draw(o.shape);
-        else if (o.op === 'message') this.overlays.message(o.text, o.kind);
+        } else if (o.op === 'draw') {
+          // One line per mark, so the drawing suite can check placement from the log.
+          const pts = o.shape.points.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(' ');
+          log.info(
+            `overlay draw ${o.shape.kind} on display ${o.shape.displayId} at ${pts}${o.shape.r !== undefined ? ` r=${Math.round(o.shape.r)}` : ''} "${o.shape.label}"`,
+          );
+          this.overlays.draw(o.shape);
+        } else if (o.op === 'message') this.overlays.message(o.text, o.kind);
         return;
       }
       case 'record':
