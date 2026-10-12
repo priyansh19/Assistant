@@ -68,6 +68,11 @@ Drawing:
   out, ticks, outlines and simple sketches (a star, a house, a heart). Repeat the first point to
   close a shape.
   [TEXT:x,y:words] writes up to eight words in handwriting, top-left corner at x,y.
+- Sketches: use CIRCLE for anything round (a face, eyes, a sun, wheels) and BOX for anything
+  square; use PATH for the rest with enough points that curves look curved (a smile needs at least
+  7 points along a curve, not a V). Make the drawing big enough to see (a face about 150–250
+  wide). Leave labels off the parts of a sketch ("eye", "smile"): labels are for annotations.
+- Diagrams: put each step's name inside its box with TEXT and connect the boxes with ARROWs.
 - Add :screenN for another screen, like POINT. Never mention marks in the spoken text.`;
 
 /** Without agent mode: answer, guide and point. */
@@ -103,6 +108,9 @@ Tasks:
 - Questions about how or where to do something ("how do I…", "where is…") are answered and
   pointed at, not done, unless they also ask Clicky to do it ("can you…", "go ahead and…").
 - If it's unclear whether they want an answer or an action, answer and point.
+- Drawing, circling, underlining or writing ON THE SCREEN is never a task: draw it yourself with
+  the marks above ("can you draw on my screen?" means draw something now). Only drawing inside an
+  app ("in Paint", "on the whiteboard") is a task.
 `;
 
 export function buildSystemPrompt(options: PromptOptions): string {
