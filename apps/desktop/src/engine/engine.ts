@@ -51,6 +51,29 @@ export interface EngineOptions {
   now?(): number;
 }
 
+/** Words speech recognition should expect in requests to Clicky. */
+const KEYTERMS = [
+  'Clicky',
+  'Clickey',
+  'open',
+  'close',
+  'minimise',
+  'maximise',
+  'make a folder',
+  'Notepad',
+  'Calculator',
+  'File Explorer',
+  'Downloads',
+  'Desktop',
+  'Documents',
+  'Comet',
+  'GitHub',
+  'LinkedIn',
+  'YouTube',
+  'spreadsheet',
+  'pull request',
+];
+
 /** How long main may take to answer a capture plan request before the question fails. */
 const PLAN_TIMEOUT_MS = 3000;
 /** OpenRouter model for agent steps when the defaults are in use (accurate clicks, still cheap). */
@@ -270,11 +293,19 @@ export class Engine {
     return localTts(engine, files, () => this.cfg().settings);
   }
 
+  /** Clicky's own vocabulary for speech recognition: its name, the apps here, common commands. */
+  private keyterms(): string[] {
+    const apps = this.cfg()
+      .inventory.apps.filter((a) => a.length <= 30 && !/\d{3,}/.test(a))
+      .slice(0, 70);
+    return [...KEYTERMS, ...apps];
+  }
+
   private createStt(): SttProvider {
     const cfg = this.cfg();
     // Demo mode swaps out cloud services only; on-device speech is real either way.
     if (cfg.settings.sttProvider === 'local') return this.localStt();
-    return cfg.demo ? demoStt() : createStt(cfg.settings, this.key);
+    return cfg.demo ? demoStt() : createStt(cfg.settings, this.key, this.keyterms());
   }
 
   private createTts(): TtsProvider | null {
@@ -728,7 +759,7 @@ export class Engine {
         cfg.settings.sttProvider === 'local'
       )
         return;
-      (this.providers.stt ??= createStt(cfg.settings, this.key)).prewarm?.();
+      (this.providers.stt ??= createStt(cfg.settings, this.key, this.keyterms())).prewarm?.();
     } catch {
       // missing config shows up when the user asks
     }

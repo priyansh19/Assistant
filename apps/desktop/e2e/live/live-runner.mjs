@@ -13,10 +13,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BATCH3 } from './tasks-batch3.mjs';
+import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
-const TASKS = [...BASE, ...BATCH3];
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (n) => {

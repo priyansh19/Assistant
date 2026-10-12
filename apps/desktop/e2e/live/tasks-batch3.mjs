@@ -133,3 +133,44 @@ export const BATCH3 = [
     pass: (_o, r) => r.sheets.some((x) => x.rows >= 20),
   },
 ];
+
+// Understanding: casual, real-life phrasing (fillers, short forms, "pull up", "jot down").
+export const UNDERSTANDING = [
+  {
+    id: 'U01',
+    say: 'Hey Clicky, can you, uh, make me a folder on the desktop called Taxes?',
+    setup: [`Remove-Item (Join-Path (${desk}) 'Taxes') -Recurse -ErrorAction SilentlyContinue`],
+    cleanup: [`Remove-Item (Join-Path (${desk}) 'Taxes') -Recurse -ErrorAction SilentlyContinue`],
+    maxMinutes: 4,
+    check: `Test-Path (Join-Path (${desk}) 'Taxes')`,
+    pass: (out) => out.trim() === 'True',
+  },
+  {
+    id: 'U02',
+    say: 'Clicky, pull up my downloads.',
+    maxMinutes: 3,
+    check: '[LiveWin]::Front()',
+    pass: (out) => /downloads/i.test(out),
+  },
+  {
+    id: 'U03',
+    say: 'Clicky, open up Notepad and jot down call mom at six.',
+    maxMinutes: 4,
+    check: "'n/a'",
+    pass: (_o, r) => /call mom/i.test(r.typed),
+  },
+  {
+    id: 'U04',
+    say: "Clicky, what's the weather like in Dubai right now?",
+    maxMinutes: 4,
+    check: "'n/a'",
+    pass: (_o, r) => /°|degrees|celsius/i.test(r.answer),
+  },
+  {
+    id: 'U05',
+    say: 'Clicky, take me to my GitHub repos.',
+    maxMinutes: 3,
+    check: '[LiveWin]::Front()',
+    pass: (out) => /repositories|priyansh19/i.test(out),
+  },
+];

@@ -30,6 +30,7 @@ Your reply is spoken aloud by a text-to-speech voice, so:
 - No markdown, lists, emoji, URLs or code formatting. Spell things the way they should be said.
 - Refer to on-screen things the way the user sees them ("the blue Share button at the top right").
 - If you can't tell from the screenshot, say so briefly and suggest what to try.
+- You only answer and point: never say you opened, wrote, saved or changed anything.
 {{MODE}}
 Pointing:
 - Start EVERY reply with exactly one tag, before any other text.
@@ -62,8 +63,8 @@ const ANSWER_ONLY = `- Never guess facts that aren't on screen (versions, sizes,
  * wants something done. A regex on the transcript can't: without the name it sent 45 of 123
  * catalogue tasks to agent mode (research/laya-evaluation.md), and the rest were explained, not done.
  */
-const WITH_TASKS = `- Never guess facts that aren't on screen (versions, sizes, prices, settings), and never say you
-  did something: you only answer. Clicky's agent does things (see Tasks).
+const WITH_TASKS = `- Never guess facts that aren't on screen (versions, sizes, prices, settings). Clicky's agent
+  goes and looks, and does things (see Tasks).
 
 Tasks:
 - First decide what the user wants. If they want something DONE on the PC (open, make, move,
