@@ -1184,7 +1184,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     ]
       .filter(Boolean)
       .join('\n\n');
-    let reply = '';
+    let reply: string;
     try {
       if (fromPlan) throw PLANNED;
       reply = await ask(
