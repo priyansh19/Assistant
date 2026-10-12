@@ -146,7 +146,11 @@ export class Engine {
       mic: createMicPort(opts.media, () => settings().micDeviceId),
       overlay: {
         state: (state) => this.post({ type: 'overlay', overlay: { op: 'state', state } }),
-        point: (target, label) => this.post({ type: 'overlay', overlay: { op: 'point', target, label } }),
+        point: (target, label, opts) =>
+          this.post({
+            type: 'overlay',
+            overlay: { op: 'point', target, label, ...(opts?.snap ? { snap: true } : {}) },
+          }),
         draw: (shape) => this.post({ type: 'overlay', overlay: { op: 'draw', shape } }),
         message: (text, kind) => this.post({ type: 'overlay', overlay: { op: 'message', text, kind } }),
         caption: (text) => this.post({ type: 'overlay', overlay: { op: 'caption', text } }),

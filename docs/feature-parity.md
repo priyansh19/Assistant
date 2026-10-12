@@ -6,6 +6,8 @@ Checked 2026-10-11 against two sources: the open-source app (github.com/farzaa/c
 
 Like the official app, ours teaches by talking and pointing. It does not click or type for you.
 
+A source-level teardown of the open-source app, feature by feature, is in [official-clicky-teardown.md](official-clicky-teardown.md) (2026-10-12).
+
 Legend: ✅ done · 🟡 partial · ❌ missing
 
 ## What the official app does

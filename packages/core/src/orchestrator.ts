@@ -584,7 +584,7 @@ export class Orchestrator {
       ...(run.cacheWarmed ? { cache: true } : {}),
       ...this.taskRouting(),
       hooks: {
-        point: (target, label) => this.deps.overlay.point(target, label),
+        point: (target, label, opts) => this.deps.overlay.point(target, label, opts),
         draw: (shape) => this.deps.overlay.draw?.(shape),
         caption: (text) => {
           run.answer = text;

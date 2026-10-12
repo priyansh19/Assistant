@@ -16,6 +16,9 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('screen1: 1280x800 px (the cursor is on this screen)');
     expect(prompt).toContain('screen2: 1280x720 px');
     expect(prompt).toContain('About the user: new to Excel');
+    // Parity with the official Clicky's voice rules: long answers on request, no dead-end offers.
+    expect(prompt).toContain('give the full explanation');
+    expect(prompt).toContain('planting a\n  seed');
   });
 
   it('only shows example tags our parser accepts', () => {

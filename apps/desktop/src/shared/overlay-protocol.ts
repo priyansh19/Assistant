@@ -30,6 +30,8 @@ export interface OverlayConfig {
   color: CursorColor;
   size: CursorSize;
   showLabels: boolean;
+  /** Off: the companion only shows while Clicky is in use (it fades out when idle). */
+  showCompanion: boolean;
   /** Hold-to-talk paused from the tray: the cursor dims. */
   paused: boolean;
   /** CSS pixels per physical centimetre on this overlay's display (set per window). */

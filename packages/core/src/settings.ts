@@ -154,6 +154,11 @@ export interface Settings {
   /** Show the label bubble when Clicky points at something. */
   showPointLabels: boolean;
   /**
+   * Keep the companion beside the pointer all the time. Off: it appears when the hold key goes
+   * down and fades out a second after the answer (the official Clicky's "Show Clicky" toggle).
+   */
+  showCompanion: boolean;
+  /**
    * Speed features (architecture §7). Each can be turned off to compare its effect in the trace.
    * Start speaking at the first clause instead of the first full sentence.
    */
@@ -209,6 +214,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   cursorColor: 'blue',
   cursorSize: 'medium',
   showPointLabels: true,
+  showCompanion: true,
   eagerFirstClause: true,
   speculativeAnswer: true,
   warmImageCache: true,
@@ -311,6 +317,7 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     cursorColor: oneOf(CURSOR_COLORS, o['cursorColor'], base.cursorColor),
     cursorSize: oneOf(CURSOR_SIZES, o['cursorSize'], base.cursorSize),
     showPointLabels: bool(o['showPointLabels'], base.showPointLabels),
+    showCompanion: bool(o['showCompanion'], base.showCompanion),
     eagerFirstClause: bool(o['eagerFirstClause'], base.eagerFirstClause),
     speculativeAnswer: bool(o['speculativeAnswer'], base.speculativeAnswer),
     warmImageCache: bool(o['warmImageCache'], base.warmImageCache),

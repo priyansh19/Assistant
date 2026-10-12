@@ -381,6 +381,16 @@ export class DashboardWindow {
    * user's work, and bring it back when the answer ends (so it never looks like the app vanished).
    * Returns true if it hid the window.
    */
+  /** Minimise the window if it's showing (so Clicky can see the screen); returns how to bring it back. */
+  stepAside(): () => void {
+    const win = this.win;
+    if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return () => undefined;
+    win.minimize();
+    return () => {
+      if (!win.isDestroyed() && win.isMinimized()) win.restore();
+    };
+  }
+
   minimizeIfFocused(): boolean {
     const win = this.win;
     if (!win || win.isDestroyed() || !win.isFocused() || win.isMinimized()) return false;

@@ -162,6 +162,20 @@ export class InputHost {
   }
 
   /** The app in front (never-touch check for agent mode). */
+  /**
+   * Where the control named `label` really is, near a point the model guessed (global DIP), or null
+   * if nothing matching is close by. Answers point with this the way agent clicks do: the official
+   * Clicky gets precise targets from a second model pass; UI Automation does it locally in ~50 ms.
+   */
+  async snap(label: string, at: { x: number; y: number }, timeoutMs: number): Promise<{ x: number; y: number } | null> {
+    if (!this.driver || !label.trim()) return null;
+    const p = screen.dipToScreenPoint(at);
+    const timeout = delay(timeoutMs).then(() => null);
+    const live = await Promise.race([this.driver.locate(label, p.x, p.y).catch(() => null), timeout]);
+    if (!live || Math.hypot(live.x - p.x, live.y - p.y) <= 6) return null;
+    return screen.screenToDipPoint(live);
+  }
+
   async usesAltGr(): Promise<boolean> {
     return (await this.driver?.usesAltGr().catch(() => false)) ?? false;
   }

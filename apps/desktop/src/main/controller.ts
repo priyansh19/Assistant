@@ -10,6 +10,7 @@ import {
   type AskResult,
   type CredentialId,
   type InteractionState,
+  type MappedPoint,
   type Settings,
 } from '@clicky/core';
 import { DEMO } from '../engine/demo';
@@ -47,6 +48,17 @@ export interface ControllerHooks {
 
 /** A typed question that outlives this is answered with an error rather than left hanging. */
 const ASK_TIMEOUT_MS = 180_000;
+/**
+ * The first-run look-around (the official Clicky's onboarding demo prompt, as a question): one
+ * specific, named thing near the middle of the screen and a few playful words about it.
+ */
+const HELLO_QUESTION =
+  "You're meeting me for the first time. Look around my screen and point at ONE specific thing you can name, " +
+  'near the middle of the screen (not the taskbar, edges or corners): an app, a file name, a word, a picture. ' +
+  "Say only a short, playful three to six word comment about it, all lowercase, without quoting the screen's text.";
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Longest wait for an answer's point to be matched to a real control (the flight takes ~0.4–1.1 s). */
+const SNAP_TIMEOUT_MS = 900;
 
 /**
  * Main's side of the interaction loop. The loop itself runs in the engine (architecture §4); this
@@ -186,6 +198,7 @@ export class Controller {
             `overlay point on display ${o.target.displayId} at ${Math.round(o.target.local.x)},${Math.round(o.target.local.y)} (screen ${Math.round(o.target.global.x)},${Math.round(o.target.global.y)}) "${o.label}"`,
           );
           this.overlays.point(o.target, o.label);
+          if (o.snap) this.snapPoint(o.target, o.label);
         } else if (o.op === 'draw') {
           // One line per mark, so the drawing suite can check placement from the log.
           const pts = o.shape.points.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(' ');
@@ -349,8 +362,8 @@ export class Controller {
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   prewarm(): void {
     this.engine.send({ type: 'prewarm' });
-    const s = this.settings.get();
-    if (s.dictationKey !== 'off' || s.agentEnabled) this.input.warm();
+    // Always: answers use it to land the pointer on the real control.
+    this.input.warm();
   }
 
   /** Key sounds: one as listening starts, one when the key is let go. */
@@ -451,6 +464,50 @@ export class Controller {
       this.engine.send({ type: 'ask', id, question, source });
     });
   }
+
+  /**
+   * The answer model's point is a guess from a downscaled screenshot. While the triangle is still in
+   * the air, look the named control up with UI Automation and, if it's close by, land on it instead.
+   */
+  private snapPoint(target: MappedPoint, label: string): void {
+    const id = this.current.interactionId;
+    const started = Date.now();
+    void this.input.snap(label, target.global, SNAP_TIMEOUT_MS).then((at) => {
+      if (!at || this.current.interactionId !== id) return;
+      const d = screen.getDisplayNearestPoint(at);
+      if (d.id !== target.displayId) return;
+      log.info(
+        `point "${label}" snapped to the control at ${Math.round(at.x)},${Math.round(at.y)} (was ${Math.round(target.global.x)},${Math.round(target.global.y)}, ${Date.now() - started} ms)`,
+      );
+      this.overlays.point(
+        { displayId: d.id, local: { x: at.x - d.bounds.x, y: at.y - d.bounds.y }, global: at },
+        label,
+      );
+    });
+  }
+
+  /**
+   * "Meet Clicky", after setup and from the tray (the official Clicky's first run, without its video):
+   * it says hi beside the pointer, looks around the screen and flies to one specific thing with a
+   * playful comment, then shows how to start. Skips the look-around until the API keys are in.
+   */
+  async sayHello(): Promise<void> {
+    if (this.greeting) return;
+    this.greeting = true;
+    try {
+      this.overlays.message("Hey! I'm Clicky.", 'info');
+      await wait(2600);
+      if (this.missingKeys().length === 0 && isResting(this.current.state)) {
+        const r = await this.ask(HELLO_QUESTION, 'action');
+        if (r?.outcome === 'answered') await wait(1200);
+      }
+      if (isResting(this.current.state))
+        this.overlays.message(`Hold ${this.holdKeyLabel()} and introduce yourself.`, 'info');
+    } finally {
+      this.greeting = false;
+    }
+  }
+  private greeting = false;
 
   /** Voice preview for the dashboard. */
   speakSample(): Promise<void> {

@@ -82,7 +82,7 @@ export function answerSystemPrompt(
 }
 
 export interface AnswerRunHooks {
-  point(target: MappedPoint, label: string): void;
+  point(target: MappedPoint, label: string, opts?: { snap?: boolean }): void;
   /** Draw an arrow, box or circle on the screen (optional UI). */
   draw?(shape: MappedShape): void;
   caption?(answerSoFar: string): void;
@@ -281,5 +281,5 @@ function pointAt(
     `POINT ${tag.x},${tag.y}${tag.screen ? ` screen${tag.screen}` : ''} "${tag.label}" → display ${mapped.point.displayId} at ${Math.round(mapped.point.local.x)},${Math.round(mapped.point.local.y)}`,
   );
   input.trace.mark('firstPoint');
-  input.hooks.point(mapped.point, tag.label);
+  input.hooks.point(mapped.point, tag.label, { snap: true });
 }

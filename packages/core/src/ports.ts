@@ -31,7 +31,11 @@ export interface MicPort {
 
 export interface OverlayPort {
   state(state: InteractionState): void;
-  point(target: MappedPoint, label: string): void;
+  /**
+   * Fly the companion to a point. `snap`: the point is the answer model's guess at a named control,
+   * so the app may move it onto that control's real position (agent clicks look theirs up already).
+   */
+  point(target: MappedPoint, label: string, opts?: { snap?: boolean }): void;
   /** Draw an arrow, box or circle on the screen (optional UI). */
   draw?(shape: MappedShape): void;
   /** A short message near the cursor, e.g. an error the user can act on. */
