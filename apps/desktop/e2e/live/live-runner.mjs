@@ -16,7 +16,11 @@ import { fileURLToPath } from 'node:url';
 import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING];
+// --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
+const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING].map((t) =>
+  process.argv.includes('--nameless') ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) } : t,
+);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (n) => {
