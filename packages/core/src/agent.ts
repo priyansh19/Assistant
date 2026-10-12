@@ -697,6 +697,14 @@ came from speech recognition: names may be spelled differently ("Clicky Test Fol
 const NEEDS_USER =
   /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch|passkey|windows security|security key|user account control|\buac\b/i;
 
+/** Typing, or a key that edits the text in the focused box (not shortcuts like esc or alt+tab). */
+function typesIntoFocus(input: InputAction): boolean {
+  if (input.kind === 'type') return true;
+  if (input.kind !== 'keys') return false;
+  const k = input.keys.join('+');
+  return /^(?:enter|shift\+enter|backspace|delete|ctrl\+[avxz]|ctrl\+backspace)$/.test(k);
+}
+
 /** Another agent finishing up is given this long before Clicky gives up waiting. */
 const OTHER_AGENT_MAX_WAIT_MS = 30 * 60_000;
 
@@ -801,6 +809,14 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   let shown = goal;
   const reflections: string[] = [];
   /**
+   * Where Clicky last put the keyboard focus (its last click into something), and whether the user
+   * has used the mouse or keyboard since. Typing after the user took over first clicks back there,
+   * so the text never lands in whatever the user clicked into meanwhile.
+   */
+  let focusClick: InputAction | null = null;
+  let focusLabel = '';
+  let tookOver = false;
+  /**
    * The run hit a problem: instead of giving up, look back at what was done and what's on screen,
    * work out the mistake and continue with a different approach. False once out of attempts.
    */
@@ -851,6 +867,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (deps.signal.aborted) return stopped();
     // The user took over the mouse or keyboard: wait for them before doing anything else.
     if (deps.userInterrupted?.()) {
+      tookOver = true;
       deps.log?.('agent paused: the user is using the mouse or keyboard');
       await deps.waitForUser?.(deps.signal);
       if (deps.signal.aborted) return stopped();
@@ -1149,12 +1166,44 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (a.type === 'wait') await delay(a.ms);
     else if (input) {
       try {
+        if (tookOver && focusClick && typesIntoFocus(input)) {
+          deps.log?.(`agent refocusing "${focusLabel}" before typing: the user used the mouse or keyboard`);
+          await deps.input.run(focusClick, deps.signal);
+          await delay(250);
+        }
         await deps.input.run(input, deps.signal);
+        if (input.kind === 'click' && input.button === 'left' && input.count === 1) {
+          focusClick = input;
+          focusLabel = input.target ?? '';
+        } else if (input.kind === 'element' && (input.op === 'click' || input.op === 'set')) {
+          const el = byId.get(input.id);
+          const at = el ? placeGlobal({ x: el.x + el.w / 2, y: el.y + el.h / 2 }, screens.geometry) : null;
+          if (at && el) {
+            // The numbers change with every list, so it's kept as a click on the control by name.
+            focusClick = {
+              kind: 'click',
+              at: at.point,
+              button: 'left',
+              count: 1,
+              ...(el.name ? { target: el.name } : {}),
+            };
+            focusLabel = el.name;
+          }
+        } else if (input.kind === 'open') focusClick = null;
+        if (input.kind !== 'type' && input.kind !== 'keys') tookOver = false;
       } catch (e) {
         if (deps.signal.aborted) return stopped();
         // Tell the model what went wrong and let it try another way.
         const why = e instanceof Error ? e.message : String(e);
         deps.log?.(`agent step failed: ${describe(a)}: ${why}`);
+        if (why.includes('FOCUS_MOVED')) {
+          // The user clicked somewhere else mid-typing: part of the text went in. Look again before going on.
+          tookOver = true;
+          note = `${why.replace(/^.*FOCUS_MOVED:\s*/, '')}. The user clicked somewhere else. Look at the screenshot: finish the text in the box you were typing in (click it first), and never type into the box the user moved to.`;
+          steps.push(`(stopped typing: the focus moved: ${describe(a)})`);
+          checked.push({ step: describe(a), ok: false });
+          continue;
+        }
         note = `That step failed: ${why}. Try a different way (check the exact name or path in the lists above).`;
         steps.push(`(failed: ${describe(a)}: ${why.slice(0, 120)})`);
         checked.push({ step: describe(a), ok: false });

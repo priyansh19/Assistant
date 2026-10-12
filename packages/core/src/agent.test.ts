@@ -409,6 +409,54 @@ describe('controls from the window in front', () => {
   });
 });
 
+describe('the user clicks somewhere else while Clicky works', () => {
+  it('clicks back into its own box before typing', async () => {
+    const f = fakes([
+      '{"action":"click","x":100,"y":100,"target":"Message box","say":"Clicking the box"}',
+      '{"action":"type","text":"hello","check":"worked"}',
+      '{"action":"done","say":"Done.","check":"worked"}',
+    ]);
+    let polls = 0;
+    await runAgent('type hello in the message box', {
+      ...f.deps,
+      verifyDone: false,
+      // The user takes over after the click, before the typing.
+      userInterrupted: () => ++polls === 2,
+      waitForUser: async () => undefined,
+    });
+    expect(f.inputs.map((i) => i.kind)).toEqual(['click', 'click', 'type']);
+    expect(f.inputs[1]).toEqual(f.inputs[0]);
+  });
+
+  it('does not click again when the user stayed away', async () => {
+    const f = fakes([
+      '{"action":"click","x":100,"y":100,"target":"Message box"}',
+      '{"action":"type","text":"hello","check":"worked"}',
+    ]);
+    await runAgent('type hello', { ...f.deps, verifyDone: false, userInterrupted: () => false });
+    expect(f.inputs.map((i) => i.kind)).toEqual(['click', 'type']);
+  });
+
+  it('stops typing when the focus moves and tells the model', async () => {
+    const f = fakes(['{"action":"type","text":"hello world"}', '{"action":"done","say":"Done."}']);
+    let n = 0;
+    await runAgent('type hello world', {
+      ...f.deps,
+      verifyDone: false,
+      input: {
+        run: async (a) => {
+          if (a.kind === 'type' && n++ === 0)
+            throw new Error(
+              'FOCUS_MOVED: the focus moved somewhere else while I was typing, so I stopped after 5 characters',
+            );
+        },
+      },
+    });
+    expect(f.questions[1]).toContain('never type into the box the user moved to');
+    expect(f.questions[1]).toContain('stopped typing: the focus moved');
+  });
+});
+
 describe('another agent driving the PC', () => {
   it('waits until it is gone, then carries on', async () => {
     const seen = ['"Claude" started debugging this browser', '"Claude" started debugging this browser', null];

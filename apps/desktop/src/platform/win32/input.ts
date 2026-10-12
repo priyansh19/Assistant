@@ -88,9 +88,32 @@ public static class ClickyInput {
     timeBeginPeriod(1); // so the pause between characters is ~10 ms, not the default ~16
     try { TextPaced(s); } finally { timeEndPeriod(1); }
   }
+  // Where typed keys go now: the window in front and its focused child window, plus (deep) the
+  // focused control, which tells two text boxes on one web page apart.
+  static string FocusKey(bool deep) {
+    IntPtr fg = GetForegroundWindow();
+    uint pid; uint tid = GetWindowThreadProcessId(fg, out pid);
+    var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+    GetGUIThreadInfo(tid, ref gi);
+    var k = fg.ToInt64() + ":" + gi.hwndFocus.ToInt64();
+    if (deep) {
+      try {
+        var f = System.Windows.Automation.AutomationElement.FocusedElement;
+        if (f != null) k += ":" + string.Join(".", f.GetRuntimeId());
+      } catch { }
+    }
+    return k;
+  }
   static void TextPaced(string s) {
     var batch = new System.Collections.Generic.List<INPUT>();
+    // If the focus moves while typing (the user clicks into another box), stop instead of typing
+    // the rest of the text into the wrong place.
+    string fast = FocusKey(false), deep = FocusKey(true);
+    int sent = 0;
     foreach (char ch in s) {
+      if (FocusKey(false) != fast || (sent > 0 && sent % 24 == 0 && FocusKey(true) != deep))
+        throw new Exception("FOCUS_MOVED: the focus moved somewhere else while I was typing, so I stopped after " + sent + " characters");
+      sent++;
       if (ch == '\r') continue;
       if (ch == '\n') {
         // Apps like Windows 11 Notepad handle key presses and Unicode characters on different
