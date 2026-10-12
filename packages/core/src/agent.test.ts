@@ -379,6 +379,8 @@ describe('drawing on the screen is not an agent task', () => {
     expect(agentGoal('Clicky, draw a star on my screen.')).toBeNull();
     expect(agentGoal('Clicky, circle the save button')).toBeNull();
     expect(agentGoal('Clicky, draw a house in Paint')).toBe('draw a house in Paint');
+    expect(agentGoal('Clickey, draw a star on the whiteboard')).toBe('draw a star on the whiteboard');
+    expect(agentGoal('Clicky, draw a circle in the middle of the screen')).toBeNull();
   });
 });
 
