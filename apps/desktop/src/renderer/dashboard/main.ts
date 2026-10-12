@@ -264,6 +264,7 @@ function renderControls(s: Settings): void {
   set('cursorSize', s.cursorSize);
   check('showPointLabels', s.showPointLabels);
   check('showCompanion', s.showCompanion);
+  check('hideFromCapture', s.hideFromCapture);
   check('eagerFirstClause', s.eagerFirstClause);
   check('speculativeAnswer', s.speculativeAnswer);
   check('warmImageCache', s.warmImageCache);
@@ -1779,6 +1780,7 @@ async function init(): Promise<void> {
   bindSelect('cursorSize');
   bindToggle('showPointLabels');
   bindToggle('showCompanion');
+  bindToggle('hideFromCapture');
   bindToggle('eagerFirstClause');
   bindToggle('speculativeAnswer');
   bindToggle('warmImageCache');

@@ -159,6 +159,12 @@ export interface Settings {
    */
   showCompanion: boolean;
   /**
+   * Keep Clicky's own windows (cursor, bubbles, task strip, orb) out of every screenshot, as the
+   * official Clicky does, so the model never sees them. Screen recordings and screen sharing then
+   * don't show them either.
+   */
+  hideFromCapture: boolean;
+  /**
    * Speed features (architecture §7). Each can be turned off to compare its effect in the trace.
    * Start speaking at the first clause instead of the first full sentence.
    */
@@ -215,6 +221,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   cursorSize: 'medium',
   showPointLabels: true,
   showCompanion: true,
+  hideFromCapture: true,
   eagerFirstClause: true,
   speculativeAnswer: true,
   warmImageCache: true,
@@ -318,6 +325,7 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     cursorSize: oneOf(CURSOR_SIZES, o['cursorSize'], base.cursorSize),
     showPointLabels: bool(o['showPointLabels'], base.showPointLabels),
     showCompanion: bool(o['showCompanion'], base.showCompanion),
+    hideFromCapture: bool(o['hideFromCapture'], base.hideFromCapture),
     eagerFirstClause: bool(o['eagerFirstClause'], base.eagerFirstClause),
     speculativeAnswer: bool(o['speculativeAnswer'], base.speculativeAnswer),
     warmImageCache: bool(o['warmImageCache'], base.warmImageCache),

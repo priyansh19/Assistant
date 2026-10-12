@@ -32,7 +32,7 @@ export type WorkerRequest =
   | { op: 'voice.finish'; streamId: string }
   | { op: 'voice.stop'; streamId: string }
   /** A short sound when the hold key goes down ('start') or comes up ('end'). */
-  | { op: 'cue'; kind: 'start' | 'end'; sound: 'soft' | 'bubble' | 'glass' }
+  | { op: 'cue'; kind: 'start' | 'end' | 'ask'; sound: 'soft' | 'bubble' | 'glass' }
   /** The engine process went away: stop the mic and streams it owned (sent by main). */
   | { op: 'engine.detached' };
 

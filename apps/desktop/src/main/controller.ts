@@ -306,7 +306,12 @@ export class Controller {
         });
         return;
       case 'agentAsk':
-        if (msg.text) this.tasks.needsApproval(msg.text);
+        if (msg.text) {
+          this.tasks.needsApproval(msg.text);
+          // A task waiting on the user's OK is easy to miss when they've looked away.
+          const sound = this.settings.get().cueSound;
+          if (sound !== 'off') this.worker.send({ op: 'cue', kind: 'ask', sound });
+        }
         if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
         return;
       case 'allowAll':

@@ -11,6 +11,7 @@ import {
 } from '@clicky/core';
 import type { Platform } from '../platform';
 import { IPC } from '../shared/ipc';
+import { keepOutOfScreenshots } from './capture-privacy';
 import type {
   OverlayAnchor,
   OverlayConfig,
@@ -236,6 +237,7 @@ export class OverlayManager implements OverlayPort {
     });
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setIgnoreMouseEvents(true, { forward: true });
+    keepOutOfScreenshots(win);
     win.setVisibleOnAllWorkspaces(true);
     // Smoke tests run beside the user's own Clicky: keep their overlay invisible (it still renders).
     if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0);
