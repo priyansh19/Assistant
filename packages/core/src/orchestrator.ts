@@ -94,7 +94,14 @@ export interface OrchestratorDeps {
   /** Extra agent hooks from the app: never-touch list, pause, user takeover, step strip. */
   agentHooks?(): Pick<
     AgentDeps,
-    'blockedApp' | 'whilePaused' | 'userInterrupted' | 'onProgress' | 'saveSheet' | 'openWindows'
+    | 'blockedApp'
+    | 'whilePaused'
+    | 'userInterrupted'
+    | 'onProgress'
+    | 'saveSheet'
+    | 'openWindows'
+    | 'listFiles'
+    | 'moveFiles'
   >;
   /** Ask the user to allow an agent step. */
   confirm?(text: string, signal: AbortSignal): Promise<boolean>;
@@ -587,7 +594,9 @@ export class Orchestrator {
           run.drawn = (run.drawn ?? 0) + 1;
           // A sketch is a picture, not an annotation: no "eye", "roof", "smile" labels on its parts.
           const sketch = onScreenDrawing(p.question) && /\b(?:draw|sketch)\b/i.test(p.question);
-          this.deps.overlay.draw?.(sketch && shape.kind !== 'text' && 'label' in shape ? { ...shape, label: '' } : shape);
+          this.deps.overlay.draw?.(
+            sketch && shape.kind !== 'text' && 'label' in shape ? { ...shape, label: '' } : shape,
+          );
         },
         caption: (text) => {
           run.answer = text;

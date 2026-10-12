@@ -77,3 +77,32 @@ export const DRAWING = [
     pass: (_o, r) => /typed "priyansh/i.test(r.rawLog),
   },
 ];
+
+// PR #18 checks: the pointer snaps to the real control; long answers when asked.
+DRAWING.push(
+  {
+    id: 'PR18a',
+    say: 'Clicky, where is the File menu?',
+    setup: ['Start-Process notepad.exe; Start-Sleep 3'],
+    shot: true,
+    maxMinutes: 2,
+    check: "'n/a'",
+    pass: (_o, r) => /snapped to the control/.test(r.rawLog),
+  },
+  {
+    id: 'PR18b',
+    say: 'Clicky, where is the address bar?',
+    setup: ["Start-Process 'https://example.com'; Start-Sleep 4"],
+    shot: true,
+    maxMinutes: 2,
+    check: "'n/a'",
+    pass: (_o, r) => /snapped to the control/.test(r.rawLog),
+  },
+  {
+    id: 'PR18c',
+    say: 'Clicky, explain how pivot tables work in detail.',
+    maxMinutes: 3,
+    check: "'n/a'",
+    pass: (_o, r) => r.answer.split(/[.!?]\s/).length >= 6,
+  },
+);

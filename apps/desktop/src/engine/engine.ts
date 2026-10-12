@@ -39,6 +39,7 @@ import { ModelFiles } from './local-speech/files';
 import { localStt, localTts } from './local-speech/providers';
 import type { MediaChannel } from './media-channel';
 import { saveXlsx } from './xlsx';
+import { listFiles, mapKnownFolder, moveFiles } from './files';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './media-ports';
 
 export interface EngineOptions {
@@ -239,6 +240,8 @@ export class Engine {
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
         openWindows: () => this.openWindows(),
+        listFiles: async (path) => listFiles(this.realPath(path)),
+        moveFiles: async (from, pattern, to, copy) => moveFiles(this.realPath(from), pattern, this.realPath(to), copy),
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
       confirm: (text, signal) => this.confirm(text, signal),
@@ -615,6 +618,11 @@ export class Engine {
     if (this.agentChatCache?.key !== key)
       this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };
     return this.agentChatCache.chat;
+  }
+
+  /** "C:\\Users\\me\\Desktop" when the real Desktop is elsewhere (OneDrive): the folder the user sees. */
+  private realPath(path: string): string {
+    return mapKnownFolder(path, this.cfg().inventory.folders);
   }
 
   /** The open windows from main (empty if main is slow). */

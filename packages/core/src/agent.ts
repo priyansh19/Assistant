@@ -31,7 +31,11 @@ export type AgentAction =
   | { type: 'drag'; path: { x: number; y: number }[]; screen: number | null; say: string; risky: boolean }
   | { type: 'open'; app: string; url: string; path: string; say: string; risky: boolean }
   /** Write down something seen on screen (free text and/or one table row) to use in later steps. */
-  | { type: 'note'; text: string; row: string[] | null; say: string; risky: boolean }
+  | { type: 'note'; text: string; row: string[] | null; rows?: string[][]; say: string; risky: boolean }
+  /** Read a folder's contents (names, sizes, dates) instead of squinting at File Explorer. */
+  | { type: 'list_files'; path: string; say: string; risky: boolean }
+  /** Move or copy the files matching a pattern from one folder to another in one step. */
+  | { type: 'move_files'; from: string; pattern: string; to: string; copy: boolean; say: string; risky: boolean }
   /** Save a table as an .xlsx file; rows default to every noted row. */
   | { type: 'save_sheet'; name: string; columns: string[]; rows: string[][] | null; say: string; risky: boolean }
   /** Close a window by its title (from the open-windows list); always asked unless Allow all is on. */
@@ -279,8 +283,27 @@ export function parseAgentAction(reply: string): { ok: true; action: AgentAction
     case 'note': {
       const text = typeof o['text'] === 'string' ? o['text'].trim().slice(0, 1500) : '';
       const row = cells(o['row'], 20);
-      if (!text && !row) return { ok: false, error: 'note needs text or a row' };
-      return { ok: true, action: { type, text, row, say, risky } };
+      // A whole screen of items at once: {"rows": [[…], […]]}.
+      const many = Array.isArray(o['rows'])
+        ? o['rows']
+            .slice(0, 100)
+            .map((r) => cells(r, 20))
+            .filter((r): r is string[] => r !== null)
+        : [];
+      if (!text && !row && !many.length) return { ok: false, error: 'note needs text, a row or rows' };
+      return { ok: true, action: { type, text, row, ...(many.length ? { rows: many } : {}), say, risky } };
+    }
+    case 'list_files': {
+      const path = str(o['path'] ?? o['folder'], 400);
+      if (!path) return { ok: false, error: 'list_files needs the folder path' };
+      return { ok: true, action: { type, path, say, risky } };
+    }
+    case 'move_files': {
+      const from = str(o['from'], 400);
+      const to = str(o['to'], 400);
+      const pattern = str(o['pattern'] ?? o['files'], 200) || '*';
+      if (!from || !to) return { ok: false, error: 'move_files needs "from" and "to" folders' };
+      return { ok: true, action: { type, from, pattern, to, copy: o['copy'] === true, say, risky } };
     }
     case 'save_sheet': {
       const columns = cells(o['columns'], 20) ?? [];
@@ -347,6 +370,13 @@ Actions:
 - wait: {"ms":N} when something is still loading.
 - note: {"text":"..."} and/or {"row":["…","…"]} writes down what you see now (facts, names, links,
   counts, one table row) so you still have it after leaving the page. Your notes come back every turn.
+- note can also take {"rows": [[…],[…]]}: note EVERY item you can see on screen in one step
+  (a whole page of search results), not one per step.
+- list_files: {"path":"C:\\…"} reads a folder's files (name, size, date modified) into your notes:
+  use it to find the biggest or newest file, count files, or plan a sort, instead of reading Explorer.
+- move_files: {"from":"C:\\…","pattern":"*.pdf","to":"C:\\…\\PDFs"} moves every matching file in
+  one step (the "to" folder is created if needed); add "copy": true to copy instead. Use it to sort
+  or tidy folders instead of dragging files one by one. It never deletes or replaces files.
 - save_sheet: {"name":"LinkedIn jobs","columns":["Title","Company","Location"]} saves an Excel
   (.xlsx) file in Documents\\Clicky with every row you noted (or give "rows": [[…],[…]] yourself).
   The next step tells you where it was saved; open it with {"path": …} so the user sees it.
@@ -443,6 +473,10 @@ export interface AgentDeps {
   briefing?: string;
   /** Skills (task playbooks) that match this task. */
   skills?: string;
+  /** The files in a folder ("name — size — modified"), or throws if it can't be read. */
+  listFiles?(path: string): Promise<string[]>;
+  /** Move or copy files matching a pattern; resolves to how many were moved. */
+  moveFiles?(from: string, pattern: string, to: string, copy: boolean): Promise<number>;
   /** Save a table as an .xlsx file; resolves to where it was saved. */
   saveSheet?(name: string, columns: string[], rows: string[][]): Promise<string>;
   /** Tokens each step may spend thinking (default 1024). */
@@ -553,8 +587,12 @@ function describe(a: AgentAction): string {
     }
     case 'open':
       return `opened ${a.app || a.url || a.path}`;
+    case 'list_files':
+      return `listed the files in ${a.path}`;
+    case 'move_files':
+      return `${a.copy ? 'copied' : 'moved'} ${a.pattern} from ${a.from} to ${a.to}`;
     case 'note':
-      return `noted ${a.row ? `row [${a.row.join(' | ')}]` : ''}${a.row && a.text ? ' and ' : ''}${a.text ? `"${a.text.slice(0, 80)}"` : ''}`;
+      return `noted${a.rows ? ` ${a.rows.length} rows` : ''} ${a.row ? `row [${a.row.join(' | ')}]` : ''}${a.row && a.text ? ' and ' : ''}${a.text ? `"${a.text.slice(0, 80)}"` : ''}`;
     case 'save_sheet':
       return `saved the sheet "${a.name}"`;
     case 'close_window':
@@ -849,10 +887,34 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       scrolls = 0;
       if (a.text) notes.push(a.text);
       if (a.row) rows.push(a.row);
+      if (a.rows) rows.push(...a.rows);
       notes.splice(0, Math.max(0, notes.length - MAX_NOTES));
       rows.splice(0, Math.max(0, rows.length - MAX_ROWS));
       steps.push(describe(a));
       checked.push({ step: describe(a), ok: true });
+      continue;
+    }
+    if (a.type === 'list_files' || a.type === 'move_files') {
+      deps.overlay.message(say, 'info');
+      try {
+        if (a.type === 'list_files') {
+          if (!deps.listFiles) throw new Error('reading folders is not available here');
+          const files = await deps.listFiles(a.path);
+          notes.push(`Files in ${a.path} (${files.length}): ${files.slice(0, 120).join('; ')}`);
+          notes.splice(0, Math.max(0, notes.length - MAX_NOTES));
+          steps.push(`listed ${files.length} files in ${a.path}`);
+        } else {
+          if (!deps.moveFiles) throw new Error('moving files is not available here');
+          const n = await deps.moveFiles(a.from, a.pattern, a.to, a.copy);
+          steps.push(`${a.copy ? 'copied' : 'moved'} ${n} files (${a.pattern}) from ${a.from} to ${a.to}`);
+        }
+        checked.push({ step: describe(a), ok: true });
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        note = `That failed: ${why}.`;
+        steps.push(`(failed: ${describe(a)}: ${why.slice(0, 120)})`);
+        checked.push({ step: describe(a), ok: false });
+      }
       continue;
     }
     if (a.type === 'save_sheet') {
