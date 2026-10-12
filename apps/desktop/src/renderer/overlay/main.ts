@@ -49,7 +49,7 @@ let spinAngle = 0;
 type Mode =
   | { kind: 'follow' }
   | { kind: 'fly'; from: Pt; ctrl: Pt; to: Pt; start: number; dur: number; then: 'point' | 'follow' }
-  | { kind: 'point'; at: Pt; label: string; since: number; heading: number };
+  | { kind: 'point'; at: Pt; label: string; phrase: string; since: number; heading: number };
 
 interface Pt {
   x: number;
@@ -62,7 +62,7 @@ let angle = -Math.PI * 0.75; // tip direction (radians); up-left by default
 let spin = 0;
 let lastFrame = performance.now();
 let idleSince = 0; // when the interaction finished, for dismissing the label
-let message: { text: string; kind: 'error' | 'info'; until: number } | null = null;
+let message: { text: string; kind: 'error' | 'info'; since: number; until: number } | null = null;
 let pendingPoint: { p: OverlayPoint; label: string } | null = null;
 /**
  * Marks from the answer (or the tray's example), drawn one after another like a pen would: each
@@ -130,7 +130,21 @@ function followTarget(): Pt | null {
   return { x: cursor.x + o.x, y: cursor.y + o.y };
 }
 
+/** What the bubble says when the model gave no label (the original's pointer phrases). */
+const POINTER_PHRASES = ['right here!', 'this one!', 'over here!', 'here it is!', 'found it!'];
+const pointerPhrase = (): string =>
+  POINTER_PHRASES[Math.floor(Math.random() * POINTER_PHRASES.length)] ?? 'right here!';
+
+/**
+ * Where the mouse was when the companion started flying back to it. Moving the mouse more than
+ * RETURN_CANCEL_PX from there cuts the return short and it snaps back to following, as in the
+ * original. The flight out to a target is never interrupted.
+ */
+let returnFrom: Pt | null = null;
+const RETURN_CANCEL_PX = 100;
+
 function startFlight(to: Pt, then: 'point' | 'follow', label = ''): void {
+  returnFrom = then === 'follow' && cursor ? { ...cursor } : null;
   const from = pos ?? followTarget() ?? { x: window.innerWidth / 2, y: -40 };
   const dist = Math.hypot(to.x - from.x, to.y - from.y);
   const dur = Math.min(1100, Math.max(420, dist / 1.5));
@@ -242,7 +256,20 @@ function roundRect(x: number, y: number, w: number, h: number, r: number): void 
   ctx.closePath();
 }
 
-function drawBubble(text: string, anchor: Pt, kind: 'label' | 'error' | 'info'): void {
+/** Characters per ms when a bubble types itself in (the original types at 30–60 ms a character). */
+const TYPE_MS = 40;
+/** The bubble pops from half size with a bright glow that settles, as in the original. */
+const POP_MS = 320;
+
+/** easeOutBack: overshoots a little, then settles. */
+const easeOutBack = (t: number): number => 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2);
+
+/**
+ * A text bubble beside `anchor`. With `since` (when it appeared), it pops in and types itself; the
+ * box is sized for the whole text from the start so it doesn't jitter while typing.
+ */
+function drawBubble(text: string, anchor: Pt, kind: 'label' | 'error' | 'info', since?: number): void {
+  const age = since === undefined ? Infinity : performance.now() - since;
   ctx.save();
   ctx.font = '500 13px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
   const maxW = 320;
@@ -257,8 +284,17 @@ function drawBubble(text: string, anchor: Pt, kind: 'label' | 'error' | 'info'):
   if (y + h > window.innerHeight - 8) y = anchor.y - h - 16;
   x = Math.max(8, x);
   y = Math.max(8, y);
-  ctx.shadowColor = 'rgba(0,0,0,0.35)';
-  ctx.shadowBlur = 12;
+  const pop = Math.min(1, age / POP_MS);
+  if (pop < 1) {
+    const k = 0.5 + 0.5 * easeOutBack(pop);
+    const ox = x < anchor.x ? x + w : x;
+    const oy = y < anchor.y ? y + h : y;
+    ctx.translate(ox, oy);
+    ctx.scale(k, k);
+    ctx.translate(-ox, -oy);
+  }
+  ctx.shadowColor = pop < 1 && kind !== 'error' ? color() : 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 12 + (1 - pop) * 18;
   ctx.fillStyle = kind === 'error' ? 'rgba(60, 14, 10, 0.92)' : 'rgba(20, 22, 28, 0.9)';
   roundRect(x, y, w, h, 8);
   ctx.fill();
@@ -268,7 +304,12 @@ function drawBubble(text: string, anchor: Pt, kind: 'label' | 'error' | 'info'):
   ctx.stroke();
   ctx.fillStyle = '#ffffff';
   ctx.textBaseline = 'top';
-  lines.forEach((l, i) => ctx.fillText(l, x + 12, y + 7 + i * lineH));
+  let shown = Math.floor(age / TYPE_MS) + 1;
+  lines.forEach((l, i) => {
+    if (shown <= 0) return;
+    ctx.fillText(l.slice(0, shown), x + 12, y + 7 + i * lineH);
+    shown -= l.length + 1;
+  });
   ctx.restore();
 }
 
@@ -581,6 +622,16 @@ function frame(now: number): void {
       angle = lerpAngle(angle, toPointer, 0.25);
       heading = angle;
     }
+  } else if (
+    mode.kind === 'fly' &&
+    mode.then === 'follow' &&
+    returnFrom &&
+    cursor &&
+    dist(cursor, returnFrom) > RETURN_CANCEL_PX
+  ) {
+    // The user moved the mouse during the return flight: stop flying and follow from here.
+    mode = { kind: 'follow' };
+    returnFrom = null;
   } else if (mode.kind === 'fly') {
     const t = Math.min(1, (now - mode.start) / mode.dur);
     const e = easeInOut(t);
@@ -590,7 +641,7 @@ function frame(now: number): void {
     scale = 1 + 0.35 * Math.sin(Math.PI * t);
     if (t >= 1) {
       if (mode.then === 'point' && pendingPoint) {
-        mode = { kind: 'point', at: mode.to, label: pendingPoint.label, since: now, heading };
+        mode = { kind: 'point', at: mode.to, label: pendingPoint.label, phrase: pointerPhrase(), since: now, heading };
         pendingPoint = null;
       } else {
         mode = { kind: 'follow' };
@@ -606,7 +657,7 @@ function frame(now: number): void {
     };
     heading = mode.heading;
     drawTargetRing(mode.at, mode.since, now);
-    if (config.showLabels && mode.label) drawBubble(mode.label, mode.at, 'label');
+    if (config.showLabels) drawBubble(mode.label || mode.phrase, mode.at, 'label', mode.since);
     const resting = state === 'idle' || state === 'cancelled' || state === 'error';
     const held = now - mode.since;
     if (held > 12000 || (resting && idleSince && now - idleSince > 2500 && held > 3000) || state === 'listening') {
@@ -640,7 +691,7 @@ function frame(now: number): void {
     if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
   }
   if (message && now > message.until) message = null;
-  if (message && pos) drawBubble(message.text, pos, message.kind);
+  if (message && pos) drawBubble(message.text, pos, message.kind, message.since);
 
   // Stop the loop when nothing is moving; the last frame stays on the canvas until the next input.
   const resting = state === 'idle' || state === 'cancelled' || state === 'error';
@@ -726,7 +777,8 @@ window.clicky.onDraw((d) => {
 });
 
 window.clicky.onMessage((m: OverlayMessage) => {
-  message = { ...m, until: performance.now() + Math.min(9000, 3500 + m.text.length * 45) };
+  const now = performance.now();
+  message = { ...m, since: now, until: now + Math.min(12000, 3500 + m.text.length * (45 + TYPE_MS)) };
   kick();
 });
 
