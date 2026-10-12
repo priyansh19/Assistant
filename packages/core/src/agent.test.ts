@@ -465,6 +465,11 @@ describe('plan first', () => {
     expect(quickOpen('open linkedin in comet', ['LinkedIn'])?.[0]).toMatchObject({
       url: 'https://www.linkedin.com/feed/',
     });
+    // An installed LinkedIn web app doesn't win: LinkedIn opens in the browser where the user is signed in.
+    expect(quickOpen('open LinkedIn', ['LinkedIn'])?.[0]).toMatchObject({
+      app: '',
+      url: 'https://www.linkedin.com/feed/',
+    });
     expect(quickOpen('open WhatsApp', ['WhatsApp'])?.[0]).toMatchObject({ app: 'WhatsApp', url: '' });
     expect(quickOpen('launch visual studio code', ['Visual Studio Code'])?.[0]).toMatchObject({
       app: 'Visual Studio Code',

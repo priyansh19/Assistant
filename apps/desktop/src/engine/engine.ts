@@ -95,6 +95,8 @@ const OWN_KEYS_MS = 300;
 const TAKEOVER_PX = 60;
 /** After the user takes over, carry on once they've left the mouse and keyboard alone this long. */
 const RESUME_IDLE_MS = 3000;
+/** How long the agent waits for the list of open windows and tabs from main. */
+const OPEN_WINDOWS_MS = 6000;
 /** After the user presses play to go on while another agent works, Clicky stops checking this long. */
 const IGNORE_OTHER_AGENT_MS = 10 * 60_000;
 
@@ -706,7 +708,7 @@ export class Engine {
       const timer = setTimeout(() => {
         this.windowLists.delete(id);
         resolve([]);
-      }, 1500);
+      }, OPEN_WINDOWS_MS);
       this.windowLists.set(id, (w) => {
         clearTimeout(timer);
         resolve(w);

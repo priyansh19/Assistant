@@ -14,12 +14,14 @@ export const SCREEN = [
     // A known site: no model wait, Comet from its taskbar icon, the address typed in the bar.
     pass: (out, r) =>
       /^comet/i.test(out) && /youtube/i.test(out) && has(r, /agent quick route/) && has(r, /cursor to "Address bar"/),
+    cleanup: ["Close-FrontTab 'YouTube'"],
   },
   {
     id: 'SA02',
     say: 'Clicky, open LinkedIn.',
     check: front,
     pass: (out) => /^comet/i.test(out) && /linkedin/i.test(out),
+    cleanup: ["Close-FrontTab 'LinkedIn'"],
   },
   {
     id: 'SA03',
@@ -56,6 +58,7 @@ export const SCREEN = [
     maxMinutes: 3,
     check: front,
     pass: (out) => /^comet/i.test(out) && /lo-?fi/i.test(out),
+    cleanup: ["Close-FrontTab 'lo-?fi'"],
   },
   {
     id: 'SA08',
@@ -63,6 +66,7 @@ export const SCREEN = [
     maxMinutes: 4,
     check: front,
     pass: (out) => /^comet/i.test(out) && /repositor/i.test(out),
+    cleanup: ["Close-FrontTab 'Repositor'"],
   },
   {
     id: 'SA09',
@@ -125,13 +129,20 @@ export const SCREEN = [
   {
     id: 'SM05',
     say: 'Clicky, open the newest file in my Downloads folder.',
+    // A text file the test puts there, so the newest file is never an installer (round 1 found a
+    // ProtonVPN setup on top; Clicky rightly asked before running it).
+    setup: [
+      'Protect-OpenWindows',
+      "Set-Content (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\\clicky-newest-test.txt') 'newest file test'",
+    ],
     maxMinutes: 3,
-    check:
-      "$n = (Get-ChildItem ([Environment]::GetFolderPath('UserProfile') + '\\Downloads') -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).BaseName; $n; [LiveWin]::Front()",
-    pass: (out) => {
-      const [name = '', title = ''] = out.split('\n');
-      return !!name && title.toLowerCase().includes(name.toLowerCase().slice(0, 12));
-    },
+    check: '[LiveWin]::Front()',
+    pass: (out) => /clicky-newest-test/i.test(out),
+    cleanup: [
+      'Close-TestNotepads',
+      "Remove-Item (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\\clicky-newest-test.txt') -ErrorAction SilentlyContinue",
+      'Unprotect-Windows',
+    ],
   },
 
   // ---- Visible steps inside apps (controls by name, the cursor on each).
@@ -175,7 +186,8 @@ export const SCREEN = [
     check: "(Get-TestEdgeTabs | ForEach-Object { ($_ -split ' - ')[0] }) -join '|'",
     pass: (out) => {
       const tabs = out.split('|').filter(Boolean);
-      return tabs.length === 3 && new Set(tabs).size === 3;
+      // Edge may add its own welcome tabs; what matters is no duplicates left and one of each kept.
+      return new Set(tabs).size === tabs.length && tabs.includes('Example Domain') && tabs.includes('Wikipedia');
     },
     cleanup: ['Stop-TestEdge', 'Unprotect-Windows'],
   },

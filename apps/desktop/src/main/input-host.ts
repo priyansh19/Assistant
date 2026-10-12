@@ -144,14 +144,19 @@ export class InputHost {
             this.onRetarget?.(screen.screenToDipPoint(live), action.target);
           }
         }
+        await this.guardCaption(p);
         return d.click(p.x, p.y, action.button, action.count);
       }
-      case 'element':
+      case 'element': {
+        const e = this.lastElements.get(action.id);
+        if (e && action.op !== 'set') await this.guardCaption({ x: e.x + e.w / 2, y: e.y + e.h / 2 });
         await d.elementAct(action.id, action.op, action.text ?? '');
         return;
+      }
       case 'control': {
         const at = await this.findControl(action.name, action.controlKind ?? '');
         if (!at) throw new Error(`there is no "${action.name}" in the window in front`);
+        if (action.op !== 'set') await this.guardCaption(at);
         await this.show(at, action.name);
         if (action.op === 'set') {
           await d.click(at.x, at.y, 'left', 1);
@@ -189,10 +194,7 @@ export class InputHost {
           list.find((x) => x.title.toLowerCase() === want) ??
           list.find((x) => x.title.toLowerCase().includes(want) || want.includes(x.title.toLowerCase()));
         if (!w) throw new Error(`no open window is called "${action.title}"`);
-        if (await this.unsaved(w))
-          throw new Error(`"${w.title}" has unsaved changes, so I left it open (closing it would lose that work)`);
-        if (PROTECTED.includes(w.process) || this.protectedHandles().has(w.handle))
-          throw new Error(`"${w.title}" is one I never close`);
+        await this.mayClose(w);
         // The cursor goes to the window's close button first.
         const box = await d.windowBox(w.handle).catch(() => null);
         if (box) {
@@ -279,6 +281,12 @@ export class InputHost {
       case 'backspace':
         return d.backspace(action.count);
       case 'keys':
+        // Alt+F4 closes the window in front: the same rules as close_window.
+        if (action.keys.join('+') === 'alt+f4') {
+          const h = await d.foregroundHandle().catch(() => '');
+          const w = (await d.windows().catch(() => [])).find((x) => x.handle === h);
+          if (w) await this.mayClose(w);
+        }
         await this.showTyping(action.keys.join('+'));
         return d.keys(action.keys);
     }
@@ -462,7 +470,14 @@ export class InputHost {
       await d.click(bar.x, bar.y, 'left', 1);
       await delay(120);
       await d.keys(['ctrl', 'a']);
-    } else await d.keys(['ctrl', 'l']);
+    } else {
+      // A new tab's page can hide the bar's name: focus it with ctrl+l and go to whatever has the focus.
+      await d.keys(['ctrl', 'l']);
+      await delay(150);
+      const box = await d.focusBox().catch(() => null);
+      if (box && box.w < 2500)
+        await this.show({ x: box.x + Math.min(box.w / 2, 120), y: box.y + box.h / 2 }, 'Address bar');
+    }
     await delay(100);
     await d.type(url);
     // The address bar completes what's typed from history ("youtube.com/" becomes an old search
@@ -502,6 +517,7 @@ export class InputHost {
    */
   async elements(): Promise<UiElement[]> {
     const list = (await this.driver?.elements(150, 1800).catch(() => [])) ?? [];
+    this.lastElements = new Map(list.map((e) => [e.id, { x: e.x, y: e.y, w: e.w, h: e.h }]));
     return list.map((e) => {
       const tl = screen.screenToDipPoint({ x: e.x, y: e.y });
       const br = screen.screenToDipPoint({ x: e.x + e.w, y: e.y + e.h });
@@ -547,6 +563,33 @@ export class InputHost {
     }
     return out;
   }
+
+  /** Throws if Clicky must not close this window (unsaved work, Claude or Clicky, the user's keep list). */
+  private async mayClose(w: { handle: string; process: string; title: string }): Promise<void> {
+    if (await this.unsaved(w))
+      throw new Error(`"${w.title}" has unsaved changes, so I left it open (closing it would lose that work)`);
+    if (PROTECTED.includes(w.process) || this.protectedHandles().has(w.handle))
+      throw new Error(`"${w.title}" is one I never close`);
+  }
+
+  /**
+   * A click on a window's title-bar buttons (close, maximise, minimise) goes through the same rules
+   * as close_window: round 1 of the tidy-up test closed windows by clicking their X directly.
+   */
+  private async guardCaption(p: { x: number; y: number }): Promise<void> {
+    const d = this.need();
+    const list = await d.windows().catch(() => []);
+    for (const w of list.slice(0, 15)) {
+      const box = await d.windowBox(w.handle).catch(() => null);
+      if (!box || p.x < box.x || p.y < box.y || p.x > box.x + box.w || p.y > box.y + box.h) continue;
+      const s = this.scaleAt(p.x, p.y);
+      if (p.y - box.y < 48 * s && box.x + box.w - p.x < 150 * s) await this.mayClose(w);
+      return; // the top-most window under the point decides
+    }
+  }
+
+  /** The last list of controls (physical px), for the X-button check on element clicks. */
+  private lastElements = new Map<number, { x: number; y: number; w: number; h: number }>();
 
   /** Unsaved work in a window: its title says so, or (Notepad) one of its tabs is "Modified". */
   private async unsaved(w: { handle: string; process: string; title: string }): Promise<boolean> {

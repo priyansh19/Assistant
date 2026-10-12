@@ -130,7 +130,9 @@ function Get-FrontProcess {
 # A browser only the tests use (Edge with its own profile), so tidy-up tests never touch the user's tabs.
 function Open-TestEdge([string[]]$Urls) {
   $edge = @('C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe', 'C:\Program Files\Microsoft\Edge\Application\msedge.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
-  Start-Process $edge -ArgumentList (@("--user-data-dir=$TestEdgeDir", '--no-first-run', '--no-default-browser-check', '--new-window') + $Urls)
+  # A fresh profile each time (no restored tabs from the last test, no extension welcome pages).
+  Stop-TestEdge; Start-Sleep 1; Remove-Item $TestEdgeDir -Recurse -Force -ErrorAction SilentlyContinue
+  Start-Process $edge -ArgumentList (@("--user-data-dir=$TestEdgeDir", '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--new-window') + $Urls)
   Start-Sleep 8
 }
 function Stop-TestEdge {
@@ -173,9 +175,24 @@ function Protect-OpenWindows {
 function Unprotect-Windows { Remove-Item $ProtectFile -ErrorAction SilentlyContinue }
 function Test-Protected { $ids = Get-Content $ProtectFile -Raw | ConvertFrom-Json; ($ids | Where-Object { [LiveEnum.W]::IsWindowVisible([IntPtr][long]$_) }).Count }
 
-# A Notepad window with typed, unsaved text.
+# A Notepad window with typed, unsaved text. The text is only typed once that new Notepad is
+# really in front (round 1 typed it into another app when Windows kept Notepad behind).
 function New-UnsavedNotepad([string]$Text) {
+  Add-Type -Namespace LiveNp -Name W -MemberDefinition '
+    [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int p);' -ErrorAction SilentlyContinue
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $np = { $pids = (Get-Process notepad -ErrorAction SilentlyContinue).Id; @($root.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.ProcessId -in $pids } | ForEach-Object { $_.Current.NativeWindowHandle }) }
+  $before = & $np
   Start-Process notepad.exe; Start-Sleep 2
+  $new = (& $np) | Where-Object { $_ -notin $before } | Select-Object -First 1
+  if (-not $new) { throw 'no new Notepad window' }
+  for ($i = 0; $i -lt 5 -and [LiveNp.W]::GetForegroundWindow().ToInt64() -ne $new; $i++) {
+    [LiveWin]::keybd_event(0x87, 0, 0, [UIntPtr]::Zero); [LiveWin]::keybd_event(0x87, 0, 2, [UIntPtr]::Zero)
+    [void][LiveNp.W]::SetForegroundWindow([IntPtr]$new); Start-Sleep -Milliseconds 400
+  }
+  if ([LiveNp.W]::GetForegroundWindow().ToInt64() -ne $new) { throw 'the new Notepad would not come to the front; nothing typed' }
   Add-Type -AssemblyName System.Windows.Forms
   [System.Windows.Forms.SendKeys]::SendWait($Text)
   Start-Sleep 1
@@ -196,4 +213,12 @@ function Close-TestNotepads {
     $dont = $w.FindFirst('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, "Don't save")))
     if ($dont) { $dont.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
   }
+}
+
+# Close the tab a test opened in Comet (only when Comet is in front, on the page the test expects).
+function Close-FrontTab([string]$Expect) {
+  if ((Get-FrontProcess) -ne 'comet' -or [LiveWin]::Front() -notmatch $Expect) { return 'left' }
+  [LiveWin]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero); [LiveWin]::keybd_event(0x57, 0, 0, [UIntPtr]::Zero)
+  [LiveWin]::keybd_event(0x57, 0, 2, [UIntPtr]::Zero); [LiveWin]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
+  'closed'
 }

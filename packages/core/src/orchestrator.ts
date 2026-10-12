@@ -208,7 +208,17 @@ interface Speculation {
   discard(): void;
 }
 
+/** Longest an answer waits for the list of open windows and tabs. */
+const PC_MAP_WAIT_MS = 2500;
+
 interface Run {
+  /**
+   * What's open on the PC (windows, last used, unsaved work, browser tabs), fetched when the key
+   * goes down so answers know it ("which apps do I have open?") without hunting the screenshot.
+   */
+  pcMap?: Promise<string[]>;
+  /** The map once it arrived (for the answer prompt). */
+  pcMapText?: string;
   /** Marks drawn by this answer (a drawing request that drew nothing is retried once). */
   drawn?: number;
   /** 'dictate': the transcript is typed into the focused app; no screenshot, no AI, no history. */
@@ -287,6 +297,13 @@ export class Orchestrator {
       speed: this.deps.speed?.() ?? {},
       cacheWarmed: false,
     };
+    if (mode !== 'dictate') {
+      const windows = this.deps.agentHooks?.().openWindows;
+      if (windows) {
+        run.pcMap = windows().catch(() => []);
+        run.pcMap.catch(() => undefined);
+      }
+    }
     this.run = run;
     return run;
   }
@@ -574,7 +591,14 @@ export class Orchestrator {
       confirm?: Promise<boolean>;
     },
   ): AnswerRunInput {
-    const userContext = this.deps.userContext?.();
+    const userContext = [
+      this.deps.userContext?.() ?? '',
+      run.pcMapText
+        ? `What is open on the user's PC right now (windows front first, with when each was last used and any unsaved changes; browser tabs indented). Use it for questions about what is open, where something is, or what they were doing:\n${run.pcMapText}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     return {
       chat: p.chat,
       speech: p.speech,
@@ -654,6 +678,11 @@ export class Orchestrator {
         this.fail(run, e, 'config');
         return;
       }
+    }
+    // The PC map started with the key press; wait a moment for it if it isn't in yet.
+    if (run.pcMap && run.pcMapText === undefined) {
+      const map = await Promise.race([run.pcMap, delay(PC_MAP_WAIT_MS).then(() => null)]);
+      run.pcMapText = map?.length ? map.join('\n').slice(0, 6000) : '';
     }
     run.latency.setMeta('chat', chat.id);
     if (chat.model) run.latency.setMeta('model', chat.model);

@@ -460,7 +460,8 @@ Actions:
   (a whole page of search results), not one per step.
 - find_files: {"name":"resume"} finds files and folders whose name contains those words anywhere in
   the user's folders (Desktop, Documents, Downloads, their projects), newest first, into your notes:
-  use it for "where is my…" and to open a file the user names.
+  use it for "where is my…" and to open a file the user names. The user's own files are on this PC:
+  never search the web for them.
 - list_files: {"path":"C:\\…"} reads a folder's files (name, size, date modified) into your notes:
   use it to find the biggest or newest file, count files, or plan a sort, instead of reading Explorer.
 - move_files: {"from":"C:\\…","pattern":"*.pdf","to":"C:\\…\\PDFs"} moves every matching file in
@@ -470,7 +471,8 @@ Actions:
   (.xlsx) file in Documents\\Clicky with every row you noted (or give "rows": [[…],[…]] yourself).
   The next step tells you where it was saved; open it with {"path": …} so the user sees it.
 - close_window: {"title":"…"} closes one window by its exact title from "Open windows". This is
-  the reliable way to close windows: use it once per window instead of hunting for X buttons. Never
+  the only way to close a window: never click a window's X or press alt+f4 (Clicky checks for
+  unsaved work only on close_window). Use it once per window. Never
   close a window marked "unsaved changes" (Clicky refuses; the user's work would be lost). If an app
   asks to save changes, choose "Cancel" (never "Don't save"), note the window as having unsaved work
   and move on; tell the user about it at the end. Tidying up (closing tabs and windows the user
@@ -807,7 +809,11 @@ Steps can use only these actions (each has "say": a few words the user sees, lik
 - {"action":"type","text":"…"} types into the box that has the focus.
 - {"action":"key","keys":"ctrl+s"} presses a key or shortcut.
 - {"action":"wait","ms":1500} waits for a page or app to load.
-- {"action":"close_window","title":"…"} and {"action":"close_tab","tab":"…","window":"…"}.
+- {"action":"close_window","title":"…"} and {"action":"close_tab","tab":"…","window":"…"}. These are the
+  only ways to close windows and tabs: never click a window's X or press alt+f4.
+- {"action":"find_files","name":"resume"} finds the user's own files and folders by name ("where is my…",
+  a file they name): never search the web for the user's own files. {"action":"list_files","path":"C:\\\\…"}
+  reads a folder. Plan up to it and stop: Clicky reads what was found and answers.
 - {"action":"note","text":"…"} writes something down for the user.
 - {"action":"done","say":"what was done, in one or two short sentences"} ends the plan when the
   steps above surely finish the task.
@@ -850,6 +856,26 @@ export function parsePlan(reply: string): { understood: string; steps: AgentActi
   }
   return { understood: str(o['understood'], 200), steps };
 }
+
+/** Sites the user means in their browser even if an app of that name is installed. */
+const BROWSER_FIRST = new Set([
+  'youtube',
+  'linkedin',
+  'instagram',
+  'facebook',
+  'twitter',
+  'x',
+  'reddit',
+  'gmail',
+  'github',
+  'amazon',
+  'netflix',
+  'google',
+  'wikipedia',
+  'naukri',
+  'naukrigulf',
+  'wellfound',
+]);
 
 /** Websites people ask to open by name, and their addresses. */
 const SITES: Record<string, string> = {
@@ -905,7 +931,13 @@ export function quickOpen(goal: string, apps: readonly string[] | undefined): Ag
   const what = m?.[1]?.trim().toLowerCase();
   if (!what || what.split(/\s+/).length > 4) return null;
   const asSite = /\b(?:website|site|web|in comet|in chrome|in the browser)\b/i.test(goal);
-  const app = asSite ? undefined : apps?.find((a) => a.toLowerCase() === what || a.toLowerCase() === `${what} desktop`);
+  // Social sites and the like open in the browser where the user is signed in, even when a web
+  // app of the same name is installed; real desktop apps (WhatsApp, Claude, Spotify) open as apps.
+  const browserFirst = BROWSER_FIRST.has(what.replace(/\.com$/, ''));
+  const app =
+    asSite || browserFirst
+      ? undefined
+      : apps?.find((a) => a.toLowerCase() === what || a.toLowerCase() === `${what} desktop`);
   if (app) {
     return [
       { type: 'open', app, url: '', path: '', say: `Opening ${app}`, risky: false },
