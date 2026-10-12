@@ -89,7 +89,7 @@ export type MainToEngine =
 
 export type OverlayOp =
   | { op: 'state'; state: InteractionState }
-  | { op: 'point'; target: MappedPoint; label: string }
+  | { op: 'point'; target: MappedPoint; label: string; snap?: boolean }
   | { op: 'draw'; shape: MappedShape }
   | { op: 'message'; text: string; kind: 'error' | 'info' }
   | { op: 'caption'; text: string };
