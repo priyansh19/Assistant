@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { applyInstructionPack } from './instruction-pack';
 import { app, Notification } from 'electron';
 import { holdKeyLabel, type Settings } from '@clicky/core';
@@ -67,6 +69,18 @@ if (!app.requestSingleInstanceLock()) {
     // Demo mode only: let the smoke-test harness drive the loop without a real keyboard.
     if (DEMO || process.env['CLICKY_TEST_HOOKS'] === '1')
       (globalThis as { __clicky?: unknown }).__clicky = { controller: ctl, dashboard, settings, history };
+    // The live suite at night (volume down): requests arrive as a file instead of out loud.
+    if (process.env['CLICKY_TEST_HOOKS'] === '1') {
+      const drop = join(app.getPath('userData'), 'test-ask.txt');
+      setInterval(() => {
+        if (!existsSync(drop)) return;
+        const question = readFileSync(drop, 'utf8').trim();
+        rmSync(drop, { force: true });
+        if (!question) return;
+        log.info(`test ask: ${question.slice(0, 200)}`);
+        void ctl.ask(question, 'typed');
+      }, 500);
+    }
 
     tray = new AppTray({
       openDashboard: (page) => dashboard.open(page),

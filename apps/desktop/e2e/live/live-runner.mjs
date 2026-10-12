@@ -85,6 +85,13 @@ const results = [];
 // Tasks that close or minimise windows touch the user's own apps: only with --destructive, when
 // the user said the PC is free for it.
 const destructive = process.argv.includes('--destructive');
+// --typed: requests go to Clicky as a file (Clicky started with CLICKY_TEST_HOOKS=1) instead of out loud,
+// for runs at night with the volume down. Everything after hearing the request is the same.
+const typedAsks = process.argv.includes('--typed');
+const ask = (text, wavPath) => {
+  if (typedAsks) fs.writeFileSync(path.join(userData, 'test-ask.txt'), text);
+  else ps(`Invoke-Spoken '${wavPath}'`);
+};
 /** Put the frozen learned state back, set the agent model and restart Clicky. */
 async function freshClicky() {
   if (!freeze) return;
@@ -106,7 +113,7 @@ async function freshClicky() {
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   settings.agentModel = model ?? '';
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 1));
-  ps(`Start-Process "$env:LOCALAPPDATA\\Programs\\clicky\\Clicky.exe"; Start-Sleep 12`);
+  ps(`$env:CLICKY_TEST_HOOKS = '1'; Start-Process "$env:LOCALAPPDATA\\Programs\\clicky\\Clicky.exe"; Start-Sleep 12`);
 }
 
 for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructive || !x.destructive))) {
@@ -114,13 +121,13 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
   say(`--- ${t.id}: ${t.say}${model ? ` [model ${model}]` : ''}`);
   for (const s of t.setup ?? []) say(`setup: ${ps(s).slice(0, 200)}`);
   const wav = path.join(outDir, `${t.id}.wav`);
-  ps(`New-SpokenWav '${t.say.replace(/'/g, "''")}' '${wav}'`);
+  if (!typedAsks) ps(`New-SpokenWav '${t.say.replace(/'/g, "''")}' '${wav}'`);
   const before = history()[0]?.id;
   const offset = fs.statSync(logFile).size;
   const t0 = Date.now();
   // An administrator window in front (Task Manager) hides the hold key from Clicky.
-  if (/taskmgr|administrator/i.test(ps('[LiveWin]::Front()'))) ps('[LiveWin]::FocusNormal()');
-  ps(`Invoke-Spoken '${wav}'`);
+  if (/taskmgr|administrator|teamviewer/i.test(ps('[LiveWin]::Front()'))) ps('[LiveWin]::FocusNormal()');
+  ask(t.say, wav);
   // Wait for the answer or task to finish (a new history entry), answering any "allow?" prompts.
   let entry = null;
   let answered = 0;
@@ -168,11 +175,11 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
   if (entry && t.then) {
     await wait(3000);
     const wav2 = path.join(outDir, `${t.id}-then.wav`);
-    ps(`New-SpokenWav '${t.then.replace(/'/g, "''")}' '${wav2}'`);
+    if (!typedAsks) ps(`New-SpokenWav '${t.then.replace(/'/g, "''")}' '${wav2}'`);
     const first = entry;
     entry = null;
     say(`follow-up: ${t.then}`);
-    ps(`Invoke-Spoken '${wav2}'`);
+    ask(t.then, wav2);
     for (const t1 = Date.now(); Date.now() - t1 < limit;) {
       await wait(1500);
       const h = history()[0];
