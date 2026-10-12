@@ -93,6 +93,7 @@ Rules:
 - A **streaming** parser releases speakable text sentence by sentence and holds back anything that could be the start of a tag, so TTS never speaks tag text.
 - Coordinates are in the coordinate space of the screenshot image sent to the model (after any downscale). Mapping: image px → display physical px → Electron DIP (via `screen` scale factor and display bounds, including negative origins) → overlay window local coords.
 - Validate: known screen index, inside bounds after mapping; otherwise speak the answer and skip pointing (logged, not silent).
+- **Extension (2026-10-12): `[TASK:goal]`.** With agent mode on, the answer model decides whether a request is something to do. If it is, it replies with only `[TASK:goal]`: the request restated in full, with dropped words put back, "this/that/it" resolved from the screen and follow-ups resolved from earlier turns. Nothing is spoken and the goal goes to the agent. This replaces the regex `actionGoal` route and its "Do this for you?" prompt; "Clicky, <request>" still goes straight to the agent with no model call. Reason: without the name the regex sent only 45 of 123 catalogue tasks to the agent, and the model sees the screen. Questions keep `[POINT]` first, so the answer path is not slower; a task routed this way costs one answer-model first token before the agent starts.
 
 ### 3.3 Speed: beat the official Clicky (owner requirement, 2026-10-10)
 
