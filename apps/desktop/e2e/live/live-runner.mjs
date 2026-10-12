@@ -14,12 +14,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
+import { DRAWING } from './tasks-drawing.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
 const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING].map((t) =>
-  process.argv.includes('--nameless') ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) } : t,
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING].map((t) =>
+  process.argv.includes('--nameless')
+    ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }
+    : t,
 );
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -152,6 +155,13 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
       const h = history()[0];
       if (h && h.id !== before && h.at >= t0 - 1000) entry = { ...h, outcome: 'timeout' };
     }
+  }
+  // A screenshot while the marks are still up, for review.
+  if (entry && t.shot) {
+    const png = path.join(outDir, `${t.id}.png`);
+    ps(
+      `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); (New-Object System.Drawing.Bitmap $bmp, 1100, ([int](1100 * $b.Height / $b.Width))).Save('${png}')`,
+    );
   }
   // A follow-up prompt (`then`), spoken once the first one is done.
   if (entry && t.then) {
