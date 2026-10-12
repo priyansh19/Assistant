@@ -64,6 +64,8 @@ let lastFrame = performance.now();
 let idleSince = 0; // when the interaction finished, for dismissing the label
 let message: { text: string; kind: 'error' | 'info'; until: number } | null = null;
 let pendingPoint: { p: OverlayPoint; label: string } | null = null;
+/** A point that arrived while the pen was busy, flown to when the drawing finishes. */
+let afterDrawing: { at: Pt; label: string } | null = null;
 /**
  * Marks from the answer (or the tray's example), drawn one after another like a pen would: each
  * has a start time after the previous one ends, and the companion rides the tip while it draws.
@@ -555,7 +557,18 @@ function frame(now: number): void {
 
   // Draw the marks first: that tells us where the pen is this frame.
   drawShapes(now);
-  const drawing = pen !== null && mode.kind === 'follow';
+  // The pen wins over pointing: a model often points at what it is about to draw. The point is
+  // remembered and the companion flies back to it once the drawing is done.
+  const drawing = pen !== null && !anchor;
+  if (drawing && mode.kind !== 'follow') {
+    if (mode.kind === 'point') afterDrawing = { at: mode.at, label: mode.label };
+    else if (mode.then === 'point' && pendingPoint) afterDrawing = { at: mode.to, label: pendingPoint.label };
+    pendingPoint = null;
+    mode = { kind: 'follow' };
+  } else if (!drawing && afterDrawing && mode.kind === 'follow') {
+    startFlight(afterDrawing.at, 'point', afterDrawing.label);
+    afterDrawing = null;
+  }
 
   if (drawing && pen) {
     // The companion is the pen: its tip rides the line being drawn.
@@ -696,12 +709,14 @@ window.clicky.onState((s) => {
     message = null;
     drawings = [];
     penFree = 0;
+    afterDrawing = null;
   }
   kick();
 });
 
 window.clicky.onPoint((p) => {
-  startFlight({ x: p.x, y: p.y }, 'point', p.label);
+  if (pen) afterDrawing = { at: { x: p.x, y: p.y }, label: p.label };
+  else startFlight({ x: p.x, y: p.y }, 'point', p.label);
   kick();
 });
 

@@ -64,10 +64,7 @@ export function agentGoal(question: string): string | null {
   const goal = (woke ? rest : (m?.[1] ?? '')).trim().replace(/[.!]+$/, '');
   if (goal.length < 3 || QUESTION_START.test(goal)) return null;
   // "Draw a star on my screen" is drawn by Clicky itself, over the screen; "draw … in Paint" is a task.
-  if (
-    /^(?:please\s+)?(?:draw|sketch|circle|highlight|underline|mark)\b/i.test(goal) &&
-    !/\bin\s+\w+/i.test(goal.replace(/\bon (?:my|the) screen\b/i, ''))
-  )
+  if (/^(?:please\s+)?(?:draw|sketch|circle|highlight|underline|mark)\b/i.test(goal) && !DRAW_APP.test(goal))
     return null;
   return goal;
 }
@@ -76,6 +73,10 @@ const ACTION_START =
   /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:open|launch|close|scroll|click|type|search(?:\s+for)?|go\s+to|navigate\s+to|visit|play|pause|switch\s+to|fill\s+(?:in|out)|rename|move|turn\s+(?:on|off))\b.*)$/is;
 
 /** Drawing inside an app ("draw a house in Paint") is a task; drawing on the screen is an answer. */
+/** A drawing app named in the request ("in Paint", "on the whiteboard"): drawing there is a task. */
+const DRAW_APP =
+  /\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+|microsoft\s+)?(?:paint(?:\s*3d)?|whiteboard|excalidraw|tldraw|canva|figma|photoshop|krita|gimp)\b/i;
+
 const DRAW_IN_APP =
   /^(?:(?:hey\s+)?clicky[\s,]+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?((?:draw|sketch|paint|doodle)\b.*\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+|microsoft\s+)?(?:paint(?:\s*3d)?|whiteboard|excalidraw|tldraw|canva|figma|photoshop|krita|gimp)\b.*)$/is;
 

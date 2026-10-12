@@ -162,6 +162,10 @@ const ASKS = /^(?:how|where|what|what's|why|when|which|who|is|are|does|do|did|ca
 const DRAW_REQUEST =
   /\b(?:draw|sketch|circle|underline|highlight|cross out|tick|write)\b[^.?!]*\b(?:on|over|around|across) (?:my|the|this) screen\b|^(?:\W*(?:hey\s+)?click(?:y|ey)\W+)?(?:please\s+)?(?:draw|sketch|circle|underline|highlight)\b/i;
 
+/** Asking Clicky to draw over the screen. */
+const DRAW_REQUEST =
+  /\b(?:draw|sketch|circle|underline|highlight|cross out|tick|write)\b[^.?!]*\b(?:on|over|around|across) (?:my|the|this) screen\b|^(?:\W*(?:hey\s+)?click(?:y|ey)\W+)?(?:please\s+)?(?:draw|sketch|circle|underline|highlight)\b/i;
+
 const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, answerMs: 90000 };
 
 /** Keep recording this long after key-up so the last syllable isn't clipped in the audio pipeline. */
