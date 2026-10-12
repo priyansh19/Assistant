@@ -12,7 +12,7 @@
  * nothing late from an old interaction can touch the new one.
  */
 
-import { actionGoal, agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
+import { agentGoal, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
 import { bareGreeting, memoryNote } from './memory.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
@@ -357,7 +357,7 @@ export class Orchestrator {
         run.latency.event('answer', 'cache-warm-sent');
         const userContext = this.deps.userContext?.();
         warm({
-          system: answerSystemPrompt(s, userContext ? { userContext } : {}),
+          system: answerSystemPrompt(s, { ...(userContext ? { userContext } : {}), ...this.taskRouting() }),
           history: run.history,
           images: s.images,
           signal,
@@ -562,6 +562,7 @@ export class Orchestrator {
       ...(run.speed.eagerFirstClause ? { eagerFirstClause: true } : {}),
       ...(p.confirm ? { confirm: p.confirm } : {}),
       ...(run.cacheWarmed ? { cache: true } : {}),
+      ...this.taskRouting(),
       hooks: {
         point: (target, label) => this.deps.overlay.point(target, label),
         draw: (shape) => this.deps.overlay.draw?.(shape),
@@ -643,13 +644,9 @@ export class Orchestrator {
     }
     if (agent) {
       spec?.discard();
-      const go = !agent.ask || ((await this.deps.confirm?.(`Do this for you: ${agent.goal}`, signal)) ?? false);
-      if (signal.aborted) return;
-      if (go) {
-        await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
-        return;
-      }
-      // Not now: answer the question the usual way (guide and point).
+      run.latency.setMeta('routedBy', 'name');
+      await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
+      return;
     }
 
     let result: AnswerRunResult;
@@ -690,6 +687,14 @@ export class Orchestrator {
       this.machine.dispatch({ type: 'cancel', reason: 'no speech detected' });
       return;
     }
+    if (result.outcome === 'task' && result.task) {
+      // The answer model saw the screen and the conversation and says this is something to do.
+      // Its goal is the request restated in full (references resolved, dropped words put back).
+      run.latency.setMeta('routedBy', 'model');
+      const cfg = this.deps.agent?.();
+      await this.runAgentTask(run, chat, speech, result.task, cfg?.confirm ?? 'risky');
+      return;
+    }
     // A very short answer can finish before first audio was reported (e.g. muted output).
     if (this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
     run.latency.mark('done');
@@ -698,19 +703,22 @@ export class Orchestrator {
   }
 
   /** The task, if this question asks agent mode to do something and agent mode is on. */
-  private agentRequest(
-    question: string,
-  ): { goal: string; confirm: AgentConfirmMode; ask: boolean; setup?: boolean } | null {
+  private agentRequest(question: string): { goal: string; confirm: AgentConfirmMode; setup?: boolean } | null {
     const cfg = this.deps.agent?.();
     if (!cfg) return null;
     const goal = agentGoal(question);
     // Asked by name while agent mode isn't set up: offer the setup instead of acting.
-    if (goal && (!cfg.enabled || cfg.ready === false)) return { goal, confirm: cfg.confirm, ask: false, setup: true };
+    if (goal && (!cfg.enabled || cfg.ready === false)) return { goal, confirm: cfg.confirm, setup: true };
     if (!cfg.enabled || cfg.ready === false) return null;
-    if (goal) return { goal, confirm: cfg.confirm, ask: false };
-    // Phrased as a request but without "Agent": offer to do it, and only start once the user agrees.
-    const action = this.deps.confirm ? actionGoal(question) : null;
-    return action ? { goal: action, confirm: cfg.confirm, ask: true } : null;
+    // The name plus a request goes straight to the agent with no model call. Everything else goes
+    // to the answer model, which decides from the screen whether it's a task ([TASK:goal]).
+    return goal ? { goal, confirm: cfg.confirm } : null;
+  }
+
+  /** Let the answer model hand requests to agent mode, when agent mode is on and can act here. */
+  private taskRouting(): { tasks?: true } {
+    const cfg = this.deps.agent?.();
+    return cfg?.enabled && cfg.ready !== false && this.deps.input && this.deps.confirm ? { tasks: true } : {};
   }
 
   private async dictate(run: Run, listen: ListenStage): Promise<void> {
