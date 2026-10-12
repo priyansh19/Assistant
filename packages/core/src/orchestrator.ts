@@ -153,7 +153,7 @@ const CANT_SEE =
  * the request was a task, so hand it to the agent instead of leaving the user with that answer.
  */
 const NOT_DONE =
-  /\b(?:i(?:'ve| have)? (?:opened|created|made|written|typed|saved|closed|moved|copied)|i (?:can'?t|cannot|am unable to|'m unable to|am not able to) (?:open|create|make|access|write|type|save|move|copy|check|control|browse|go to)|you can (?:open|go to|find|access) (?:it|them|\w+)(?: \w+){0,4} by (?:clicking|opening|going|pressing|typing))\b/i;
+  /\b(?:i(?:'ve| have)? (?:opened|created|made|written|typed|saved|closed|moved|copied)|i (?:can'?t|cannot|am unable to|'m unable to|am not able to) (?:open|create|make|access|write|type|save|move|copy|check|control|browse|go to|provide|give|get|look up|search)|you can (?:open|go to|find|access) (?:it|them|\w+)(?: \w+){0,4} by (?:clicking|opening|going|pressing|typing))\b/i;
 
 const DEFAULT_TIMEOUTS: Timeouts = { transcriptMs: 6000, firstTokenMs: 20000, answerMs: 90000 };
 
