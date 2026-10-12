@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { BrowserWindow, ipcMain, screen } from 'electron';
+import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import { IPC } from '../shared/ipc';
 
 const WIDTH = 250;
@@ -16,10 +16,13 @@ export class AllowOrb {
   private win: BrowserWindow | null = null;
 
   constructor(onOff: () => void) {
-    ipcMain.on(IPC.orbOff, () => onOff());
-    ipcMain.on(IPC.orbHover, (_e, on: unknown) => {
+    // Only the orb's own window may send these.
+    const mine = (e: IpcMainEvent): boolean =>
+      !!this.win && !this.win.isDestroyed() && e.sender === this.win.webContents;
+    ipcMain.on(IPC.orbOff, (e) => mine(e) && onOff());
+    ipcMain.on(IPC.orbHover, (e, on: unknown) => {
       // Catch the mouse only while it's over the orb or its card.
-      this.win?.setIgnoreMouseEvents(on !== true, { forward: true });
+      if (mine(e)) this.win?.setIgnoreMouseEvents(on !== true, { forward: true });
     });
   }
 
