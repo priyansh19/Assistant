@@ -18,6 +18,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('About the user: new to Excel');
     // Parity with the official Clicky's voice rules: long answers on request, no dead-end offers.
     expect(prompt).toContain('give the full explanation');
+    expect(prompt).toContain('150 to 300');
     expect(prompt).toContain('planting a\n  seed');
   });
 

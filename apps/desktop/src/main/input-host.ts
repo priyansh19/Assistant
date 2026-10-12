@@ -171,7 +171,9 @@ export class InputHost {
     if (!this.driver || !label.trim()) return null;
     const p = screen.dipToScreenPoint(at);
     const timeout = delay(timeoutMs).then(() => null);
-    const live = await Promise.race([this.driver.locate(label, p.x, p.y).catch(() => null), timeout]);
+    // The helper stops searching a little before the overall timeout.
+    const search = this.driver.snap(label, p.x, p.y, Math.max(100, timeoutMs - 250)).catch(() => null);
+    const live = await Promise.race([search, timeout]);
     if (!live || Math.hypot(live.x - p.x, live.y - p.y) <= 6) return null;
     return screen.screenToDipPoint(live);
   }

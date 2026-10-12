@@ -337,6 +337,101 @@ public static class ClickyInput {
     return best;
   }
 
+  // ---- Answer pointing: land on the control the model named, near where it guessed.
+  [StructLayout(LayoutKind.Sequential)] struct PT { public int X; public int Y; }
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(PT p);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  // Joining words that say nothing about which control it is ("address and search bar").
+  static readonly string[] Filler = { "and", "the", "for", "with", "your", "this", "that" };
+  static string[] Words(string s) {
+    var list = new System.Collections.Generic.List<string>();
+    foreach (var w in Tokens(s)) if (Array.IndexOf(Filler, w) < 0) list.Add(w);
+    return list.ToArray();
+  }
+  // What kind of control the label describes ("File menu", "address bar"), or null.
+  static System.Windows.Automation.ControlType[] KindHint(string label) {
+    var t = System.Windows.Automation.ControlType.Edit;
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\bmenu\b")) return new[] { System.Windows.Automation.ControlType.MenuItem, System.Windows.Automation.ControlType.Menu };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(bar|field|box|search|input)\b") && !label.Contains("toolbar") && !label.Contains("scroll")) return new[] { t, System.Windows.Automation.ControlType.ComboBox };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\btab\b")) return new[] { System.Windows.Automation.ControlType.TabItem };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(button|icon)\b")) return new[] { System.Windows.Automation.ControlType.Button, System.Windows.Automation.ControlType.SplitButton };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\blink\b")) return new[] { System.Windows.Automation.ControlType.Hyperlink };
+    if (System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(checkbox|check box|toggle)\b")) return new[] { System.Windows.Automation.ControlType.CheckBox };
+    return null;
+  }
+  // How far (physical px) from the model's guess a control may be and still be the one it meant.
+  const double SnapRadius = 320;
+  // Name match: 3 = the same words ("File" for "File menu"), 2 = every wanted word is in a short
+  // name ("Address and search bar" for "address bar"), 1.5 = a one-or-two word name made only of
+  // wanted words ("Address" for "address bar"); anything looser doesn't count.
+  static double NameScore(string name, string[] want) {
+    var have = Words(name);
+    if (have.Length == 0) return 0;
+    int found = 0;
+    foreach (var w in want) if (Array.IndexOf(have, w) >= 0) found++;
+    int named = 0;
+    foreach (var h in have) if (Array.IndexOf(want, h) >= 0) named++;
+    if (found == want.Length && named == have.Length) return 3;
+    if (found == want.Length && have.Length <= want.Length + 3) return 2;
+    if (named == have.Length && have.Length <= 2 && named > 0) return 1.5;
+    return 0;
+  }
+  // The best control for an answer's point: every candidate under the point and in the window
+  // there, the window in front and the taskbar is scored on its name, its kind and its distance,
+  // instead of taking the first loose match. Web page content isn't searched (slow, and the model's
+  // point is better there than a guess from link text). Physical px "x y", or "".
+  public static string Snap(string name, int x, int y, int budgetMs) {
+    Aware();
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    string label = name.ToLowerInvariant();
+    var want = Words(label);
+    if (want.Length == 0) return "";
+    var kinds = KindHint(label);
+    string best = ""; double bestScore = 0;
+    var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
+    Func<System.Windows.Automation.AutomationElement, bool> consider = (el) => {
+      System.Windows.Rect r; string n; System.Windows.Automation.ControlType kind;
+      try { r = el.Current.BoundingRectangle; n = el.Current.Name ?? ""; kind = el.Current.ControlType; } catch { return false; }
+      if (r.IsEmpty || r.Width < 2 || r.Height < 2) return false;
+      // Outside the search area: neither it nor (normally) anything inside it can be the one.
+      double ox = Math.Max(0, Math.Max(r.Left - x, x - r.Right)), oy = Math.Max(0, Math.Max(r.Top - y, y - r.Bottom));
+      if (ox * ox + oy * oy > SnapRadius * SnapRadius) return false;
+      bool wide = kind == System.Windows.Automation.ControlType.Edit || kind == System.Windows.Automation.ControlType.ComboBox;
+      bool sized = wide ? r.Width <= 2600 && r.Height <= 120 : r.Width <= 420 && r.Height <= 160;
+      if (sized && n.Length > 0) {
+        double s = NameScore(n, want);
+        if (s > 0) {
+          if (kinds != null && Array.IndexOf(kinds, kind) >= 0) s += 1;
+          double cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+          // Distance to the control's box (0 when the guess is on it), as a tie-breaker.
+          s -= Math.Sqrt(ox * ox + oy * oy) / SnapRadius;
+          if (s > bestScore) { bestScore = s; best = ((int)cx) + " " + ((int)cy); }
+        }
+      }
+      return kind != System.Windows.Automation.ControlType.Document;
+    };
+    try {
+      var e = System.Windows.Automation.AutomationElement.FromPoint(new System.Windows.Point(x, y));
+      for (int i = 0; e != null && i < 6; i++) { consider(e); e = walker.GetParent(e); }
+    } catch { }
+    var roots = new System.Collections.Generic.List<IntPtr>();
+    var under = GetAncestor(WindowFromPoint(new PT { X = x, Y = y }), 2);
+    foreach (var h in new[] { under, GetForegroundWindow(), FindWindow("Shell_TrayWnd", null) })
+      if (h != IntPtr.Zero && !roots.Contains(h)) roots.Add(h);
+    var queue = new System.Collections.Generic.Queue<System.Windows.Automation.AutomationElement>();
+    foreach (var h in roots) { try { queue.Enqueue(System.Windows.Automation.AutomationElement.FromHandle(h)); } catch { } }
+    int visited = 0;
+    while (queue.Count > 0 && watch.ElapsedMilliseconds < budgetMs && ++visited < 3000) {
+      var el = queue.Dequeue();
+      if (!consider(el) && visited > roots.Count) continue;
+      try {
+        for (var c = walker.GetFirstChild(el); c != null && watch.ElapsedMilliseconds < budgetMs; c = walker.GetNextSibling(c)) queue.Enqueue(c);
+      } catch { }
+    }
+    // An exact name, or a close one of the right kind; a loose name alone isn't trusted.
+    return bestScore >= 1.5 ? best : "";
+  }
+
   // The text caret in physical screen pixels: "x y height", or "" when the app doesn't expose one.
   public static string Caret() {
     Aware();
@@ -394,6 +489,7 @@ while ($true) {
       'back'   { [ClickyInput]::Backspace([int]$p[2]) }
       'fg'     { $out = [ClickyInput]::Foreground() }
       'caret'  { $out = [ClickyInput]::Caret() }
+      'snap'   { $out = [ClickyInput]::Snap([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4], [int]$p[5]) }
       'locate' { $out = [ClickyInput]::Locate([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4]) }
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
       'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
@@ -568,6 +664,11 @@ export function createWin32InputDriver(): InputDriver {
       const r = await send('fg');
       const [a, b] = r.split(' ');
       return a === undefined || a === '' ? null : { process: b64(a), title: b64(b ?? '') };
+    },
+    snap: async (name, x, y, budgetMs) => {
+      const r = await send(`snap ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)} ${int(budgetMs)}`);
+      const [lx, ly] = r.split(' ').map(Number);
+      return lx === undefined || ly === undefined || !Number.isFinite(lx + ly) ? null : { x: lx, y: ly };
     },
     locate: async (name, x, y) => {
       const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
