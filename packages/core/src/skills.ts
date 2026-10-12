@@ -41,6 +41,12 @@ working across several websites in a row, and turning what you find into files (
   save_sheet once at the end and open the saved file so the user sees it.
 - Report what you found in "say" when you finish: numbers, names, titles. The user hears it.
 
+## Shopping and other sites
+- If a shop hides prices or says an item doesn't ship to the user's country, switch to the local
+  store for the user's region (for example amazon.in or amazon.ae) instead of opening each product.
+- Read prices and details from the results list; open a product page only when the list doesn't
+  show what you need.
+
 ## Windows and many similar steps
 - "Open windows" lists every window, front first. Use it to know what's open and to close windows
   by title with close_window, one per step, instead of hunting for X buttons.
