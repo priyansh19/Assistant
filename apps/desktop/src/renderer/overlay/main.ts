@@ -34,7 +34,15 @@ function followOffset(): { x: number; y: number } {
   return { x: POINTER_BODY.x + d + half, y: POINTER_BODY.y + d + half };
 }
 
-let config: OverlayConfig = { color: 'blue', size: 'medium', showLabels: true, paused: false };
+let config: OverlayConfig = { color: 'blue', size: 'medium', showLabels: true, showCompanion: true, paused: false };
+/**
+ * 0–1, how present the companion is. Always 1 with "Always show Clicky" on; otherwise it fades in
+ * when Clicky is used and out a second after everything (voice, pointing, drawing) has finished.
+ */
+let presence = 1;
+const LINGER_MS = 1000;
+const FADE_IN_PER_MS = 1 / 150;
+const FADE_OUT_PER_MS = 1 / 400;
 let state: InteractionState = 'idle';
 let cursor: { x: number; y: number } | null = null;
 let level = 0;
@@ -686,20 +694,35 @@ function frame(now: number): void {
     visible = false;
     pos = null;
   }
-  if (visible && pos) {
-    drawTriangle(pos, heading, scale, config.paused ? 0.4 : 1, trace);
+  const resting = state === 'idle' || state === 'cancelled' || state === 'error';
+  const inUse =
+    !resting ||
+    mode.kind !== 'follow' ||
+    drawings.length > 0 ||
+    message !== null ||
+    (idleSince > 0 && now - idleSince < LINGER_MS);
+  const wantPresence = config.showCompanion || inUse ? 1 : 0;
+  presence =
+    wantPresence > presence
+      ? Math.min(1, presence + dt * FADE_IN_PER_MS)
+      : Math.max(0, presence - dt * FADE_OUT_PER_MS);
+  if (visible && pos && presence > 0.01) {
+    ctx.save();
+    ctx.globalAlpha = presence;
+    drawTriangle(pos, heading, scale, (config.paused ? 0.4 : 1) * presence, trace);
     if (state === 'listening' && mode.kind === 'follow') drawWaveform(pos);
+    ctx.restore();
   }
   if (message && now > message.until) message = null;
   if (message && pos) drawBubble(message.text, pos, message.kind, message.since);
 
   // Stop the loop when nothing is moving; the last frame stays on the canvas until the next input.
-  const resting = state === 'idle' || state === 'cancelled' || state === 'error';
   const settled =
     mode.kind === 'follow' &&
     (!visible || (pos !== null && target !== null && Math.hypot(target.x - pos.x, target.y - pos.y) < 0.3));
   // A message only keeps the loop alive while it's visible here (the cursor may be on another display).
-  if (!settled || !resting || drawings.length > 0 || (message !== null && pos !== null)) requestAnimationFrame(frame);
+  if (!settled || !resting || drawings.length > 0 || (message !== null && pos !== null) || presence !== wantPresence)
+    requestAnimationFrame(frame);
   else running = false;
 }
 

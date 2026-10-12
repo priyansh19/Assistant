@@ -48,6 +48,15 @@ export interface ControllerHooks {
 
 /** A typed question that outlives this is answered with an error rather than left hanging. */
 const ASK_TIMEOUT_MS = 180_000;
+/**
+ * The first-run look-around (the official Clicky's onboarding demo prompt, as a question): one
+ * specific, named thing near the middle of the screen and a few playful words about it.
+ */
+const HELLO_QUESTION =
+  "You're meeting me for the first time. Look around my screen and point at ONE specific thing you can name, " +
+  'near the middle of the screen (not the taskbar, edges or corners): an app, a file name, a word, a picture. ' +
+  "Say only a short, playful three to six word comment about it, all lowercase, without quoting the screen's text.";
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 /** Longest wait for an answer's point to be matched to a real control (the flight takes ~0.4–1.1 s). */
 const SNAP_TIMEOUT_MS = 900;
 
@@ -476,6 +485,29 @@ export class Controller {
       );
     });
   }
+
+  /**
+   * "Meet Clicky", after setup and from the tray (the official Clicky's first run, without its video):
+   * it says hi beside the pointer, looks around the screen and flies to one specific thing with a
+   * playful comment, then shows how to start. Skips the look-around until the API keys are in.
+   */
+  async sayHello(): Promise<void> {
+    if (this.greeting) return;
+    this.greeting = true;
+    try {
+      this.overlays.message("Hey! I'm Clicky.", 'info');
+      await wait(2600);
+      if (this.missingKeys().length === 0 && isResting(this.current.state)) {
+        const r = await this.ask(HELLO_QUESTION, 'action');
+        if (r?.outcome === 'answered') await wait(1200);
+      }
+      if (isResting(this.current.state))
+        this.overlays.message(`Hold ${this.holdKeyLabel()} and introduce yourself.`, 'info');
+    } finally {
+      this.greeting = false;
+    }
+  }
+  private greeting = false;
 
   /** Voice preview for the dashboard. */
   speakSample(): Promise<void> {

@@ -263,6 +263,7 @@ function renderControls(s: Settings): void {
   check('micAlwaysReady', s.micAlwaysReady);
   set('cursorSize', s.cursorSize);
   check('showPointLabels', s.showPointLabels);
+  check('showCompanion', s.showCompanion);
   check('eagerFirstClause', s.eagerFirstClause);
   check('speculativeAnswer', s.speculativeAnswer);
   check('warmImageCache', s.warmImageCache);
@@ -1777,6 +1778,7 @@ async function init(): Promise<void> {
   bindToggle('micAlwaysReady');
   bindSelect('cursorSize');
   bindToggle('showPointLabels');
+  bindToggle('showCompanion');
   bindToggle('eagerFirstClause');
   bindToggle('speculativeAnswer');
   bindToggle('warmImageCache');

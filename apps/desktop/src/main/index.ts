@@ -21,7 +21,13 @@ let controller: Controller | null = null;
 let worker: WorkerHost | null = null;
 
 function overlayConfig(s: Settings): OverlayConfig {
-  return { color: s.cursorColor, size: s.cursorSize, showLabels: s.showPointLabels, paused: s.paused };
+  return {
+    color: s.cursorColor,
+    size: s.cursorSize,
+    showLabels: s.showPointLabels,
+    showCompanion: s.showCompanion,
+    paused: s.paused,
+  };
 }
 
 process.on('uncaughtException', (e) => log.error('uncaught exception', e.stack ?? String(e)));
@@ -47,6 +53,15 @@ if (!app.requestSingleInstanceLock()) {
     controller = new Controller(platform, settings, credentials, history, overlays, worker);
     const dashboard = new DashboardWindow(settings, credentials, history, controller, worker);
     const ctl = controller;
+    /** "Meet Clicky": the dashboard steps aside so Clicky sees (and can point at) the user's screen. */
+    const hello = async (): Promise<void> => {
+      const restore = dashboard.stepAside();
+      try {
+        await ctl.sayHello();
+      } finally {
+        setTimeout(restore, 1500);
+      }
+    };
     // Demo mode only: let the smoke-test harness drive the loop without a real keyboard.
     if (DEMO || process.env['CLICKY_TEST_HOOKS'] === '1')
       (globalThis as { __clicky?: unknown }).__clicky = { controller: ctl, dashboard, settings, history };
@@ -60,6 +75,7 @@ if (!app.requestSingleInstanceLock()) {
       runAction: (id) => void dashboard.runAction(id),
       needsSetup: () => !settings.get().onboardingDone || ctl.missingKeys().length > 0,
       showDrawing: () => overlays?.sketch(),
+      sayHello: () => void hello(),
     });
     controller.onState((s) => tray?.setState(s));
     history.onChange(() => tray?.refresh());
@@ -82,6 +98,8 @@ if (!app.requestSingleInstanceLock()) {
       if (next.holdKey !== prev.holdKey) ctl.startHoldKey();
       if (next.launchAtLogin !== prev.launchAtLogin) ctl.applyLaunchAtLogin(next.launchAtLogin);
       if (next.paused && !prev.paused) ctl.cancel('paused');
+      // Setup just finished: say hi, the way the official Clicky's first run does.
+      if (next.onboardingDone && !prev.onboardingDone) setTimeout(() => void hello(), 800);
       if (
         next.micAlwaysReady !== prev.micAlwaysReady ||
         next.paused !== prev.paused ||

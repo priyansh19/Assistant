@@ -26,6 +26,12 @@ describe('normalizeSettings', () => {
     });
   });
 
+  it('shows the companion all the time unless turned off', () => {
+    expect(DEFAULT_SETTINGS.showCompanion).toBe(true);
+    expect(normalizeSettings({ showCompanion: false }).showCompanion).toBe(false);
+    expect(normalizeSettings({ showCompanion: 'no' }).showCompanion).toBe(true);
+  });
+
   it('merges a partial update onto the current settings', () => {
     const current = normalizeSettings({ holdKey: 'F8', ttsProvider: 'system' });
     expect(normalizeSettings({ launchAtLogin: true }, current)).toMatchObject({
