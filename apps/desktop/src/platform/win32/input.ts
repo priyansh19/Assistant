@@ -153,6 +153,8 @@ public static class ClickyInput {
   // the app fills the screen like the user expects (and the screenshots show all of it).
   // Windows that were open before Clicky opened something (taken with the foreground handle).
   static System.Collections.Generic.HashSet<long> before = new System.Collections.Generic.HashSet<long>();
+  static System.Collections.Generic.Dictionary<long, string> titles = new System.Collections.Generic.Dictionary<long, string>();
+  static string TitleOf(IntPtr h) { var sb = new System.Text.StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); }
   static string ProcOf(IntPtr h) {
     uint pid; GetWindowThreadProcessId(h, out pid);
     try { return System.Diagnostics.Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { return ""; }
@@ -181,10 +183,16 @@ public static class ClickyInput {
         }, IntPtr.Zero);
       }
       if (pick == IntPtr.Zero && waited > 1500 && procs.Length > 0) {
+        // The browser window whose title changed (the new tab opened there), else the first one.
+        IntPtr first = IntPtr.Zero;
         EnumWindows((w, l) => {
-          if (Real(w) && Array.IndexOf(want, ProcOf(w)) >= 0) { pick = w; return false; }
+          if (!Real(w) || Array.IndexOf(want, ProcOf(w)) < 0) return true;
+          if (first == IntPtr.Zero) first = w;
+          string old;
+          if (titles.TryGetValue(w.ToInt64(), out old) && old != TitleOf(w)) { pick = w; return false; }
           return true;
         }, IntPtr.Zero);
+        if (pick == IntPtr.Zero && waited > 2500) pick = first;
       }
       if (pick != IntPtr.Zero) {
         Grant();
@@ -211,7 +219,8 @@ public static class ClickyInput {
   }
   public static long ForegroundHandle() {
     before.Clear();
-    EnumWindows((w, l) => { before.Add(w.ToInt64()); return true; }, IntPtr.Zero);
+    titles.Clear();
+    EnumWindows((w, l) => { before.Add(w.ToInt64()); titles[w.ToInt64()] = TitleOf(w); return true; }, IntPtr.Zero);
     return GetForegroundWindow().ToInt64();
   }
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);

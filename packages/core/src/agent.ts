@@ -488,7 +488,9 @@ const VERIFY_PROMPT = `You check whether an assistant really finished a task on 
 screenshots, the steps it took and its notes. Reply with ONLY one JSON object:
 {"complete": true} if the task is fully done as asked, or
 {"complete": false, "missing": "what is not done yet, in one short sentence"}.
-Be strict about every part of the task, but don't ask for things the task didn't ask for.`;
+Be strict about every part of the task, but don't ask for things the task didn't ask for. The task
+came from speech recognition: names may be spelled differently ("Clicky Test Folders" is the folder
+"ClickyTest/folders"); judge whether what the user meant is done.`;
 
 /** Reasons to give up that only the user can fix; the run doesn't retry these. */
 const NEEDS_USER = /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch/i;
@@ -724,7 +726,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         'You just did this same step and it did not change anything. If the task is done, reply done; otherwise try a different way, such as a keyboard shortcut.';
     if (a.type === 'done') {
       // The final eval: look at the screen once more before telling the user it's done.
-      if ((deps.verifyDone ?? true) && steps.length >= 2) {
+      if ((deps.verifyDone ?? true) && steps.length >= 1) {
         const missing = await verify(deps, goal, steps, notes, a.say);
         if (missing && (await recover(`you said done, but the check found: ${missing}`))) continue;
         if (missing) {

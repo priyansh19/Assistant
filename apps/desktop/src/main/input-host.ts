@@ -85,12 +85,13 @@ export class InputHost {
       case 'open': {
         // Whatever opens is maximised once its window comes to the front (folders and files too).
         const before = await d.foregroundHandle().catch(() => '0');
-        const maximize = (procs = ''): void => void d.maximizeNew(before, 3000, procs).catch(() => undefined);
+        // Waited for (up to 3 s), so the next screenshot shows what was opened, in front.
+        const maximize = (procs = ''): Promise<void> => d.maximizeNew(before, 3000, procs).catch(() => undefined);
         if (action.app) {
           const a = this.findApp(action.app);
           if (a) {
             await d.launch(a.id);
-            return maximize();
+            return await maximize();
           }
           if (!action.url && !action.path) throw new Error(`"${action.app}" isn't installed on this PC.`);
         }
@@ -98,7 +99,7 @@ export class InputHost {
         if (action.url) {
           await shell.openExternal(action.url);
           // A new tab in a browser that's already open: bring the browser to the front.
-          return maximize(BROWSERS);
+          return await maximize(BROWSERS);
         }
         if (action.path) {
           const target = knownFolder(action.path);
@@ -108,7 +109,7 @@ export class InputHost {
           // Explorer opened by shell.openPath often lands behind the window in front.
           if (isFolder(target)) {
             await d.openFolder(target);
-            return maximize();
+            return await maximize();
           }
           const err = await shell.openPath(target);
           if (err) throw new Error(err);
