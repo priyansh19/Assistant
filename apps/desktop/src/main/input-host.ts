@@ -4,6 +4,10 @@ import { isTerminal, type AppInfo, type InputAction, type WriteContext } from '@
 import type { InputDriver } from '../platform/types';
 import { statSync } from 'node:fs';
 import { opensWithAnApp } from '../platform';
+import { log } from './log';
+
+/** A follow-up within this long reuses the tab Clicky opened instead of opening another. */
+const REUSE_TAB_MS = 15 * 60_000;
 
 /** Browser processes, to bring forward after opening a website in one. */
 const BROWSERS = 'comet,chrome,msedge,firefox,brave,opera,vivaldi,arc';
@@ -48,6 +52,9 @@ export class InputHost {
     private readonly driver: InputDriver | null,
     private readonly findApp: (name: string) => { name: string; id: string } | null = () => null,
   ) {}
+
+  /** The browser window Clicky last opened a site in, to reuse its tab for follow-ups. */
+  private lastBrowser: { handle: string; at: number } | null = null;
 
   /** Called when a click target was found somewhere else than the screenshot said (the screen changed). */
   onRetarget: ((at: { x: number; y: number }, label: string) => void) | null = null;
@@ -97,9 +104,25 @@ export class InputHost {
         }
         // Websites open in the user's default browser (whatever Windows has set, e.g. Comet).
         if (action.url) {
+          // Follow-ups reuse the tab Clicky opened (the browser window it last used is still in
+          // front): go to the address there instead of opening yet another tab.
+          const last = this.lastBrowser;
+          if (last && last.handle === before && Date.now() - last.at < REUSE_TAB_MS) {
+            await d.keys(['ctrl', 'l']);
+            await delay(150);
+            await d.type(action.url);
+            await d.keys(['enter']);
+            this.lastBrowser = { handle: before, at: Date.now() };
+            log.info('reused the browser tab Clicky opened for a follow-up');
+            return;
+          }
           await shell.openExternal(action.url);
           // A new tab in a browser that's already open: bring the browser to the front.
-          return await maximize(BROWSERS);
+          await maximize(BROWSERS);
+          const now = await d.foregroundHandle().catch(() => '');
+          const fg = await d.foreground().catch(() => null);
+          if (now && fg && BROWSERS.split(',').includes(fg.process)) this.lastBrowser = { handle: now, at: Date.now() };
+          return;
         }
         if (action.path) {
           const target = knownFolder(action.path);

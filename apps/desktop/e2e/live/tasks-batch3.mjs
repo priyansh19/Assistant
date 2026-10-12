@@ -174,3 +174,13 @@ export const UNDERSTANDING = [
     pass: (out) => /repositories|priyansh19/i.test(out),
   },
 ];
+
+// Follow-ups reuse the tab Clicky opened.
+UNDERSTANDING.push({
+  id: 'T01',
+  say: 'Clicky, open GitHub.',
+  then: 'Clicky, now show me my notifications.',
+  maxMinutes: 4,
+  check: '[LiveWin]::Front()',
+  pass: (out, r) => /notifications/i.test(out) && /reused the browser tab/.test(r.rawLog),
+});

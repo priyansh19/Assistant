@@ -147,6 +147,24 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
       if (h && h.id !== before && h.at >= t0 - 1000) entry = { ...h, outcome: 'timeout' };
     }
   }
+  // A follow-up prompt (`then`), spoken once the first one is done.
+  if (entry && t.then) {
+    await wait(3000);
+    const wav2 = path.join(outDir, `${t.id}-then.wav`);
+    ps(`New-SpokenWav '${t.then.replace(/'/g, "''")}' '${wav2}'`);
+    const first = entry;
+    entry = null;
+    say(`follow-up: ${t.then}`);
+    ps(`Invoke-Spoken '${wav2}'`);
+    for (const t1 = Date.now(); Date.now() - t1 < limit;) {
+      await wait(1500);
+      const h = history()[0];
+      if (h && h.id !== first.id && h.at > first.at) {
+        entry = h;
+        break;
+      }
+    }
+  }
   // Clicky may carry on by itself ("I can't see that on screen" starts a run that goes and looks):
   // follow it to its end so the next task doesn't start on top of it.
   await wait(2500);
@@ -185,6 +203,7 @@ for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructi
     points,
     reviews: (log.match(/agent (recovering|review): .*/g) ?? []).map((l) => l.slice(0, 300)),
     route: (log.match(/agent step review: .*/) ?? [''])[0].slice(0, 500),
+    rawLog: log.slice(-20000),
     seconds: Math.round((Date.now() - t0) / 1000),
     model: model ?? 'default',
     checksWorked: (log.match(/agent check: .* worked$/gm) ?? []).length,
