@@ -106,3 +106,12 @@ DRAWING.push(
     pass: (_o, r) => r.answer.split(/[.!?]\s/).length >= 6,
   },
 );
+
+// The input helper still loads and clicks (its C# changed in PR #19).
+DRAWING.push({
+  id: 'PR19click',
+  say: 'Clicky, open Notepad and click the File menu.',
+  maxMinutes: 3,
+  check: "'n/a'",
+  pass: (_o, r) => /agent step \d+: click on/.test(r.rawLog) && r.outcome === 'answered',
+});
