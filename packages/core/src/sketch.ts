@@ -201,6 +201,10 @@ export function sketchSubject(question: string): string | null {
   if (/\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+)?(?:paint|whiteboard|excalidraw|canva|figma)\b/i.test(what))
     return null;
   what = what.replace(/^(?:something like|what looks like)\s+/i, '');
+  // "Draw it", "draw that", "draw everything": what to draw is in the conversation, which the answer
+  // model has (it draws the topic as a diagram).
+  if (/^(?:it|that|this|them|those|these|everything|something|anything|one|the same|it again|that again)$/i.test(what))
+    return null;
   if (what.length < 2 || what.split(/\s+/).length > 10) return null;
   return what;
 }

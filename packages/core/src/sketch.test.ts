@@ -124,3 +124,11 @@ describe('sketchUnclear', () => {
     expect(sketchUnclear('{"strokes": []}')).toBeNull();
   });
 });
+
+describe('sketchSubject with a pronoun', () => {
+  it('leaves "draw it" to the answer, which knows the conversation', () => {
+    expect(sketchSubject('Clicky, draw it.')).toBeNull();
+    expect(sketchSubject('draw everything')).toBeNull();
+    expect(sketchSubject('draw that again')).toBeNull();
+  });
+});
