@@ -251,7 +251,7 @@ function shapeFromThousandths(s: DrawShape, screens: ScreenCapture): DrawShape {
  * a few notes), not enough for a confused model to cover the screen. The prompt asks for at most
  * three when a drawing only helps explain an answer.
  */
-export const MAX_DRAWINGS = 12;
+export const MAX_DRAWINGS = 20;
 
 function drawShape(shape: DrawShape, screens: ScreenCapture, drawn: { count: number }, input: AnswerRunInput): void {
   if (drawn.count >= MAX_DRAWINGS || !input.hooks.draw) return;

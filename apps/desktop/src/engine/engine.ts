@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   holdKeyLabel,
   agentReady,
@@ -30,6 +32,7 @@ import {
   type TtsProvider,
   type VisionChatProvider,
   type UiElement,
+  type Sketch,
   type OtherAgent,
 } from '@clicky/core';
 import { createChat, createStt, createTts } from '@clicky/providers';
@@ -192,6 +195,24 @@ export class Engine {
       }),
       agentNotReady: () => this.post({ type: 'agentSetup' }),
       agentChat: () => this.agentChat(),
+      renderSketch: async (svg) => {
+        const png = await this.askMain<string | null>({ type: 'renderSketch', svg }, null, 8000);
+        return png ? { data: Buffer.from(png, 'base64'), mediaType: 'image/png', width: 512, height: 512 } : null;
+      },
+      sketchLibrary: {
+        get: (key) => this.sketches().get(key),
+        put: (key, sketch) => {
+          const all = this.sketches();
+          all.set(key, sketch);
+          // The newest 200 drawings are kept.
+          const keep = [...all.entries()].slice(-200);
+          try {
+            writeFileSync(join(this.cfg().dataDir, 'sketches.json'), JSON.stringify(Object.fromEntries(keep)));
+          } catch {
+            // a drawing that isn't kept is drawn again next time
+          }
+        },
+      },
       agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
       agentSkills: (goal) => skillsText(matchSkills(goal, this.cfg().skills)) || undefined,
       agentBriefing: () => this.cfg().briefing || undefined,
@@ -459,6 +480,10 @@ export class Engine {
         this.mainReplies.get(msg.id)?.(msg.elements);
         this.mainReplies.delete(msg.id);
         return;
+      case 'renderSketch.reply':
+        this.mainReplies.get(msg.id)?.(msg.png);
+        this.mainReplies.delete(msg.id);
+        return;
       case 'otherAgent.reply':
         this.mainReplies.get(msg.id)?.(msg.text);
         this.mainReplies.delete(msg.id);
@@ -687,7 +712,25 @@ export class Engine {
   }
 
   /** Ask main for something; `fallback` if it doesn't answer within `ms`. */
-  private askMain<T>(type: 'elements' | 'otherAgent', fallback: T, ms: number): Promise<T> {
+  /** Drawings that passed their check, read once from dataDir/sketches.json. */
+  private sketchCache: Map<string, Sketch> | null = null;
+  private sketches(): Map<string, Sketch> {
+    if (this.sketchCache) return this.sketchCache;
+    let saved: Record<string, Sketch> = {};
+    try {
+      saved = JSON.parse(readFileSync(join(this.cfg().dataDir, 'sketches.json'), 'utf8')) as Record<string, Sketch>;
+    } catch {
+      // none yet
+    }
+    this.sketchCache = new Map(Object.entries(saved));
+    return this.sketchCache;
+  }
+
+  private askMain<T>(
+    req: 'elements' | 'otherAgent' | { type: 'renderSketch'; svg: string },
+    fallback: T,
+    ms: number,
+  ): Promise<T> {
     const id = this.nextPlanId++;
     return new Promise<T>((resolve) => {
       const timer = setTimeout(() => {
@@ -698,7 +741,7 @@ export class Engine {
         clearTimeout(timer);
         resolve(v as T);
       });
-      this.post({ type, id });
+      this.post(typeof req === 'string' ? { type: req, id } : { ...req, id });
     });
   }
 

@@ -21,11 +21,22 @@ import { InteractionMachine, type Interaction, type InteractionState } from './i
 import { LatencyRecorder, type LatencySummary } from './latency.js';
 import { answerSystemPrompt, runAnswer, type AnswerRunInput, type AnswerRunResult } from './pipeline/answer-runner.js';
 import { delay, withTimeout } from './pipeline/budget.js';
+import {
+  parseSketch,
+  parseSketchCheck,
+  placeSketch,
+  SKETCH_CHECK_PROMPT,
+  SKETCH_PROMPT,
+  sketchKey,
+  sketchSubject,
+  sketchToSvg,
+  type Sketch,
+} from './sketch.js';
 import { ListenStage } from './pipeline/listen-stage.js';
 import { splitWake } from './wake.js';
 import { HeldTrace, sameQuestion, worthSpeculating, type AnswerTrace } from './pipeline/speculation.js';
 import type { CapturePort, InputPort, MicPort, OverlayPort, ScreenCapture } from './ports.js';
-import type { ChatTurn, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
+import type { ChatTurn, ImageInput, SttProvider, VisionChatProvider, VisionChatRequest } from './providers.js';
 import type { AgentConfirmMode } from './settings.js';
 import type { SpeechFactory } from './speech.js';
 import {
@@ -62,6 +73,10 @@ export interface AskResult {
 }
 
 export interface OrchestratorDeps {
+  /** Render a sketch's SVG to a picture so the model can check what it drew (null if it can't). */
+  renderSketch?(svg: string): Promise<ImageInput | null>;
+  /** Drawings that passed the check, by subject, so the same subject is right at once next time. */
+  sketchLibrary?: { get(key: string): Sketch | undefined; put(key: string, sketch: Sketch): void };
   chat(): VisionChatProvider;
   stt(): SttProvider;
   speech(): SpeechFactory;
@@ -207,6 +222,9 @@ interface Speculation {
   confirm(): void;
   discard(): void;
 }
+
+/** Drawings tried (each checked) before Clicky draws its best one. */
+const SKETCH_ATTEMPTS = 3;
 
 /** Longest an answer waits for the list of open windows and tabs. */
 const PC_MAP_WAIT_MS = 2500;
@@ -705,6 +723,13 @@ export class Orchestrator {
       await this.sayOnly(run, speech, "Got it, I'll remember that.");
       return;
     }
+    // "Draw a bird": an illustration, planned and checked, not a few marks in a spoken answer.
+    const subject = audio ? null : sketchSubject(question);
+    if (subject) {
+      spec?.discard();
+      await this.drawSketch(run, subject, screens, speech);
+      return;
+    }
     const agent = audio ? null : this.agentRequest(question);
     if (agent?.setup) {
       spec?.discard();
@@ -1096,6 +1121,116 @@ export class Orchestrator {
   }
 
   /** Speak one sentence as the whole answer (used for "agent mode isn't set up"). */
+  /**
+   * Draw a thing on the screen like an illustrator: plan its parts, draw strokes on a square canvas,
+   * look at a rendered copy to check it really shows the subject, redraw with the fixes (at most
+   * twice), then draw it in the middle of the screen the user is on. Drawings that pass are kept.
+   */
+  private async drawSketch(
+    run: Run,
+    subject: string,
+    screens: Promise<ScreenCapture>,
+    speech: SpeechFactory,
+  ): Promise<void> {
+    const { signal } = run.interaction;
+    const chat = this.deps.agentChat?.() ?? this.deps.chat();
+    const key = sketchKey(subject);
+    this.deps.overlay.message(`Drawing ${subject}…`, 'info');
+    const collect = async (
+      system: string,
+      question: string,
+      images: ImageInput[],
+      maxTokens: number,
+    ): Promise<string> => {
+      let text = '';
+      for await (const t of chat.stream({
+        system,
+        history: [],
+        question,
+        images,
+        maxTokens,
+        thinkingTokens: 2048,
+        signal,
+      }))
+        text += t;
+      return text;
+    };
+    let sketch = this.deps.sketchLibrary?.get(key) ?? null;
+    if (sketch) this.deps.log?.(`sketch of "${subject}" from a drawing that passed before`);
+    else {
+      let fixes = '';
+      for (let attempt = 1; attempt <= SKETCH_ATTEMPTS && !signal.aborted; attempt++) {
+        let reply: string;
+        try {
+          reply = await collect(
+            SKETCH_PROMPT,
+            [
+              `Draw: ${subject}`,
+              sketch && fixes
+                ? `Your last drawing was checked and it needs fixing: ${fixes}\nYour last drawing: ${JSON.stringify({ strokes: sketch.strokes.map((st) => ({ part: st.part, points: st.points.map((p) => [p.x, p.y]) })) })}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+            [],
+            12000,
+          );
+        } catch (e) {
+          if (signal.aborted) return;
+          this.deps.log?.(`sketch attempt ${attempt} failed: ${e instanceof Error ? e.message : String(e)}`);
+          continue;
+        }
+        const next = parseSketch(reply);
+        if (!next) {
+          this.deps.log?.(`sketch attempt ${attempt}: no usable drawing in the reply`);
+          continue;
+        }
+        sketch = next;
+        this.deps.log?.(
+          `sketch attempt ${attempt}: ${next.strokes.length} strokes (${next.strokes
+            .map((st) => st.part)
+            .filter(Boolean)
+            .join(', ')
+            .slice(0, 200)})`,
+        );
+        const picture = await this.deps.renderSketch?.(sketchToSvg(next)).catch(() => null);
+        if (!picture) break; // can't check it here: draw what we have
+        let verdict = { ok: true, fixes: '' };
+        try {
+          verdict = parseSketchCheck(await collect(SKETCH_CHECK_PROMPT, `Subject: ${subject}`, [picture], 600));
+        } catch {
+          // an unchecked drawing is still drawn
+        }
+        this.deps.log?.(`sketch check ${attempt}: ${verdict.ok ? 'looks right' : `needs work: ${verdict.fixes}`}`);
+        if (verdict.ok) {
+          this.deps.sketchLibrary?.put(key, next);
+          break;
+        }
+        fixes = verdict.fixes;
+      }
+    }
+    if (signal.aborted) return;
+    if (!sketch) {
+      await this.sayOnly(run, speech, `I couldn't work out how to draw ${subject}. Try describing it another way.`);
+      return;
+    }
+    const scr = await screens.catch(() => null);
+    const cap = scr ? (scr.geometry[scr.cursorScreen - 1] ?? scr.geometry[0]) : undefined;
+    if (!cap) {
+      await this.sayOnly(run, speech, "I couldn't find the screen to draw on.");
+      return;
+    }
+    const marks = placeSketch(sketch, {
+      id: cap.display.id,
+      width: cap.display.bounds.width,
+      height: cap.display.bounds.height,
+    });
+    for (const m of marks) this.deps.overlay.draw?.(m);
+    run.drawn = marks.length;
+    this.deps.log?.(`sketch of "${subject}" drawn: ${marks.length} marks`);
+    await this.sayOnly(run, speech, `Here's ${subject}.`);
+  }
+
   private async sayOnly(run: Run, speech: SpeechFactory, text: string): Promise<void> {
     const { signal } = run.interaction;
     run.answer = text;

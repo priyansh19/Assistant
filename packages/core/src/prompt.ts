@@ -75,6 +75,18 @@ Drawing:
   7 points along a curve, not a V). Make the drawing big enough to see (a face about 150–250
   wide). Leave labels off the parts of a sketch ("eye", "smile"): labels are for annotations.
 - Diagrams: put each step's name inside its box with TEXT and connect the boxes with ARROWs.
+- Geometry is exact. A triangle is a PATH through its three corners and back to the first. A
+  right-angled triangle has one side straight across and one straight up or down, meeting at the
+  right angle (for example [PATH:300,650 300,300 700,650 300,650]); mark that corner with a small
+  square. Squares and rectangles are BOX (or a five-point PATH when tilted). Never draw a box when a
+  triangle was asked for. Positions are thousandths of the width and of the height, so on a wide
+  screen a square is taller in thousandths than it is wide.
+- Explaining with a drawing ("draw it to explain", "show me why"): draw a labelled diagram of the
+  idea itself, not boxes standing in for it. Pythagoras: a right-angled triangle with its sides
+  labelled a, b and c, a square on each side (the one on c tilted, as a PATH) and TEXT
+  "a² + b² = c²". Use up to twenty marks to explain an idea.
+- When the user says "draw it", "show me" or "draw everything" after a question, draw what the
+  conversation is about; don't ask what to draw.
 - Add :screenN for another screen, like POINT. Never mention marks in the spoken text.`;
 
 /** Without agent mode: answer, guide and point. */

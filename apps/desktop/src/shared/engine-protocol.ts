@@ -54,6 +54,8 @@ export interface EngineConfig {
   skills: AgentSkill[];
   /** Where files Clicky makes (sheets) are saved: Documents/Clicky. */
   outputDir: string;
+  /** Clicky's own data folder (userData): the drawings it has learned live here. */
+  dataDir: string;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -82,6 +84,8 @@ export type MainToEngine =
   | { type: 'windows.reply'; id: number; windows: string[] }
   | { type: 'elements.reply'; id: number; elements: UiElement[] }
   | { type: 'otherAgent.reply'; id: number; text: OtherAgent | null }
+  /** A sketch rendered to a PNG (base64), or null if it couldn't be. */
+  | { type: 'renderSketch.reply'; id: number; png: string | null }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }
@@ -127,6 +131,8 @@ export type EngineToMain =
   | { type: 'elements'; id: number }
   /** Is another agent driving this PC (checked before each agent step)? */
   | { type: 'otherAgent'; id: number }
+  /** Render a sketch's SVG so the model can check the drawing. */
+  | { type: 'renderSketch'; id: number; svg: string }
   /** Agent mode was asked for but isn't set up: open its rules screen. */
   | { type: 'agentSetup' }
   /** Step strip: progress, a question waiting for Allow, or the end of the run. */

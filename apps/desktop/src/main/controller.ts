@@ -28,6 +28,7 @@ import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
 import { LessonStore } from './lesson-store';
 import { Inventory } from './inventory';
+import { renderSvg } from './render-svg';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -181,6 +182,7 @@ export class Controller {
       briefing: this.skills.briefing(),
       skills: this.skills.list(),
       outputDir: join(app.getPath('documents'), 'Clicky'),
+      dataDir: app.getPath('userData'),
     };
   }
 
@@ -287,6 +289,9 @@ export class Controller {
         void this.input
           .elements()
           .then((elements) => this.engine.send({ type: 'elements.reply', id: msg.id, elements }));
+        return;
+      case 'renderSketch':
+        void renderSvg(msg.svg).then((png) => this.engine.send({ type: 'renderSketch.reply', id: msg.id, png }));
         return;
       case 'otherAgent':
         void this.input.otherAgent().then((text) => this.engine.send({ type: 'otherAgent.reply', id: msg.id, text }));

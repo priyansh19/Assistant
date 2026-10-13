@@ -16,11 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { DRAWING } from './tasks-drawing.mjs';
 import { SCREEN } from './tasks-screen.mjs';
+import { TONIGHT } from './tasks-tonight.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
 const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN].map((t) =>
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN, ...TONIGHT].map((t) =>
   process.argv.includes('--nameless')
     ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }
     : t,
@@ -116,7 +117,21 @@ async function freshClicky() {
   ps(`$env:CLICKY_TEST_HOOKS = '1'; Start-Process "$env:LOCALAPPDATA\\Programs\\clicky\\Clicky.exe"; Start-Sleep 12`);
 }
 
-for (const t of TASKS.filter((x) => (!only || only.includes(x.id)) && (destructive || !x.destructive))) {
+// With --only, tasks run in the order given.
+const queue = (only ? only.map((id) => TASKS.find((x) => x.id === id)).filter(Boolean) : TASKS).filter(
+  (x) => destructive || !x.destructive,
+);
+for (const t of queue) {
+  // Never run the laptop flat: stop when it's on battery and low (round 1 died at 5% overnight).
+  const [charge = '100', status = '2'] = ps(
+    '$b = Get-CimInstance Win32_Battery; "$($b.EstimatedChargeRemaining) $($b.BatteryStatus)"',
+  )
+    .trim()
+    .split(' ');
+  if (status === '1' && Number(charge) < 25) {
+    say(`stopping: on battery at ${charge}%`);
+    break;
+  }
   await freshClicky();
   say(`--- ${t.id}: ${t.say}${model ? ` [model ${model}]` : ''}`);
   for (const s of t.setup ?? []) say(`setup: ${ps(s).slice(0, 200)}`);

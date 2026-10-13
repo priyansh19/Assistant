@@ -73,6 +73,7 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   briefing: '',
   skills: [],
   outputDir: '',
+  dataDir: '',
   ...over,
 });
 
@@ -96,6 +97,8 @@ function setup(cfg = config()) {
           },
         }),
       );
+    // …and the list of open windows (answers wait a moment for it).
+    if (m.type === 'windows') queueMicrotask(() => engine.handle({ type: 'windows.reply', id: m.id, windows: [] }));
   };
   const origPush = posts.push.bind(posts);
   posts.push = (...items: EngineToMain[]) => {

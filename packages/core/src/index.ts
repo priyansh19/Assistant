@@ -13,6 +13,7 @@ export * from './history.js';
 export * from './orchestrator.js';
 export * from './speech.js';
 export * from './shapes.js';
+export * from './sketch.js';
 export * from './agent.js';
 export * from './write.js';
 export * from './profile.js';
