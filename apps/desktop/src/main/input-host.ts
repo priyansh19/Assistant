@@ -20,6 +20,10 @@ const PROTECTED = ['claude', 'clicky'];
 /** Editors whose tabs say whether they have unsaved changes. */
 const TABBED_EDITORS = ['notepad'];
 
+/** The PC map is rebuilt this often in the background, and a copy this old is still used. */
+const MAP_REFRESH_MS = 6000;
+const MAP_FRESH_MS = 8000;
+
 /** How often Clicky notes which window is in front. */
 const USE_POLL_MS = 3000;
 
@@ -550,6 +554,16 @@ export class InputHost {
    * used, and when Clicky last saw it in front).
    */
   async windows(): Promise<string[]> {
+    // Kept fresh in the background (watchUse), so answers and agent steps don't wait seconds for tabs.
+    if (this.mapCache && Date.now() - this.mapCache.at < MAP_FRESH_MS) return this.mapCache.lines;
+    const lines = await this.buildMap();
+    this.mapCache = { at: Date.now(), lines };
+    return lines;
+  }
+
+  private mapCache: { at: number; lines: string[] } | null = null;
+
+  private async buildMap(): Promise<string[]> {
     const d = this.driver;
     const list = (await d?.windows().catch(() => [])) ?? [];
     const out: string[] = [];
@@ -625,8 +639,13 @@ export class InputHost {
         if (h && h !== '0' && fg) this.tracker.saw(h, fg.title, BROWSERS.split(',').includes(fg.process));
       });
     }, USE_POLL_MS);
+    // The PC map, rebuilt every few seconds so it's ready the moment it's needed.
+    this.mapTimer = setInterval(() => {
+      void this.buildMap().then((lines) => (this.mapCache = { at: Date.now(), lines }));
+    }, MAP_REFRESH_MS);
   }
   private useTimer: NodeJS.Timeout | null = null;
+  private mapTimer: NodeJS.Timeout | null = null;
 
   /** Windows the user asked Clicky never to close (userData/protect.json: handles or title parts). */
   private protectedHandles(): Set<string> {
@@ -760,6 +779,8 @@ export class InputHost {
   }
 
   dispose(): void {
+    if (this.useTimer) clearInterval(this.useTimer);
+    if (this.mapTimer) clearInterval(this.mapTimer);
     this.driver?.dispose();
   }
 }

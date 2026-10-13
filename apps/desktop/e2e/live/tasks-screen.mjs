@@ -106,13 +106,16 @@ export const SCREEN = [
   {
     id: 'SM03',
     say: "Clicky, which of my Comet tabs haven't I used in a while?",
+    // Asleep tabs ("Inactive tab") are the stale ones; when Comet has none asleep, any real tab Clicky
+    // names counts (it must come from the tab list, not a guess).
     check:
-      "(Get-CometTabs | Where-Object { $_ -match 'Inactive tab' } | ForEach-Object { ($_ -split ' - Inactive tab')[0] }) -join '|'",
-    pass: (out, r) =>
-      out
-        .split('|')
-        .filter(Boolean)
-        .some((t) => r.answer.toLowerCase().includes(t.toLowerCase().slice(0, 18))),
+      "$all = Get-CometTabs | ForEach-Object { ($_ -split ' - (Inactive tab|Memory usage)')[0] }; $asleep = Get-CometTabs | Where-Object { $_ -match 'Inactive tab' } | ForEach-Object { ($_ -split ' - Inactive tab')[0] }; (@($asleep) -join '|') + '##' + (@($all) -join '|')",
+    pass: (out, r) => {
+      const [asleep = '', all = ''] = out.split('##');
+      const pool = (asleep.trim() ? asleep : all).split('|').filter((t) => t.trim().length >= 6);
+      const answer = r.answer.toLowerCase();
+      return pool.some((t) => answer.includes(t.toLowerCase().slice(0, 18)));
+    },
     noCursorRule: true,
   },
   {
@@ -121,7 +124,7 @@ export const SCREEN = [
     maxMinutes: 3,
     check: "'n/a'",
     pass: (_o, r) =>
-      has(r, /found \d+ files named like/) &&
+      has(r, /looked for files named/) &&
       /resume|résumé|cv/i.test(r.answer) &&
       /\\|folder|desktop|documents/i.test(r.answer),
     noCursorRule: true,

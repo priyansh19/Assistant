@@ -683,6 +683,9 @@ export class Orchestrator {
     if (run.pcMap && run.pcMapText === undefined) {
       const map = await Promise.race([run.pcMap, delay(PC_MAP_WAIT_MS).then(() => null)]);
       run.pcMapText = map?.length ? map.join('\n').slice(0, 6000) : '';
+      this.deps.log?.(
+        map ? `answer has the PC map: ${map.length} lines` : 'answer without the PC map (it took too long)',
+      );
     }
     run.latency.setMeta('chat', chat.id);
     if (chat.model) run.latency.setMeta('model', chat.model);
