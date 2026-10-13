@@ -538,7 +538,13 @@ describe('plan first', () => {
 
 describe('another agent driving the PC', () => {
   it('waits until it is gone, then carries on', async () => {
-    const seen = ['"Claude" started debugging this browser', '"Claude" started debugging this browser', null];
+    const busy = {
+      process: 'comet',
+      text: '"Claude" started debugging this browser',
+      inFront: true,
+      defaultBrowser: true,
+    };
+    const seen = [busy, busy, null];
     const f = fakes(['{"action":"key","keys":"enter"}', '{"action":"done","say":"Done."}']);
     const messages: string[] = [];
     const r = await runAgent('press enter', {
@@ -554,12 +560,41 @@ describe('another agent driving the PC', () => {
     expect(f.inputs).toEqual([{ kind: 'keys', keys: ['enter'] }]);
   });
 
+  it("carries on when the other agent's browser isn't needed, and waits before opening a site in it", async () => {
+    const comet = {
+      process: 'comet',
+      text: '"Claude" started debugging this browser',
+      inFront: false,
+      defaultBrowser: true,
+    };
+    let polls = 0;
+    const f = fakes([
+      '{"action":"key","keys":"enter"}',
+      '{"action":"open","url":"https://www.youtube.com/"}',
+      '{"action":"done","say":"Done."}',
+    ]);
+    await runAgent('press enter then open youtube', {
+      ...f.deps,
+      verifyDone: false,
+      otherAgentPollMs: 1,
+      // Busy for the first check (the key press: not in Comet, so no wait) and the open (waits once).
+      otherAgent: async () => (++polls <= 2 ? comet : null),
+    });
+    expect(f.inputs.map((i) => i.kind)).toEqual(['keys', 'open']);
+    expect(polls).toBe(3);
+  });
+
   it('stops waiting when the user stops the run', async () => {
     const f = fakes(['{"action":"key","keys":"enter"}']);
     setTimeout(() => f.ac.abort(), 20);
     const r = await runAgent('press enter', {
       ...f.deps,
-      otherAgent: async () => 'is being controlled by automated test software',
+      otherAgent: async () => ({
+        process: 'msedge',
+        text: 'controlled by automated test software',
+        inFront: true,
+        defaultBrowser: false,
+      }),
       otherAgentPollMs: 5,
     });
     expect(r.outcome).toBe('stopped');

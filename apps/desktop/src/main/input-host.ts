@@ -1,6 +1,13 @@
 import { app, clipboard, ClipboardItem, screen, shell } from 'electron';
 import { join, sep } from 'node:path';
-import { isTerminal, type AppInfo, type InputAction, type UiElement, type WriteContext } from '@clicky/core';
+import {
+  isTerminal,
+  type AppInfo,
+  type InputAction,
+  type OtherAgent,
+  type UiElement,
+  type WriteContext,
+} from '@clicky/core';
 import type { InputDriver } from '../platform/types';
 import { readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -526,8 +533,15 @@ export class InputHost {
   }
 
   /** What a browser shows when another agent drives it, or null. */
-  async otherAgent(): Promise<string | null> {
-    return (await this.driver?.otherAgent().catch(() => null)) ?? null;
+  async otherAgent(): Promise<OtherAgent | null> {
+    const busy = (await this.driver?.otherAgent().catch(() => null)) ?? null;
+    if (!busy) return null;
+    const fg = await this.driver?.foreground().catch(() => null);
+    return {
+      ...busy,
+      inFront: fg?.process === busy.process,
+      defaultBrowser: this.defaultBrowser().process === busy.process,
+    };
   }
 
   /**

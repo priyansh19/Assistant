@@ -367,7 +367,7 @@ public static class ClickyInput {
           var top = st.Pop(); seen++;
           var c = top.Key.Current;
           var n = (c.Name ?? "");
-          foreach (var m in marks) if (n.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { found = n.Length > 120 ? n.Substring(0, 120) : n; return false; }
+          foreach (var m in marks) if (n.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { found = name + "|" + (n.Length > 120 ? n.Substring(0, 120) : n); return false; }
           if (top.Value < 16 && c.ControlType != System.Windows.Automation.ControlType.Document)
             for (var k = walker.GetFirstChild(top.Key); k != null; k = walker.GetNextSibling(k))
               st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(k, top.Value + 1));
@@ -993,7 +993,12 @@ export function createWin32InputDriver(): InputDriver {
         }),
     closeTab: async (handle, index) =>
       (await send(`closetab ${int(Number(handle))} ${int(index)}`, 8000)).trim().toLowerCase() === 'true',
-    otherAgent: async () => b64(await send('otheragent', 8000)).trim() || null,
+    otherAgent: async () => {
+      const r = b64(await send('otheragent', 8000)).trim();
+      if (!r) return null;
+      const at = r.indexOf('|');
+      return { process: r.slice(0, at), text: r.slice(at + 1) };
+    },
     locate: async (name, x, y) => {
       const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
       const [lx, ly] = r.split(' ').map(Number);

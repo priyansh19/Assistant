@@ -21,6 +21,7 @@ import type {
   AppInfo,
   Settings,
   UiElement,
+  OtherAgent,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
 
@@ -80,7 +81,7 @@ export type MainToEngine =
   | { type: 'foreground.reply'; id: number; app: AppInfo | null }
   | { type: 'windows.reply'; id: number; windows: string[] }
   | { type: 'elements.reply'; id: number; elements: UiElement[] }
-  | { type: 'otherAgent.reply'; id: number; text: string | null }
+  | { type: 'otherAgent.reply'; id: number; text: OtherAgent | null }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }

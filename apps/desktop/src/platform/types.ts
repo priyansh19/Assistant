@@ -74,7 +74,7 @@ export interface InputDriver {
   /** Close tab number index of a window; false if it isn't there. */
   closeTab(handle: string, index: number): Promise<boolean>;
   /** A message from a browser that another agent is driving it, or null. */
-  otherAgent(): Promise<string | null>;
+  otherAgent(): Promise<{ process: string; text: string } | null>;
   /**
    * For answer pointing: the control the model named, scored by name, kind and distance from its
    * guess (physical px), searching for at most budgetMs. Null when nothing matches well enough.

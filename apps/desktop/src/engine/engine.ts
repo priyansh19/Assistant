@@ -30,6 +30,7 @@ import {
   type TtsProvider,
   type VisionChatProvider,
   type UiElement,
+  type OtherAgent,
 } from '@clicky/core';
 import { createChat, createStt, createTts } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
@@ -664,9 +665,9 @@ export class Engine {
    * Another agent driving the PC, for the agent's wait. While it waits the strip says so; pressing
    * play there means "go anyway", and Clicky stops looking for a while.
    */
-  private async otherAgent(): Promise<string | null> {
+  private async otherAgent(): Promise<OtherAgent | null> {
     if (Date.now() < this.ignoreOtherAgentUntil) return null;
-    const found = await this.askMain<string | null>('otherAgent', null, 9000);
+    const found = await this.askMain<OtherAgent | null>('otherAgent', null, 9000);
     if (this.waitingForAgent && !this.agentPaused) {
       // Play was pressed on the strip.
       this.waitingForAgent = false;

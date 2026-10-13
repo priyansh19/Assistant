@@ -585,8 +585,8 @@ export interface AgentDeps {
   conversation?: string;
   /** The controls of the window in front, numbered, in global DIP (UI Automation). */
   elements?(): Promise<UiElement[]>;
-  /** What another agent driving this PC shows ("Claude started debugging this browser"), or null. */
-  otherAgent?(): Promise<string | null>;
+  /** Another agent driving a browser on this PC ("Claude started debugging this browser"), or null. */
+  otherAgent?(): Promise<OtherAgent | null>;
   /**
    * Plan first: before acting, the model writes the whole route as Clicky's own steps, and Clicky
    * carries them out with its cursor, falling back to step-by-step when one doesn't work.
@@ -600,6 +600,18 @@ export interface AgentDeps {
   verifyDone?: boolean;
   /** Progress for the step strip. */
   onProgress?(p: { goal: string; step: number; max: number; say: string }): void;
+}
+
+/** Another agent (Claude, a test tool) driving one of the browsers on this PC. */
+export interface OtherAgent {
+  /** The browser's process ("comet"). */
+  process: string;
+  /** What the browser shows about it. */
+  text: string;
+  /** That browser is the window in front (Clicky's next step would land in it). */
+  inFront: boolean;
+  /** That browser is the one websites open in. */
+  defaultBrowser: boolean;
 }
 
 /** One control of the window in front: what it is, its name and its box (global DIP). */
@@ -961,10 +973,13 @@ const OTHER_AGENT_MAX_WAIT_MS = 30 * 60_000;
  * so, and wait until it's gone before taking the next step, so the two don't fight over the mouse.
  * True if the run was stopped meanwhile.
  */
-async function waitForOtherAgent(deps: AgentDeps): Promise<boolean> {
+async function waitForOtherAgent(deps: AgentDeps, a: AgentAction): Promise<boolean> {
   const first = await deps.otherAgent?.().catch(() => null);
   if (!first) return false;
-  deps.log?.(`agent waiting: another agent is driving the PC (${first})`);
+  // Only a step in that browser would clash: one in front of Clicky, a website to open, a tab to close.
+  const needs = first.inFront || a.type === 'close_tab' || (first.defaultBrowser && a.type === 'open' && !!a.url);
+  if (!needs) return false;
+  deps.log?.(`agent waiting: another agent is driving the PC (${first.text})`);
   const say = 'Another agent is using this PC right now. I will wait until it finishes.';
   deps.onStep?.(say);
   deps.overlay.message(say, 'info');
@@ -1174,7 +1189,6 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       await deps.waitForUser?.(deps.signal);
       if (deps.signal.aborted) return stopped();
     }
-    if (await waitForOtherAgent(deps)) return stopped();
     const blocked = await deps.blockedApp?.();
     if (blocked) {
       deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
@@ -1327,6 +1341,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
       return { outcome: 'failed', summary: a.say, steps, checked };
     }
+    // Another agent working in the browser this step needs: wait for it instead of clashing.
+    if (a.type !== 'note' && a.type !== 'find_files' && a.type !== 'list_files' && (await waitForOtherAgent(deps, a)))
+      return stopped();
     i++;
 
     const say = a.say || describe(a);
