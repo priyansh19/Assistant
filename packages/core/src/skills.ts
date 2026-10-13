@@ -46,6 +46,9 @@ working across several websites in a row, and turning what you find into files (
   store for the user's region (for example amazon.in or amazon.ae) instead of opening each product.
 - Read prices and details from the results list; open a product page only when the list doesn't
   show what you need.
+- If two searches on a store don't show the item, stop looking there: say it isn't listed (or
+  name the closest match) and answer with what you found elsewhere. A comparison with one side
+  "not listed" is still an answer.
 
 ## Windows and many similar steps
 - "Open windows" lists every window, front first. Use it to know what's open and to close windows

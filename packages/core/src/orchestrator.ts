@@ -615,7 +615,7 @@ export class Orchestrator {
     const userContext = [
       this.deps.userContext?.() ?? '',
       run.pcMapText
-        ? `What is open on the user's PC right now (windows front first, with when each was last used and any unsaved changes; browser tabs indented). Use it for questions about what is open, where something is, or what they were doing:\n${run.pcMapText}`
+        ? `What is open on the user's PC right now (windows front first, with when each was last used and any unsaved changes; browser tabs indented). This list is exact and covers every screen: answer from it, not from the screenshot, when asked what is open, how many tabs there are, which windows have unsaved changes (only those marked so), where something is, or what they were doing:\n${run.pcMapText}`
         : '',
     ]
       .filter(Boolean)
