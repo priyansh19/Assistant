@@ -236,6 +236,8 @@ interface Run {
    * goes down so answers know it ("which apps do I have open?") without hunting the screenshot.
    */
   pcMap?: Promise<string[]>;
+  /** This run handed the request to the agent (its summary is the answer). */
+  ranTask?: boolean;
   /** The map once it arrived (for the answer prompt). */
   pcMapText?: string;
   /** Marks drawn by this answer (a drawing request that drew nothing is retried once). */
@@ -1050,6 +1052,8 @@ export class Orchestrator {
     goal: string,
     confirmMode: AgentConfirmMode,
   ): Promise<void> {
+    // A task's own summary ("…not saved yet") must not start another run to find things out.
+    run.ranTask = true;
     const { signal } = run.interaction;
     const { input, confirm } = this.deps;
     if (!input || !confirm) return this.fail(run, new ConfigError('Agent mode is not available here.'), 'config');
@@ -1294,7 +1298,7 @@ export class Orchestrator {
 
   /** The answer said it can't see that on screen, and agent mode can go and look. */
   private shouldFindOut(run: Run): boolean {
-    if (run.mode !== 'answer' || run.source === 'action') return false;
+    if (run.mode !== 'answer' || run.source === 'action' || run.ranTask) return false;
     if (!CANT_SEE.test(run.answer) && !NOT_DONE.test(run.answer)) return false;
     const cfg = this.deps.agent?.();
     return !!cfg?.enabled && cfg.ready !== false;
