@@ -30,6 +30,7 @@ import {
   sketchKey,
   sketchSubject,
   sketchToSvg,
+  sketchUnclear,
   type Sketch,
 } from './sketch.js';
 import { ListenStage } from './pipeline/listen-stage.js';
@@ -1179,6 +1180,12 @@ export class Orchestrator {
           if (signal.aborted) return;
           this.deps.log?.(`sketch attempt ${attempt} failed: ${e instanceof Error ? e.message : String(e)}`);
           continue;
+        }
+        const unclear = sketchUnclear(reply);
+        if (unclear) {
+          this.deps.log?.(`sketch subject unclear ("${subject}"): ${unclear}`);
+          await this.sayOnly(run, speech, unclear);
+          return;
         }
         const next = parseSketch(reply);
         if (!next) {

@@ -54,17 +54,27 @@ edges need only their ends.
 
 Reply with ONLY one JSON object:
 {"subject": "what you drew", "parts": ["body", "head", …],
- "strokes": [{"part": "body", "points": [[x,y], [x,y], …], "closed": true}, …],
+ "strokes": [{"part": "body", "points": [[x,y], [x,y], …], "closed": true, "smooth": true}, …],
  "labels": [{"x": 0, "y": 0, "text": "a few words"}]}
 
 - 6 to ${MAX_STROKES} strokes, each 2 to ${MAX_STROKE_POINTS} points. "closed": true joins the last point back to the first.
+- "smooth": true turns a stroke into a smooth curve through its points: use it for every rounded
+  part (bodies, heads, wings, leaves, waves); 8 to 16 well-placed points are enough then. Leave it
+  off for straight edges and sharp corners (beaks, roofs, triangles, frames).
+- Draw like an illustrator: graceful outlines, a body that flows into the head, details where the
+  eye goes (an eye with a pupil, feather lines on a wing), feet that rest on the ground.
 - Use most of the canvas: the subject spans about 650 to 900 units, centred.
 - Labels only when the user asked for them or to explain something (the sides a, b, c of a triangle).
-- No background, no shading, no frame.`;
+- No background, no shading, no frame.
+- The request comes from speech recognition. If the subject isn't something that can be drawn (a
+  misheard word like "now" or "parent" for "owl" or "parrot"), don't draw: reply
+  {"unclear": "a short question naming what they most likely meant, like: Did you mean an owl?"}.`;
 
 export const SKETCH_CHECK_PROMPT = `You check drawings Clicky made on the user's screen. The image is a line drawing that was meant
-to show the subject below. Would an ordinary person recognise it immediately as that subject, with
-its proportions and key features right (and exact geometry for shapes)? Be honest and specific.
+to show the subject below. Judge it like an art teacher: would an ordinary person recognise it
+immediately as that subject, are its proportions and key features right, are the lines clean
+(not blocky or scribbled), and is geometry exact for shapes? A crude drawing that is only just
+recognisable is not ok. Be honest and specific.
 
 Reply with ONLY one JSON object:
 {"ok": true} if it clearly shows the subject, or
@@ -98,12 +108,16 @@ export function parseSketch(reply: string): Sketch | null {
       const last = points[points.length - 1];
       if (!last || last.x !== q.x || last.y !== q.y) points.push(q);
     }
-    if (r['closed'] === true && points.length >= 3) {
-      const [first] = points;
-      const last = points[points.length - 1];
-      if (first && last && (first.x !== last.x || first.y !== last.y)) points.push({ ...first });
+    const closed = r['closed'] === true && points.length >= 3;
+    // Curves the model drew with a handful of points come out round instead of polygonal.
+    const line = r['smooth'] === true && points.length >= 3 ? smooth(points, closed) : points;
+    if (closed) {
+      const [first] = line;
+      const last = line[line.length - 1];
+      if (first && last && (first.x !== last.x || first.y !== last.y)) line.push({ ...first });
     }
-    if (points.length >= 2) strokes.push({ part: typeof r['part'] === 'string' ? r['part'].slice(0, 40) : '', points });
+    if (line.length >= 2)
+      strokes.push({ part: typeof r['part'] === 'string' ? r['part'].slice(0, 40) : '', points: line });
   }
   if (!strokes.length) return null;
   const labels: Sketch['labels'] = [];
@@ -115,6 +129,34 @@ export function parseSketch(reply: string): Sketch | null {
     if (x !== null && y !== null && text) labels.push({ x, y, text });
   }
   return { subject: typeof o['subject'] === 'string' ? o['subject'].slice(0, 80) : '', strokes, labels };
+}
+
+/**
+ * A smooth curve through the points (Chaikin's corner cutting, three rounds): the ends stay put on
+ * an open stroke; a closed one becomes a smooth loop.
+ */
+export function smooth(points: readonly SketchPoint[], closed: boolean): SketchPoint[] {
+  let p = points.map((q) => ({ ...q }));
+  if (closed) {
+    const [a] = p;
+    const b = p[p.length - 1];
+    if (a && b && a.x === b.x && a.y === b.y) p = p.slice(0, -1);
+  }
+  for (let round = 0; round < 3 && p.length * 2 <= MAX_STROKE_POINTS * 2; round++) {
+    const out: SketchPoint[] = [];
+    const n = p.length;
+    const segs = closed ? n : n - 1;
+    if (!closed && p[0]) out.push(p[0]);
+    for (let i = 0; i < segs; i++) {
+      const a = p[i] as SketchPoint;
+      const b = p[(i + 1) % n] as SketchPoint;
+      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    if (!closed && p[n - 1]) out.push(p[n - 1] as SketchPoint);
+    p = out;
+  }
+  return p.map((q) => ({ x: Math.round(q.x * 10) / 10, y: Math.round(q.y * 10) / 10 }));
 }
 
 /** The sketch as an SVG picture (black lines on white), to check it and to keep it. */
@@ -147,7 +189,14 @@ export function sketchSubject(question: string): string | null {
     .replace(/\s+(?:for me|here|please|in the middle|in the centre|in the center)\b.*$/i, '')
     .trim();
   // Marking the screen itself is an annotation, not a picture ("draw a box around the taskbar").
-  if (/\b(?:around|under|over|across|through|next to|on top of|pointing|at the)\b/i.test(what)) return null;
+  // A picture can say 'next to' or 'on a branch'; an annotation is about something on screen.
+  if (
+    /\b(?:around|pointing (?:at|to)|over|under|across|through|next to|on top of|at)\s+(?:the|my|this|that)\s+(?:\w+\s+){0,2}?(?:button|taskbar|menu|icon|window|tab|text|link|bar|field|box|screen|title|word|line|row|image|picture|video|cursor|folder|file|app|page|header|sidebar)s?\b/i.test(
+      what,
+    ) ||
+    /\b(?:pointing|arrow)\b/i.test(what)
+  )
+    return null;
   // Inside an app it's a task ("draw a house in Paint").
   if (/\b(?:in|into|on|using|with)\s+(?:the\s+)?(?:ms\s+)?(?:paint|whiteboard|excalidraw|canva|figma)\b/i.test(what))
     return null;
@@ -186,6 +235,12 @@ export function placeSketch(
     ...s.strokes.map((st) => ({ displayId: display.id, kind: 'path' as const, points: st.points.map(at), label: '' })),
     ...s.labels.map((l) => ({ displayId: display.id, kind: 'text' as const, points: [at(l)], label: l.text })),
   ];
+}
+
+/** The question to ask when the illustrator couldn't tell what to draw, or null. */
+export function sketchUnclear(reply: string): string | null {
+  const m = /"unclear"\s*:\s*"([^"]{3,200})"/.exec(reply);
+  return m?.[1] ?? null;
 }
 
 /** The checker's verdict. */

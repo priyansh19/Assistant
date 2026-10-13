@@ -23,7 +23,7 @@ export const TONIGHT = [
     id,
     say,
     maxMinutes: 4,
-    shot: true,
+    shot: false,
     check: "'n/a'",
     pass: (_o, r) => sketched(r) && checkedOk(r),
     noCursorRule: true,
@@ -32,7 +32,7 @@ export const TONIGHT = [
     id: 'DW11',
     say: 'Clicky, explain the Pythagoras theorem and draw it on my screen.',
     maxMinutes: 3,
-    shot: true,
+    shot: false,
     check: "'n/a'",
     // A real triangle (a closed path through 3 corners) and the formula written out.
     pass: (_o, r) =>
@@ -44,7 +44,7 @@ export const TONIGHT = [
     say: 'Clicky, what is a right angle?',
     then: 'Clicky, draw it.',
     maxMinutes: 3,
-    shot: true,
+    shot: false,
     check: "'n/a'",
     pass: (_o, r) => /overlay draw (path|box)/.test(r.rawLog),
     noCursorRule: true,

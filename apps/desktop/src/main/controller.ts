@@ -28,7 +28,7 @@ import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
 import { LessonStore } from './lesson-store';
 import { Inventory } from './inventory';
-import { renderSvg } from './render-svg';
+import { keepSketchPicture, renderSvg } from './render-svg';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -291,7 +291,11 @@ export class Controller {
           .then((elements) => this.engine.send({ type: 'elements.reply', id: msg.id, elements }));
         return;
       case 'renderSketch':
-        void renderSvg(msg.svg).then((png) => this.engine.send({ type: 'renderSketch.reply', id: msg.id, png }));
+        void renderSvg(msg.svg).then((png) => {
+          // The newest drawings are kept as pictures too, for the dashboard and for reviewing tests.
+          if (png) keepSketchPicture(png);
+          this.engine.send({ type: 'renderSketch.reply', id: msg.id, png });
+        });
         return;
       case 'otherAgent':
         void this.input.otherAgent().then((text) => this.engine.send({ type: 'otherAgent.reply', id: msg.id, text }));

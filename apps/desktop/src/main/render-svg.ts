@@ -1,4 +1,6 @@
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * An SVG drawn into a PNG (base64), off screen, so the model can look at a sketch Clicky made before
@@ -22,5 +24,18 @@ export async function renderSvg(svg: string, size = 512): Promise<string | null>
     return null;
   } finally {
     win.destroy();
+  }
+}
+
+/** Keep a rendered drawing in userData/sketches (the newest 100), named by time. */
+export function keepSketchPicture(pngBase64: string): void {
+  try {
+    const dir = join(app.getPath('userData'), 'sketches');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.png`), Buffer.from(pngBase64, 'base64'));
+    const old = readdirSync(dir).sort().slice(0, -100);
+    for (const f of old) rmSync(join(dir, f), { force: true });
+  } catch {
+    // a picture that isn't kept changes nothing
   }
 }

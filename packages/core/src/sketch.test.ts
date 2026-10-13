@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { parseSketch, parseSketchCheck, placeSketch, sketchKey, sketchSubject, sketchToSvg } from './sketch.js';
+import {
+  parseSketch,
+  parseSketchCheck,
+  placeSketch,
+  sketchKey,
+  sketchSubject,
+  sketchToSvg,
+  sketchUnclear,
+  smooth,
+} from './sketch.js';
 
 describe('sketchSubject', () => {
   it('finds the thing to draw', () => {
@@ -74,5 +83,44 @@ describe('placing and checking', () => {
       fixes: 'It looks like a fish. add wings and a beak',
     });
     expect(sketchKey('A Parrot!')).toBe('parrot');
+  });
+});
+
+describe('smooth', () => {
+  it('rounds a curve, keeping the ends of an open stroke', () => {
+    const open = [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      { x: 200, y: 0 },
+    ];
+    const s = smooth(open, false);
+    expect(s[0]).toEqual({ x: 0, y: 0 });
+    expect(s[s.length - 1]).toEqual({ x: 200, y: 0 });
+    expect(s.length).toBeGreaterThan(10);
+    // The sharp tip is cut: no point reaches y = 100 any more.
+    expect(Math.max(...s.map((p) => p.y))).toBeLessThan(100);
+  });
+
+  it('smooths strokes marked smooth when parsing', () => {
+    const sk = parseSketch('{"strokes":[{"points":[[0,0],[500,1000],[1000,0]],"closed":true,"smooth":true}]}');
+    const pts = sk?.strokes[0]?.points ?? [];
+    expect(pts.length).toBeGreaterThan(20);
+    expect(pts[0]).toEqual(pts[pts.length - 1]);
+  });
+});
+
+describe('sketchSubject with places in the picture', () => {
+  it('keeps "next to" and "on a branch" as part of the picture', () => {
+    expect(sketchSubject('Clicky, draw a house with a tree next to it.')).toBe('a house with a tree next to it');
+    expect(sketchSubject('draw a parrot on a branch')).toBe('a parrot on a branch');
+    expect(sketchSubject('draw a circle around the save button')).toBeNull();
+    expect(sketchSubject('draw a line under the title')).toBeNull();
+  });
+});
+
+describe('sketchUnclear', () => {
+  it('reads the question for a misheard subject', () => {
+    expect(sketchUnclear('{"unclear": "Did you mean an owl?"}')).toBe('Did you mean an owl?');
+    expect(sketchUnclear('{"strokes": []}')).toBeNull();
   });
 });
