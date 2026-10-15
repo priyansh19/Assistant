@@ -132,7 +132,7 @@ for (const t of queue) {
   )
     .trim()
     .split(' ');
-  if (status === '1' && Number(charge) < 25) {
+  if (status === '1' && Number(charge) < 25 && !process.argv.includes('--low-battery-ok')) {
     say(`stopping: on battery at ${charge}%`);
     break;
   }
