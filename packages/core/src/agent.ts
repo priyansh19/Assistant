@@ -486,7 +486,8 @@ Rules:
   buys or pays, deletes files or other saved things (emails, files, records), merges or closes a pull
   request, submits a form, installs software, or changes account, privacy or security settings. The
   user will be asked to allow it. Clicking into a field, selecting text and editing or deleting the
-  text you are writing are not risky.
+  text you are writing are not risky. Asking an AI assistant app a question (ChatGPT, Codex, Grok,
+  Claude, Copilot, Perplexity) is not sending a message to a person: not risky.
 - Long tasks across several apps or sites: work through them part by part. Note what you find
   before moving to the next page. Never say done until every part of the task is finished.
 - Lists and feeds never end: note what is on screen after every scroll, and stop after about
@@ -1567,6 +1568,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
           note = `${why.replace(/^.*FOCUS_MOVED:\s*/, '')}. The user clicked somewhere else. Look at the screenshot: finish the text in the box you were typing in (click it first), and never type into the box the user moved to.`;
           steps.push(`(stopped typing: the focus moved: ${describe(a)})`);
           checked.push({ step: describe(a), ok: false });
+          // The rest of the plan (pressing Enter on half a message) mustn't run.
+          planQueue = [];
+          planned = [];
           continue;
         }
         note = `That step failed: ${why}. Try a different way (check the exact name or path in the lists above).`;

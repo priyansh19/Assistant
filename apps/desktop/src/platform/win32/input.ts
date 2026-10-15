@@ -96,22 +96,37 @@ public static class ClickyInput {
     var gi = new GUITHREADINFO(); gi.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
     GetGUIThreadInfo(tid, ref gi);
     var k = fg.ToInt64() + ":" + gi.hwndFocus.ToInt64();
-    if (deep) {
-      try {
-        var f = System.Windows.Automation.AutomationElement.FocusedElement;
-        if (f != null) k += ":" + string.Join(".", f.GetRuntimeId());
-      } catch { }
-    }
     return k;
+  }
+  // The focused control's kind and box. Chat boxes in web apps swap their inner element as text goes
+  // in (found with Grok Bot), so it's the place that's compared, not the element's identity.
+  static System.Windows.Rect FocusRect(out string kind) {
+    kind = "";
+    try {
+      var f = System.Windows.Automation.AutomationElement.FocusedElement;
+      if (f == null) return System.Windows.Rect.Empty;
+      kind = f.Current.ControlType.ProgrammaticName;
+      return f.Current.BoundingRectangle;
+    } catch { return System.Windows.Rect.Empty; }
+  }
+  // Still typing into the same box: same kind of control, and its centre is still inside the box it
+  // started in (a box that grows as the text wraps still counts), or no box could be read either time.
+  static bool SameBox(System.Windows.Rect start, string startKind) {
+    string kind; var now = FocusRect(out kind);
+    if (start.IsEmpty || now.IsEmpty) return start.IsEmpty == now.IsEmpty;
+    if (kind != startKind) return false;
+    var grown = start; grown.Inflate(40, 160);
+    return grown.Contains(new System.Windows.Point(now.X + now.Width / 2, now.Y + now.Height / 2));
   }
   static void TextPaced(string s) {
     var batch = new System.Collections.Generic.List<INPUT>();
     // If the focus moves while typing (the user clicks into another box), stop instead of typing
     // the rest of the text into the wrong place.
-    string fast = FocusKey(false), deep = FocusKey(true);
+    string fast = FocusKey(false), startKind;
+    var startBox = FocusRect(out startKind);
     int sent = 0;
     foreach (char ch in s) {
-      if (FocusKey(false) != fast || (sent > 0 && sent % 24 == 0 && FocusKey(true) != deep))
+      if (FocusKey(false) != fast || (sent > 0 && sent % 24 == 0 && !SameBox(startBox, startKind)))
         throw new Exception("FOCUS_MOVED: the focus moved somewhere else while I was typing, so I stopped after " + sent + " characters");
       sent++;
       if (ch == '\r') continue;
