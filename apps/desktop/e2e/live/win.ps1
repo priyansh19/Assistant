@@ -263,7 +263,7 @@ function Close-NewWindows {
   }
   Start-Sleep 3
   $procsBefore = @(Get-Content $ProcSnapshotFile -ErrorAction SilentlyContinue)
-  $noise = '^(conhost|powershell|pwsh|node|bash|git|WmiPrvSE|RuntimeBroker|backgroundTaskHost|dllhost|svchost|audiodg|SearchProtocolHost|SearchFilterHost|smartscreen|WerFault|cmd|tasklist)$'
+  $noise = '^(conhost|powershell|pwsh|node|bash|git|WmiPrvSE|RuntimeBroker|backgroundTaskHost|dllhost|svchost|audiodg|SearchProtocolHost|SearchFilterHost|smartscreen|WerFault|cmd|tasklist|taskhostw|sihost|ctfmon|CompPkgSrv|UserOOBEBroker|LockApp)$'
   $left = Get-Process | Where-Object { "$($_.Id)" -notin $procsBefore -and $_.ProcessName -notin $skip -and $_.ProcessName -notmatch $noise }
   $leak = ($left | Group-Object ProcessName | ForEach-Object { '{0} x{1} {2:N0}MB' -f $_.Name, $_.Count, (($_.Group | Measure-Object WorkingSet64 -Sum).Sum / 1MB) }) -join ', '
   $names = ($closed | Sort-Object -Unique) -join ', '

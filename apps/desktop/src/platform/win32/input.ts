@@ -323,6 +323,13 @@ public static class ClickyInput {
           if (!r.IsEmpty && r.Width >= 4 && r.Height >= 4 && (name.Length > 0 || c.ControlType == System.Windows.Automation.ControlType.Edit)) {
             snap.Add(e);
             var kind = c.ControlType.ProgrammaticName.Replace("ControlType.", "").ToLowerInvariant();
+            // Ticked or not: a menu closes as soon as an option is clicked, so the screenshot can't
+            // tell whether "File name extensions" is on (found live: it was toggled three times).
+            object tp;
+            if (e.TryGetCurrentPattern(System.Windows.Automation.TogglePattern.Pattern, out tp)) {
+              var ts = ((System.Windows.Automation.TogglePattern)tp).Current.ToggleState;
+              kind += ts == System.Windows.Automation.ToggleState.On ? " (ticked)" : ts == System.Windows.Automation.ToggleState.Off ? " (not ticked)" : "";
+            }
             sb.Append(snap.Count).Append('|').Append(kind).Append('|').Append(name).Append('|')
               .Append((int)r.X).Append(',').Append((int)r.Y).Append(',').Append((int)r.Width).Append(',').Append((int)r.Height).Append('\n');
           }

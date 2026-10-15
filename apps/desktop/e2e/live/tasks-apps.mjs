@@ -14,8 +14,9 @@ const SHOW_EXT = '(New-Object -ComObject Shell.Application).GetSetting(0x2)';
 const START_X =
   "Add-Type -AssemblyName UIAutomationClient; $tb = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst('Children', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd'))); $st = $tb.FindFirst('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'StartButton'))); [int]($st.Current.BoundingRectangle.X + $st.Current.BoundingRectangle.Width / 2)";
 const REPO = `clicky-test-${new Date().toISOString().slice(5, 10).replace('-', '')}`;
+// Comet may be signed in to either of the owner's GitHub accounts: the repo counts under either.
 const ghRepo = (name) =>
-  `$env:GH_TOKEN = (gh auth token --user priyansh19); $r = gh api repos/priyansh19/${name} --jq .name 2>$null; if ($r) { $r } else { 'none' }`;
+  `$r = ''; foreach ($u in 'priyansh19', 'PGupta1907') { $env:GH_TOKEN = (gh auth token --user $u); $x = gh api repos/$u/${name} --jq .name 2>$null; if ($x) { $r = $x } }; if ($r) { $r } else { 'none' }; exit 0`;
 
 export const APPS = [
   // ---- Terminals and developer tools.
@@ -222,7 +223,8 @@ export const APPS = [
     id: 'GH01',
     say: `Clicky, create a new private GitHub repository called ${REPO}.`,
     maxMinutes: 5,
-    allow: new RegExp(REPO, 'i'),
+    // Clicky's ask doesn't always name the repo ('Creating the private repository'); the task does.
+    allow: new RegExp(`${REPO}|repositor`, 'i'),
     check: ghRepo(REPO),
     pass: (out) => out.trim() === REPO,
   },
@@ -230,7 +232,8 @@ export const APPS = [
     id: 'GH02',
     say: `Clicky, delete the GitHub repository ${REPO}.`,
     maxMinutes: 6,
-    allow: new RegExp(REPO, 'i'),
+    // Clicky's ask doesn't always name the repo ('Creating the private repository'); the task does.
+    allow: new RegExp(`${REPO}|repositor`, 'i'),
     check: ghRepo(REPO),
     pass: (out) => out.trim() === 'none',
   },

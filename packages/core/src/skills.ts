@@ -77,6 +77,12 @@ working across several websites in a row, and turning what you find into files (
 - Never close a window marked "unsaved changes" or "never close", or a tab the user is on (active);
   leave them and tell the user which ones you kept and why.
 
+## Switches and ticks
+- Clicking a tick box or a ticked menu option flips it. Before clicking, read its state in
+  "Controls" ("(ticked)" / "(not ticked)") and click only if it isn't already the way the user
+  wants. After clicking, a menu usually closes: that is not a failure; never click the same option
+  again to "make sure" (that flips it back).
+
 ## When something goes wrong
 - If a step didn't work, don't repeat it: try a different element, a keyboard shortcut or the
   open action. If several things fail, you'll be asked to review what went wrong; follow that.
