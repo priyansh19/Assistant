@@ -411,7 +411,8 @@ public static class ClickyInput {
         var c = b.Current; var r = c.BoundingRectangle;
         if (r.IsEmpty || c.IsOffscreen) continue;
         var name = (c.Name ?? "").Replace("\r", " ").Replace("\n", " ").Replace("|", "/");
-        sb.Append((int)(r.X + r.Width / 2)).Append('|').Append((int)(r.Y + r.Height / 2)).Append('|').Append(name).Append('\n');
+        var aid = (c.AutomationId ?? "").Replace("|", "/").Replace("\n", " ");
+        sb.Append((int)(r.X + r.Width / 2)).Append('|').Append((int)(r.Y + r.Height / 2)).Append('|').Append(aid).Append('|').Append(name).Append('\n');
       } catch { }
     }
     return sb.ToString();
@@ -1015,8 +1016,8 @@ export function createWin32InputDriver(): InputDriver {
         .split('\n')
         .filter(Boolean)
         .map((line) => {
-          const [x = '0', y = '0', ...name] = line.split('|');
-          return { x: Number(x), y: Number(y), name: name.join('|') };
+          const [x = '0', y = '0', id = '', ...name] = line.split('|');
+          return { x: Number(x), y: Number(y), id, name: name.join('|') };
         }),
     windowBox: async (handle) => box(await ask(`winbox ${int(Number(handle))}`)),
     findControl: async (handle, kind, part, budgetMs = 800) => {

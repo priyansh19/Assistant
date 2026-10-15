@@ -796,6 +796,16 @@ function typesIntoFocus(input: InputAction): boolean {
   return /^(?:enter|shift\+enter|backspace|delete|ctrl\+[avxz]|ctrl\+backspace)$/.test(k);
 }
 
+/** Steps that don't touch the screen. */
+const OFF_SCREEN = new Set<AgentAction['type']>([
+  'note',
+  'find_files',
+  'list_files',
+  'move_files',
+  'save_sheet',
+  'wait',
+]);
+
 /** Thrown internally to skip the model call for a step that comes from the plan. */
 const PLANNED = Symbol('planned');
 
@@ -1190,11 +1200,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       await deps.waitForUser?.(deps.signal);
       if (deps.signal.aborted) return stopped();
     }
+    // An app on the never-touch list in front: Clicky may still open something else (which takes
+    // over the front), but never clicks or types into it (checked once the step is known).
     const blocked = await deps.blockedApp?.();
-    if (blocked) {
-      deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
-      return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
-    }
     const fromPlan = planQueue.shift() ?? null;
     if (!fromPlan && planned.length) {
       note = `You carried out your plan (${planned.join('; ')}). Look at the screen: finish the task from here, or reply done if it is finished.`;
@@ -1341,6 +1349,10 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       if (!NEEDS_USER.test(a.say) && (await recover(`you wanted to give up: ${a.say}`))) continue;
       deps.log?.(`agent gave up after ${steps.length} steps: ${a.say}`);
       return { outcome: 'failed', summary: a.say, steps, checked };
+    }
+    if (blocked && !OFF_SCREEN.has(a.type) && a.type !== 'open') {
+      deps.log?.(`agent refused: ${blocked} is on the never-touch list`);
+      return { outcome: 'failed', summary: `I stopped: ${blocked} is on your list of apps I never touch.`, steps };
     }
     // Another agent working in the browser this step needs: wait for it instead of clashing.
     if (a.type !== 'note' && a.type !== 'find_files' && a.type !== 'list_files' && (await waitForOtherAgent(deps, a)))

@@ -62,7 +62,7 @@ export interface InputDriver {
   /** Act on control number id from the last elements() list; resolves to where (physical px). */
   elementAct(id: number, op: 'click' | 'double' | 'right' | 'set', text?: string): Promise<{ x: number; y: number }>;
   /** The taskbar's buttons (pinned and running apps, Start, Search) with their centres (physical px). */
-  taskbar(): Promise<{ x: number; y: number; name: string }[]>;
+  taskbar(): Promise<{ x: number; y: number; id: string; name: string }[]>;
   /** A window's frame (physical px), or null. */
   windowBox(handle: string): Promise<{ x: number; y: number; w: number; h: number } | null>;
   /** Centre of a control by kind ("edit", "button"… or "") and part of its name; handle "0" = the window in front. */

@@ -331,8 +331,10 @@ export class InputHost {
       .taskbar()
       .catch(() => []);
     const n = name.toLowerCase().trim();
+    // App buttons only (pinned or running): the tray's "Clock 03:17" isn't the Clock app (found live).
+    const apps = list.filter((b) => /^appid:/i.test(b.id) || (n === 'start' && b.id === 'StartButton'));
     return (
-      list.find((b) => {
+      apps.find((b) => {
         const t = b.name.toLowerCase();
         return t === n || t.startsWith(`${n} `);
       }) ?? null
