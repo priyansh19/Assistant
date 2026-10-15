@@ -244,15 +244,29 @@ function Get-TopWindows {
       $true }, [IntPtr]::Zero)
   $list
 }
-function Save-WindowSnapshot { (Get-TopWindows).Handle | Set-Content $SnapshotFile }
+$ProcSnapshotFile = Join-Path $env:TEMP 'clicky-test-procs.txt'
+function Save-WindowSnapshot {
+  (Get-TopWindows).Handle | Set-Content $SnapshotFile
+  (Get-Process).Id | Set-Content $ProcSnapshotFile
+}
+# Leak check: closes the windows the task opened, then reports what it closed and any new processes
+# still running afterwards with their memory (what the task left behind).
 function Close-NewWindows {
   if (-not (Test-Path $SnapshotFile)) { return }
   $before = @(Get-Content $SnapshotFile)
-  $closed = 0
+  $skip = @('claude', 'Clicky', 'ShellExperienceHost', 'SearchHost', 'StartMenuExperienceHost', 'TextInputHost')
+  $closed = @()
   foreach ($w in Get-TopWindows) {
-    if ("$($w.Handle)" -in $before) { continue }
-    if ($w.Process -in @('claude', 'Clicky', 'ShellExperienceHost', 'SearchHost', 'StartMenuExperienceHost', 'TextInputHost')) { continue }
-    [void][LiveTop.W]::PostMessage([IntPtr]$w.Handle, 0x10, [IntPtr]::Zero, [IntPtr]::Zero); $closed++
+    if ("$($w.Handle)" -in $before -or $w.Process -in $skip) { continue }
+    [void][LiveTop.W]::PostMessage([IntPtr]$w.Handle, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)
+    $closed += $w.Process
   }
-  "closed $closed new windows"
+  Start-Sleep 3
+  $procsBefore = @(Get-Content $ProcSnapshotFile -ErrorAction SilentlyContinue)
+  $noise = '^(conhost|powershell|pwsh|node|bash|git|WmiPrvSE|RuntimeBroker|backgroundTaskHost|dllhost|svchost|audiodg|SearchProtocolHost|SearchFilterHost|smartscreen|WerFault|cmd|tasklist)$'
+  $left = Get-Process | Where-Object { "$($_.Id)" -notin $procsBefore -and $_.ProcessName -notin $skip -and $_.ProcessName -notmatch $noise }
+  $leak = ($left | Group-Object ProcessName | ForEach-Object { '{0} x{1} {2:N0}MB' -f $_.Name, $_.Count, (($_.Group | Measure-Object WorkingSet64 -Sum).Sum / 1MB) }) -join ', '
+  $names = ($closed | Sort-Object -Unique) -join ', '
+  if (-not $leak) { $leak = 'nothing' }
+  "closed $($closed.Count) windows ($names); left running: $leak"
 }
