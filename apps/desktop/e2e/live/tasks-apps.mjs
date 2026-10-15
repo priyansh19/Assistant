@@ -8,6 +8,11 @@ const reg = (path, name) => `(Get-ItemProperty '${path}').${name}`;
 const PERSONALIZE = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize';
 const ADVANCED = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced';
 const desk = "[Environment]::GetFolderPath('Desktop')";
+/** True when Explorer shows file name extensions. */
+const SHOW_EXT = '(New-Object -ComObject Shell.Application).GetSetting(0x2)';
+/** The Start button's centre x on the primary taskbar (left-aligned icons put it near the edge). */
+const START_X =
+  "Add-Type -AssemblyName UIAutomationClient; $tb = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst('Children', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd'))); $st = $tb.FindFirst('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'StartButton'))); [int]($st.Current.BoundingRectangle.X + $st.Current.BoundingRectangle.Width / 2)";
 const REPO = `clicky-test-${new Date().toISOString().slice(5, 10).replace('-', '')}`;
 const ghRepo = (name) =>
   `$env:GH_TOKEN = (gh auth token --user priyansh19); $r = gh api repos/priyansh19/${name} --jq .name 2>$null; if ($r) { $r } else { 'none' }`;
@@ -170,17 +175,32 @@ export const APPS = [
     id: 'ST02',
     say: 'Clicky, make File Explorer hide file name extensions.',
     maxMinutes: 4,
-    check: reg(ADVANCED, 'HideFileExt'),
-    pass: (out) => out.trim() === '1',
-    cleanup: [`Set-ItemProperty '${ADVANCED}' HideFileExt 0`],
+    // What Explorer really does (the registry value can lag behind the setting).
+    check: SHOW_EXT,
+    pass: (out) => out.trim() === 'False',
+  },
+  {
+    id: 'ST02R',
+    say: 'Clicky, make File Explorer show file name extensions again.',
+    maxMinutes: 4,
+    check: SHOW_EXT,
+    pass: (out) => out.trim() === 'True',
   },
   {
     id: 'ST03',
     say: 'Clicky, move my taskbar icons to the left.',
     maxMinutes: 4,
-    check: reg(ADVANCED, 'TaskbarAl'),
-    pass: (out) => out.trim() === '0',
-    cleanup: [`Set-ItemProperty '${ADVANCED}' TaskbarAl 1`],
+    // Where Start really is: the registry value doesn't change with the setting on this build, and
+    // writing it doesn't move the icons back, so Clicky puts them back itself (ST03R).
+    check: START_X,
+    pass: (out) => Number(out.trim()) < 120,
+  },
+  {
+    id: 'ST03R',
+    say: 'Clicky, move my taskbar icons back to the centre.',
+    maxMinutes: 4,
+    check: START_X,
+    pass: (out) => Number(out.trim()) > 150,
   },
 
   // ---- Web and GitHub.
@@ -218,7 +238,8 @@ export const APPS = [
     id: 'GH03',
     say: 'Clicky, how many open pull requests does my Assistant repository on GitHub have?',
     maxMinutes: 4,
-    check: "$env:GH_TOKEN = (gh auth token --user priyansh19); gh pr list --repo priyansh19/Assistant --state open --json number --jq length",
+    check:
+      '$env:GH_TOKEN = (gh auth token --user priyansh19); gh pr list --repo priyansh19/Assistant --state open --json number --jq length',
     pass: (out, r) => {
       const n = Number(out.trim());
       const words = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];

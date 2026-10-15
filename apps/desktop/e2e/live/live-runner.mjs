@@ -138,6 +138,7 @@ for (const t of queue) {
   }
   await freshClicky();
   say(`--- ${t.id}: ${t.say}${model ? ` [model ${model}]` : ''}`);
+  ps('Save-WindowSnapshot');
   for (const s of t.setup ?? []) say(`setup: ${ps(s).slice(0, 200)}`);
   const wav = path.join(outDir, `${t.id}.wav`);
   if (!typedAsks) ps(`New-SpokenWav '${t.say.replace(/'/g, "''")}' '${wav}'`);
@@ -259,9 +260,11 @@ for (const t of queue) {
   };
   // Hard rule: Clicky's cursor goes to everything it opens, clicks, types into or closes. Every step
   // that touches the screen needs a cursor move (an overlay point or a "cursor to" line) to match.
-  const acting = r.steps.filter(
-    (x) => !/: (noted|listed|found d+ files|looked for files|saved|waited|moved d+|copied d+)/.test(x),
-  ).length;
+  // A step that failed before acting (no such control) needs no cursor move.
+  const acting =
+    r.steps.filter(
+      (x) => !/: (noted|listed|found \d+ files|looked for files|saved|waited|moved \d+|copied \d+)/.test(x),
+    ).length - (log.match(/agent step failed: /g) ?? []).length;
   r.cursorMoves = (log.match(/overlay point on display|cursor to "/g) ?? []).length;
   r.cursorOk = r.cursorMoves >= acting;
   r.checkOut = ps(t.check);
@@ -277,6 +280,10 @@ for (const t of queue) {
       String.fromCharCode(10),
   );
   for (const s of t.cleanup ?? []) ps(s);
+  // Whatever the task opened is closed, so windows don't pile up on the owner's screen.
+  if (!t.keepWindows) say(ps('Close-NewWindows').trim());
+  // …and the tab it opened in Comet (the newest one, still in front).
+  if (!t.keepWindows && /opened https?:\/\/\S+ in Comet$/m.test(log)) say(`tab: ${ps("Close-FrontTab '.'").trim()}`);
   fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(results, null, 1));
   await wait(3000);
 }

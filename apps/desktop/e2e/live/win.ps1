@@ -222,3 +222,37 @@ function Close-FrontTab([string]$Expect) {
   [LiveWin]::keybd_event(0x57, 0, 2, [UIntPtr]::Zero); [LiveWin]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
   'closed'
 }
+
+# Windows a test leaves behind are closed after it (the owner asked Clicky twice to close the pile
+# of windows the tests had opened). Before a task: Save-WindowSnapshot; after: Close-NewWindows.
+$SnapshotFile = Join-Path $env:TEMP 'clicky-test-windows.txt'
+function Get-TopWindows {
+  Add-Type -Namespace LiveTop -Name W -MemberDefinition '
+    public delegate bool P(System.IntPtr h, System.IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(P f, System.IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+    [DllImport("user32.dll")] public static extern System.IntPtr GetWindow(System.IntPtr h, uint c);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(System.IntPtr h);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint p);
+    [DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr h, uint m, System.IntPtr w, System.IntPtr l);' -ErrorAction SilentlyContinue
+  $list = New-Object System.Collections.Generic.List[object]
+  [void][LiveTop.W]::EnumWindows({ param($h, $l)
+      if ([LiveTop.W]::IsWindowVisible($h) -and [LiveTop.W]::GetWindow($h, 4) -eq [IntPtr]::Zero -and [LiveTop.W]::GetWindowTextLength($h) -gt 0) {
+        $p = 0; [void][LiveTop.W]::GetWindowThreadProcessId($h, [ref]$p)
+        $list.Add([pscustomobject]@{ Handle = $h.ToInt64(); Process = (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName })
+      }
+      $true }, [IntPtr]::Zero)
+  $list
+}
+function Save-WindowSnapshot { (Get-TopWindows).Handle | Set-Content $SnapshotFile }
+function Close-NewWindows {
+  if (-not (Test-Path $SnapshotFile)) { return }
+  $before = @(Get-Content $SnapshotFile)
+  $closed = 0
+  foreach ($w in Get-TopWindows) {
+    if ("$($w.Handle)" -in $before) { continue }
+    if ($w.Process -in @('claude', 'Clicky', 'ShellExperienceHost', 'SearchHost', 'StartMenuExperienceHost', 'TextInputHost')) { continue }
+    [void][LiveTop.W]::PostMessage([IntPtr]$w.Handle, 0x10, [IntPtr]::Zero, [IntPtr]::Zero); $closed++
+  }
+  "closed $closed new windows"
+}
