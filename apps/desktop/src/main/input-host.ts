@@ -476,7 +476,7 @@ export class InputHost {
     // A new tab takes a moment to draw its address bar.
     let bar: { x: number; y: number } | null = null;
     for (let i = 0; i < 3 && !bar; i++) {
-      bar = await d.findControl(handle, 'edit', 'Address', 1200).catch(() => null);
+      bar = await d.findControl(handle, 'edit', 'Address and search bar', 1200).catch(() => null);
       if (!bar) await delay(400);
     }
     if (bar && (await this.show(bar, 'Address bar'))) {

@@ -427,29 +427,51 @@ public static class ClickyInput {
   // Centre of the first control in the window in front (or handle) whose name contains part, of the
   // given kind ("" for any): "x y". The page itself is skipped, so this finds the browser's own UI
   // (address bar, New tab) quickly.
+  // Searched level by level, so the app's own bar and buttons (shallow) come before a long list's
+  // items, and web apps' pages (Postman, chat apps) are searched too. An exact name wins at once; a
+  // name that only contains the words is kept in case nothing exact turns up in time.
   public static string FindControl(long handle, string kind, string part, int budgetMs) {
     Aware();
     IntPtr h = handle != 0 ? new IntPtr(handle) : GetForegroundWindow();
     if (h == IntPtr.Zero) return "";
     var end = DateTime.Now.AddMilliseconds(budgetMs);
     var walker = System.Windows.Automation.TreeWalker.ControlViewWalker;
-    var st = new System.Collections.Generic.Stack<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
-    try { st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(System.Windows.Automation.AutomationElement.FromHandle(h), 0)); } catch { return ""; }
-    while (st.Count > 0 && DateTime.Now < end) {
-      var top = st.Pop();
+    var q = new System.Collections.Generic.Queue<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+    try { q.Enqueue(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(System.Windows.Automation.AutomationElement.FromHandle(h), 0)); } catch { return ""; }
+    string partial = "";
+    int partialDepth = 0;
+    var want = part.Trim();
+    // Pages (Documents) are searched after the app's own controls: they can hold thousands of nodes.
+    var later = new System.Collections.Generic.Queue<System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>>();
+    while ((q.Count > 0 || later.Count > 0) && DateTime.Now < end) {
+      var top = q.Count > 0 ? q.Dequeue() : later.Dequeue();
+      // A near match was found: look one level further for an exact one, then settle.
+      if (partial.Length > 0 && top.Value > partialDepth + 1) break;
       try {
         var c = top.Key.Current;
         var k = c.ControlType.ProgrammaticName.Replace("ControlType.", "").ToLowerInvariant();
-        if ((kind.Length == 0 || k == kind) && (c.Name ?? "").IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0 && !c.IsOffscreen) {
-          var r = c.BoundingRectangle;
-          if (!r.IsEmpty) return (int)(r.X + r.Width / 2) + " " + (int)(r.Y + r.Height / 2);
+        var name = (c.Name ?? "").Trim();
+        if ((kind.Length == 0 || k == kind) && name.Length > 0 && !c.IsOffscreen) {
+          var exact = string.Equals(name, want, StringComparison.OrdinalIgnoreCase);
+          if (exact || (partial.Length == 0 && name.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0)) {
+            var r = c.BoundingRectangle;
+            if (!r.IsEmpty) {
+              var at = (int)(r.X + r.Width / 2) + " " + (int)(r.Y + r.Height / 2);
+              if (exact) return at;
+              partial = at;
+              partialDepth = top.Value;
+            }
+          }
         }
-        if (top.Value < 18 && c.ControlType != System.Windows.Automation.ControlType.Document)
-          for (var ch = walker.GetLastChild(top.Key); ch != null; ch = walker.GetPreviousSibling(ch))
-            st.Push(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(ch, top.Value + 1));
+        if (top.Value < 25) {
+          int n = 0;
+          var into = c.ControlType == System.Windows.Automation.ControlType.Document || top.Value >= 12 ? later : q;
+          for (var ch = walker.GetFirstChild(top.Key); ch != null && n < 300; ch = walker.GetNextSibling(ch), n++)
+            into.Enqueue(new System.Collections.Generic.KeyValuePair<System.Windows.Automation.AutomationElement, int>(ch, top.Value + 1));
+        }
       } catch { }
     }
-    return "";
+    return partial;
   }
   // Where typing goes: the focused control's box "x y w h", or the window in front.
   public static string FocusBox() {
