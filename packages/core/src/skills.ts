@@ -66,6 +66,11 @@ working across several websites in a row, and turning what you find into files (
 - To install software, open the Microsoft Store app, search for it, open its page and press Get or
   Install (risky); for things like WSL say what the Store or Windows will ask.
 
+- Requests come from speech recognition, which mangles tool names: "Qubicle" or "cube control" is
+  kubectl, "doctor" in a terminal task is Docker, "get" is git, "clicky project" may be the
+  clickey folder. If a name matches nothing on this PC, try the closest real tool before saying it
+  isn't installed.
+
 ## Tidying up windows and tabs
 - Tabs marked "asleep" or not in front for hours, and windows not used for a long time, are stale:
   close them without asking when the user asks to tidy up. Duplicate tabs of the same page: keep one.

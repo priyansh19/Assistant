@@ -83,6 +83,25 @@ const KEYTERMS = [
   'YouTube',
   'spreadsheet',
   'pull request',
+  // Developer words speech recognition gets wrong ("kubectl" came out as "Qubicle").
+  'kubectl',
+  'Kubernetes',
+  'Docker',
+  'container',
+  'git',
+  'npm',
+  'WSL',
+  'Ubuntu',
+  'PowerShell',
+  'Terminal',
+  'VS Code',
+  'Postman',
+  'Claude Code',
+  'Codex',
+  'Grok',
+  'repository',
+  'Python',
+  'IDLE',
 ];
 
 /** How long main may take to answer a capture plan request before the question fails. */

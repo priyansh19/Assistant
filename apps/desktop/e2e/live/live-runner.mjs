@@ -17,11 +17,12 @@ import { BATCH3, UNDERSTANDING } from './tasks-batch3.mjs';
 import { DRAWING } from './tasks-drawing.mjs';
 import { SCREEN } from './tasks-screen.mjs';
 import { TONIGHT } from './tasks-tonight.mjs';
+import { APPS } from './tasks-apps.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
 const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN, ...TONIGHT].map((t) =>
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN, ...TONIGHT, ...APPS].map((t) =>
   process.argv.includes('--nameless')
     ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }
     : t,
@@ -122,6 +123,9 @@ const queue = (only ? only.map((id) => TASKS.find((x) => x.id === id)).filter(Bo
   (x) => destructive || !x.destructive,
 );
 for (const t of queue) {
+  // The owner may be using the laptop (and Clicky) too: start a task only after 30 s with no mouse
+  // or keyboard, so a test never talks over them (round 1 on 16 Oct did).
+  ps(`& '${path.join(here, 'wait-idle.ps1')}' -Seconds 30 -MaxMinutes 600 | Out-Null`, 11 * 3600_000);
   // Never run the laptop flat: stop when it's on battery and low (round 1 died at 5% overnight).
   const [charge = '100', status = '2'] = ps(
     '$b = Get-CimInstance Win32_Battery; "$($b.EstimatedChargeRemaining) $($b.BatteryStatus)"',

@@ -831,7 +831,12 @@ function scriptFile(script: string): string {
   return file;
 }
 
-export function createWin32InputDriver(): InputDriver {
+/**
+ * One persistent helper process: a PowerShell running the C# above, taking one command per line.
+ * A command that times out (UI Automation can hang on a busy app) restarts the helper, so one stuck
+ * call never blocks every later click.
+ */
+function makeHelper(): { send(cmd: string, timeoutMs?: number): Promise<string>; warm(): void; dispose(): void } {
   let proc: ChildProcessWithoutNullStreams | null = null;
   let ready: Promise<void> | null = null;
   let nextId = 1;
@@ -902,11 +907,36 @@ export function createWin32InputDriver(): InputDriver {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error('the input helper timed out'));
+        // Whatever it's stuck on would hold up every later command: start a fresh one.
+        if (proc === child) {
+          child.kill();
+          proc = null;
+          ready = null;
+        }
       }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
       child.stdin.write(`${id} ${cmd}\n`);
     });
   }
+
+  return {
+    send,
+    warm: () => void start().catch(() => undefined),
+    dispose: () => {
+      proc?.kill();
+      proc = null;
+      ready = null;
+    },
+  };
+}
+
+export function createWin32InputDriver(): InputDriver {
+  // Two helpers: one acts (clicks, keys, typing, the numbered controls it clicks), one looks (window
+  // lists, tabs, finding controls). A slow look at a busy app never delays a click.
+  const act = makeHelper();
+  const look = makeHelper();
+  const send = act.send;
+  const ask = look.send;
   const done = (p: Promise<string>): Promise<void> => p.then(() => undefined);
   const b64 = (s: string): string => Buffer.from(s, 'base64').toString('utf8');
 
@@ -917,7 +947,10 @@ export function createWin32InputDriver(): InputDriver {
     return x === undefined || y === undefined || !w || !h || Number.isNaN(x) ? null : { x, y, w, h };
   };
   return {
-    warm: () => void start().catch(() => undefined),
+    warm: () => {
+      act.warm();
+      look.warm();
+    },
     click: (x, y, button, count) => done(send(`click ${int(x)} ${int(y)} ${button} ${count}`)),
     scroll: (x, y, amount) => done(send(`scroll ${int(x)} ${int(y)} ${int(amount)}`)),
     drag: (points) => {
@@ -936,12 +969,12 @@ export function createWin32InputDriver(): InputDriver {
       done(send(`text ${Buffer.from(text, 'utf8').toString('base64')}`, COMMAND_TIMEOUT_MS + text.length * 15)),
     backspace: (count) => done(send(`back ${Math.max(0, Math.min(20000, int(count)))}`)),
     foreground: async () => {
-      const r = await send('fg');
+      const r = await ask('fg');
       const [a, b] = r.split(' ');
       return a === undefined || a === '' ? null : { process: b64(a), title: b64(b ?? '') };
     },
     snap: async (name, x, y, budgetMs) => {
-      const r = await send(`snap ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)} ${int(budgetMs)}`);
+      const r = await ask(`snap ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)} ${int(budgetMs)}`);
       const [lx, ly] = r.split(' ').map(Number);
       return lx === undefined || ly === undefined || !Number.isFinite(lx + ly) ? null : { x: lx, y: ly };
     },
@@ -963,17 +996,17 @@ export function createWin32InputDriver(): InputDriver {
       return { x: x ?? 0, y: y ?? 0 };
     },
     taskbar: async () =>
-      b64(await send('taskbar', 8000))
+      b64(await ask('taskbar', 8000))
         .split('\n')
         .filter(Boolean)
         .map((line) => {
           const [x = '0', y = '0', ...name] = line.split('|');
           return { x: Number(x), y: Number(y), name: name.join('|') };
         }),
-    windowBox: async (handle) => box(await send(`winbox ${int(Number(handle))}`)),
+    windowBox: async (handle) => box(await ask(`winbox ${int(Number(handle))}`)),
     findControl: async (handle, kind, part, budgetMs = 800) => {
       const r = (
-        await send(
+        await ask(
           `findctl ${int(Number(handle))} ${kind || '-'} ${Buffer.from(part, 'utf8').toString('base64')} ${int(budgetMs)}`,
           budgetMs + 5000,
         )
@@ -982,9 +1015,9 @@ export function createWin32InputDriver(): InputDriver {
       const [x = 0, y = 0] = r.split(' ').map(Number);
       return { x, y };
     },
-    focusBox: async () => box(await send('focusbox', 6000)),
+    focusBox: async () => box(await ask('focusbox', 6000)),
     tabs: async (handle) =>
-      b64(await send(`tabs ${int(Number(handle))}`, 8000))
+      b64(await ask(`tabs ${int(Number(handle))}`, 8000))
         .split('\n')
         .filter(Boolean)
         .map((line) => {
@@ -994,18 +1027,18 @@ export function createWin32InputDriver(): InputDriver {
     closeTab: async (handle, index) =>
       (await send(`closetab ${int(Number(handle))} ${int(index)}`, 8000)).trim().toLowerCase() === 'true',
     otherAgent: async () => {
-      const r = b64(await send('otheragent', 8000)).trim();
+      const r = b64(await ask('otheragent', 8000)).trim();
       if (!r) return null;
       const at = r.indexOf('|');
       return { process: r.slice(0, at), text: r.slice(at + 1) };
     },
     locate: async (name, x, y) => {
-      const r = await send(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
+      const r = await ask(`locate ${Buffer.from(name, 'utf8').toString('base64')} ${int(x)} ${int(y)}`);
       const [lx, ly] = r.split(' ').map(Number);
       return lx === undefined || ly === undefined || !Number.isFinite(lx + ly) ? null : { x: lx, y: ly };
     },
     apps: async () => {
-      const raw = b64(await send('apps'));
+      const raw = b64(await ask('apps'));
       const parsed: unknown = JSON.parse(raw || '[]');
       const list = Array.isArray(parsed) ? parsed : [parsed];
       return list
@@ -1016,7 +1049,7 @@ export function createWin32InputDriver(): InputDriver {
     },
     launch: (id) => done(send(`launch ${Buffer.from(id, 'utf8').toString('base64')}`)),
     windows: async () => {
-      const raw = await send('windows');
+      const raw = await ask('windows');
       return raw
         .split(';')
         .filter(Boolean)
@@ -1025,16 +1058,16 @@ export function createWin32InputDriver(): InputDriver {
           return { handle, process: b64(proc), title: b64(title) };
         });
     },
-    foregroundHandle: async () => (await send('fgh')).trim(),
+    foregroundHandle: async () => (await ask('fgh')).trim(),
     maximizeNew: async (before, ms, procs = '') =>
       void (await send(
         `maxnew ${/^\d+$/.test(before) ? before : '0'} ${Math.max(200, Math.min(8000, int(ms)))} ${procs.replace(/[^a-z0-9,]/gi, '')}`,
       )),
-    usesAltGr: async () => (await send('altgr')).trim().toLowerCase() === 'true',
+    usesAltGr: async () => (await ask('altgr')).trim().toLowerCase() === 'true',
     closeWindow: (handle) => done(send(`closewin ${/^\d+$/.test(handle) ? handle : '0'}`)),
     openFolder: (path) => done(send(`folder ${Buffer.from(path, 'utf8').toString('base64')}`)),
     caret: async () => {
-      const [x, y, h] = (await send('caret')).split(' ').map(Number);
+      const [x, y, h] = (await ask('caret')).split(' ').map(Number);
       return x === undefined || y === undefined || h === undefined || !Number.isFinite(x + y + h)
         ? null
         : { x, y, height: h };
@@ -1044,9 +1077,8 @@ export function createWin32InputDriver(): InputDriver {
       return done(send(`keys ${vks.map((k) => k[0]).join(',')} ${vks.map((k) => (k[1] ? '1' : '0')).join(',')}`));
     },
     dispose: () => {
-      proc?.kill();
-      proc = null;
-      ready = null;
+      act.dispose();
+      look.dispose();
     },
   };
 }
