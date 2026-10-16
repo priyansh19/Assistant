@@ -88,7 +88,7 @@ Rules:
 
 ### 3.2 POINT protocol (blueprint §5)
 
-- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`.
+- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`. Extensions: `[TASK:goal]` (below), and `[TARGET]`, `[HOVER]` and `[DEEP]` (§3.5).
 - **Deviation (speed):** the prompt asks the model to put the tag at the *start* of the response, not the end, so the dot can start moving before the first word is spoken. The parser accepts the tag at either position.
 - A **streaming** parser releases speakable text sentence by sentence and holds back anything that could be the start of a tag, so TTS never speaks tag text.
 - Coordinates are in the coordinate space of the screenshot image sent to the model (after any downscale). Mapping: image px → display physical px → Electron DIP (via `screen` scale factor and display bounds, including negative origins) → overlay window local coords.
@@ -151,6 +151,15 @@ The official app runs its agents with no sandbox and no approval prompts, so all
 - **The hold key allows only steps that can be undone**, and not a press within 600 ms of the question showing. Irreversible steps need the Allow button, and turning Allow all on never answers one.
 - **A goal the answer model worked out** ([TASK:…]) still starts without a "Do this?" question (owner decision, kept for speed), but it never relaxes a check: an assistant app "named in the task" still asks before sending.
 - **Long pastes check the focus first**, and a website opened while a never-touch app is in front opens in a new tab. The instruction pack exported for installers is scrubbed (`scripts/scrub.mjs`), and lines that still name the owner are left out.
+### 3.5 Voice and guidance components from the HeyClicky teardown (2026-10-16)
+
+From the reverse engineering of HeyClicky 1.0.53 (sections 2 and 3) and the release critique. None of this touches the task-completion safety layer.
+
+- **Keep the voice path warm** (`keepVoiceWarm`, default on; core `WarmKeeper`). After a press, launch, settings change, PC wake or unlock, the engine keeps the answer-model TLS connection, the ElevenLabs spare socket (refreshed every 110 s, before its 150 s age-out), the speech-recognition token and the hard-question model warm for 10 minutes, with backoff on failure, and for as long as an agent task runs. AssemblyAI sockets are not held open (billed by session time). Reason: the first press after a pause paid a TLS handshake and a new voice socket on the key-up → first audio path.
+- **Spoken beat** (`spokenBeats`, default on; core `beat.ts`). Before a slow path (an agent task, a hard-question answer, a drawing) Clicky says one short line ("On it.", "Let me think.") at once. The lines are pre-rendered by the voice provider while warming, so a beat plays from memory; it is capped at 3 s and the real answer never overlaps it. The time to first sound is logged as a new metric, key-up → first sound (`keyUpToFirstSoundMs`), next to key-up → first audio.
+- **Fast/deep split** (`deepRouting`, default on; `deepModel` setting, empty = the agent model). Questions go to the fast model. A narrow phrase check (`wantsDeep`: "think it through", "pros and cons", "proofread"…) or the fast model's own `[DEEP]` tag, if it is the first thing in the reply, sends the question to the stronger model after a beat. A late `[DEEP]` is ignored. Off for Ollama and demo mode.
+- **Guided walkthroughs** (`guidedWalkthroughs`, default on; core `GuideSession`). Protocol extension: `[TARGET:x,y,r:label:screenN]` (click) and `[HOVER:x,y,r:label:screenN]`, with the radius in thousandths of the screenshot width. The cursor points as for `[POINT]` and the overlay draws a ring. Only the user's own left click inside the ring (or the UI Automation box of the control there), or a hover that rests 0.7 s, advances. Clicky then waits for the screen to settle, captures it again and asks for the next step. A click elsewhere, 45 s untouched, a new question, or switching apps later than 1.5 s after the click ends the walkthrough quietly. A step with no target (for example "type your name") waits up to 2 minutes for "next". There is a hard limit of 8 targets per walkthrough, enforced in code. Hit testing is in physical pixels: main converts the ring with `dipToScreenPoint` and the display scale. **Deviation:** while a walkthrough runs, Clicky captures the screen after the user's click without the key held. Reason: that is how the walkthrough knows the next step. The overlay shows the ring and cursor the whole time, and the capture stays in memory like any other (see `privacy.md`).
+- **Still missing:** `pnpm bench` (the critique's main latency finding) is not built, so the 1.2 s gate is still not measured end to end.
 
 ## 4. Phases
 

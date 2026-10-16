@@ -26,7 +26,17 @@ export interface SpeechFactory {
   readonly id?: string;
   create(signal: AbortSignal): SpeechOutput;
   prewarm?(signal: AbortSignal): void;
+  /**
+   * Synthesise these short lines now and keep their audio in memory, so `beat` can play them with
+   * no network round trip (the "Sure, one sec." before slow work). Resolves when done; never throws.
+   */
+  prerender?(lines: readonly string[], signal: AbortSignal): Promise<void>;
+  /** Say one short line, from pre-rendered audio when it has it. The output is already ended. */
+  beat?(line: string, signal: AbortSignal): SpeechOutput;
 }
+
+/** Pre-rendered beat audio kept per voice: a few short lines, so a small cap is plenty. */
+const MAX_PRERENDERED_BYTES = 2_000_000;
 
 /** Where decoded audio chunks are played (the desktop app's audio worker). */
 export interface AudioSink {
@@ -40,9 +50,71 @@ export interface AudioSink {
 
 /** Wire a streaming cloud TTS provider to an audio sink. */
 export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): SpeechFactory {
-  return {
+  /** Audio for short lines, rendered ahead (prerender) and played straight from memory (beat). */
+  const rendered = new Map<string, TtsAudioChunk[]>();
+  let renderedBytes = 0;
+  const factory: SpeechFactory = {
     id: tts.id,
     prewarm: (signal) => void tts.prewarm?.(signal).catch(() => undefined),
+    async prerender(lines, signal) {
+      for (const line of lines) {
+        if (signal.aborted || rendered.has(line) || renderedBytes >= MAX_PRERENDERED_BYTES) continue;
+        try {
+          const session = await tts.start({ signal });
+          const chunks: TtsAudioChunk[] = [];
+          let bytes = 0;
+          try {
+            session.pushText(line);
+            session.end();
+            for await (const chunk of session.audio()) {
+              chunks.push(chunk);
+              bytes += chunk.data.byteLength;
+            }
+          } finally {
+            session.close();
+          }
+          if (bytes > 0 && !signal.aborted) {
+            rendered.set(line, chunks);
+            renderedBytes += bytes;
+          }
+        } catch {
+          // a line that didn't render is synthesised live when it's needed
+        }
+      }
+    },
+    beat(line, signal) {
+      const chunks = rendered.get(line);
+      if (!chunks) {
+        const out = factory.create(signal);
+        out.say(line);
+        out.end();
+        return out;
+      }
+      const sink = openSink();
+      const firstAudio: Array<() => void> = [];
+      let started = false;
+      sink.onStart(() => {
+        if (started) return;
+        started = true;
+        for (const fn of firstAudio.splice(0)) fn();
+      });
+      const stop = (): void => sink.stop();
+      signal.addEventListener('abort', stop, { once: true });
+      for (const c of chunks) sink.write(c);
+      const done = sink.finish().catch((e: unknown) => {
+        if (!signal.aborted) throw e;
+      });
+      return {
+        say: () => undefined,
+        end: () => undefined,
+        done,
+        onFirstAudio(fn) {
+          if (started) fn();
+          else firstAudio.push(fn);
+        },
+        stop,
+      };
+    },
     create(signal) {
       const sink = openSink();
       const firstAudio: Array<() => void> = [];
@@ -116,6 +188,7 @@ export function cloudSpeech(tts: TtsProvider, openSink: () => AudioSink): Speech
       };
     },
   };
+  return factory;
 }
 
 /** How long the main voice gets to start playing after the first sentence, before the backup takes over. */
@@ -138,6 +211,9 @@ export function hedgedSpeech(
       primary.prewarm?.(signal);
       backup.prewarm?.(signal);
     },
+    // Beats come from the main voice's pre-rendered audio; they are too short to need a backup.
+    ...(primary.prerender ? { prerender: primary.prerender.bind(primary) } : {}),
+    ...(primary.beat ? { beat: primary.beat.bind(primary) } : {}),
     create(signal) {
       const primaryAc = new AbortController();
       const stopPrimary = (): void => primaryAc.abort();

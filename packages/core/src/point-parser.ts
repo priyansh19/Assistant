@@ -7,6 +7,10 @@
  *   [BOX:…] [ARROW:…] [CIRCLE:…] [HIGHLIGHT:…] [PATH:…] [TEXT:…] drawings, see shapes.ts
  *   [TASK:goal]                  the user wants something done on the PC, not answered: hand the
  *                                goal (restated in full by the model) to agent mode
+ *   [TARGET:x,y,r:label:screenN] a guided-walkthrough step: Clicky rings x,y (radius r) and waits
+ *                                for the user's own click there before asking for the next step
+ *   [HOVER:x,y,r:label:screenN]  the same, completed by resting the pointer there (hover menus)
+ *   [DEEP] / [DEEP:reason]       the fast model hands a hard question to the stronger model
  *
  * Text arrives as LLM tokens split at arbitrary positions. The parser releases text that is
  * safe to speak and holds back anything that could still turn into a tag, so tag text never
@@ -31,18 +35,33 @@ export interface NoPoint {
 
 export type PointTag = PointTarget | NoPoint;
 
+/** A click or hover target for a guided walkthrough (guide.ts). Coordinates as for POINT. */
+export interface GuideTag {
+  kind: 'click' | 'hover';
+  x: number;
+  y: number;
+  /** Radius in thousandths of the screenshot width, or null when the model left it out (a default is used). */
+  r: number | null;
+  label: string;
+  screen: number | null;
+}
+
 export type ParserEvent =
   | { type: 'text'; text: string }
   | { type: 'point'; tag: PointTag }
   | { type: 'draw'; shape: DrawShape }
   /** The model routed this request to agent mode, with the goal restated in full. */
   | { type: 'task'; goal: string }
+  /** A walkthrough step: ring this spot and wait for the user's own click (or hover) there. */
+  | { type: 'target'; target: GuideTag }
+  /** The fast model judged the question too hard for a quick answer: hand it to the stronger model. */
+  | { type: 'deep' }
   /** Something that started like a tag but did not parse. It is dropped, never spoken. */
   | { type: 'invalid-tag'; raw: string };
 
 /** Tag openings the parser holds back from speech. */
-const OPENERS = ['[POINT:', '[TASK:', ...DRAW_TAGS.map((t) => `[${t}:`)];
-const OPEN_RE = new RegExp(`\\[(?:POINT|TASK|${DRAW_TAGS.join('|')}):`, 'i');
+const OPENERS = ['[POINT:', '[TASK:', '[TARGET:', '[HOVER:', '[DEEP]', '[DEEP:', ...DRAW_TAGS.map((t) => `[${t}:`)];
+const OPEN_RE = new RegExp(`\\[(?:POINT|TASK|TARGET|HOVER|${DRAW_TAGS.join('|')}):|\\[DEEP[\\]:]`, 'i');
 /** A tag longer than this is not a tag; release it as text so a stray "[POINT:" can't swallow the answer. */
 export const MAX_TAG_LENGTH = 160;
 /** A task goal is a whole restated request ("open Calculator, work out 18% of 2450 and…"), so it may run longer. */
@@ -74,6 +93,33 @@ export function parsePointTag(raw: string): PointTag | null {
   const screen = m[5] === undefined ? null : Number(m[5]);
   if (screen !== null && screen < 1) return null;
   return { kind: 'point', x, y, label: (m[4] ?? '').trim(), screen };
+}
+
+const GUIDE_RE =
+  /^\[(TARGET|HOVER):\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?(?:\s*:\s*([^\]]*?))?(?:\s*:\s*screen\s*(\d+))?\s*\]$/i;
+
+/**
+ * Parse `[TARGET:x,y,r:label:screenN]` or `[HOVER:…]`. The radius may be missing (`[TARGET:x,y:label]`):
+ * the step still counts, with a default ring, rather than being dropped. A zero or negative radius
+ * is treated as missing.
+ */
+export function parseGuideTag(raw: string): GuideTag | null {
+  const m = GUIDE_RE.exec(raw);
+  if (!m) return null;
+  const x = Number(m[2]);
+  const y = Number(m[3]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const r = m[4] === undefined ? null : Number(m[4]);
+  const screen = m[6] === undefined ? null : Number(m[6]);
+  if (screen !== null && screen < 1) return null;
+  return {
+    kind: m[1]?.toUpperCase() === 'HOVER' ? 'hover' : 'click',
+    x,
+    y,
+    r: r !== null && Number.isFinite(r) && r > 0 ? r : null,
+    label: (m[5] ?? '').trim(),
+    screen,
+  };
 }
 
 /** Length of the longest suffix of `s` that is a prefix of a tag opening (case-insensitive). */
@@ -155,6 +201,11 @@ export class PointStreamParser {
       if (/^\[POINT:/i.test(raw)) {
         const tag = parsePointTag(raw);
         events.push(tag ? { type: 'point', tag } : { type: 'invalid-tag', raw });
+      } else if (/^\[(?:TARGET|HOVER):/i.test(raw)) {
+        const target = parseGuideTag(raw);
+        events.push(target ? { type: 'target', target } : { type: 'invalid-tag', raw });
+      } else if (/^\[DEEP[\]:]/i.test(raw)) {
+        events.push({ type: 'deep' });
       } else if (/^\[TASK:/i.test(raw)) {
         const goal = parseTaskTag(raw);
         events.push(goal ? { type: 'task', goal } : { type: 'invalid-tag', raw });

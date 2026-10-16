@@ -2,6 +2,11 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
+  allBeatLines,
+  WarmKeeper,
+  type GuideTarget,
+  type HitArea,
+  type WarmTarget,
   holdKeyLabel,
   allowAllAnswers,
   keyMayAllow,
@@ -39,7 +44,7 @@ import {
   type PathPolicy,
   type RiskLevel,
 } from '@clicky/core';
-import { createChat, createStt, createTts } from '@clicky/providers';
+import { createChat, createStt, createTts, defaultChatModel } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
 import type { HoldKeyHook } from '../platform/types';
 import { demoChat, demoStt } from './demo';
@@ -112,6 +117,8 @@ const KEYTERMS = [
 const PLAN_TIMEOUT_MS = 3000;
 /** OpenRouter model for agent steps when the defaults are in use (accurate clicks, still cheap). */
 const AGENT_MODEL = 'anthropic/claude-haiku-5.5';
+/** How long main may take to show a walkthrough ring (it looks the control up first). */
+const GUIDE_ARM_MS = 4000;
 /** A mouse or keyboard request main hasn't answered in this long has failed. */
 const INPUT_TIMEOUT_MS = 25_000;
 /** How long agent mode waits for the user to allow a risky step. */
@@ -186,11 +193,18 @@ export class Engine {
   private pendingAsk: { level: RiskLevel; at: number; text: string } | null = null;
   /** The hold-key press that answered a confirmation; its release must not end anything. */
   private swallowUp = false;
+  /** Keeps the answer model, voice and speech recognition connections warm while Clicky is in use. */
+  private readonly warm = new WarmKeeper({
+    targets: () => this.warmTargets(),
+    log: (message) => this.post({ type: 'log', level: 'info', message }),
+  });
+  /** An interaction is running (the warm keeper stays warm meanwhile, however long it takes). */
+  private inInteraction = false;
 
   constructor(private readonly opts: EngineOptions) {
     const settings = () => this.cfg().settings;
     this.orchestrator = new Orchestrator({
-      chat: () => (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(settings(), this.key)),
+      chat: () => this.chat(),
       stt: () => (this.providers.stt ??= this.createStt()),
       speech: () => this.speech(),
       capture: createCapturePort(opts.media, (all) => this.plan(all), settings),
@@ -214,6 +228,14 @@ export class Engine {
         this.post({ type: 'state', state, interactionId: interaction.id });
         // After each answer, get the speech-to-text service ready for the next question.
         if (isResting(state)) this.prewarm();
+        if (!isResting(state) && !this.inInteraction) {
+          this.inInteraction = true;
+          this.touchWarm('in use');
+          this.warm.busy(true);
+        } else if (isResting(state) && this.inInteraction) {
+          this.inInteraction = false;
+          this.warm.busy(false);
+        }
       },
       log: (message) => this.post({ type: 'log', level: 'info', message }),
       input: { run: (action, signal) => this.input(action, signal) },
@@ -335,6 +357,16 @@ export class Engine {
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
       confirm: (text, signal, info) => this.confirm(text, signal, info),
+      deepChat: () => this.deepChat(),
+      guide: {
+        arm: (target: GuideTarget) => this.askMain<HitArea | null>({ type: 'guideArm', target }, null, GUIDE_ARM_MS),
+        disarm: () => this.post({ type: 'guideDisarm' }),
+        foreground: async () => (await this.foregroundApp())?.process ?? null,
+      },
+      features: () => {
+        const s = settings();
+        return { beats: s.spokenBeats, deep: s.deepRouting, walkthroughs: s.guidedWalkthroughs };
+      },
       writeContext: () => this.writeContext(),
       atCaret: () => this.post({ type: 'caretAnchor' }),
       tidyDictation: () => settings().tidyDictation,
@@ -375,6 +407,67 @@ export class Engine {
   }
 
   private readonly key = (id: CredentialId): string | null => this.config?.keys[id] ?? null;
+
+  private chat(): VisionChatProvider {
+    return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(this.cfg().settings, this.key));
+  }
+
+  private deepChatCache: { key: string; chat: VisionChatProvider } | null = null;
+
+  /**
+   * The stronger model for hard questions, or null when there is none distinct from the answer
+   * model. OpenRouter: the model chosen for hard questions, else the agent model (good and still
+   * cheap). Other providers: only a model picked for it in settings.
+   */
+  private deepChat(): VisionChatProvider | null {
+    const cfg = this.cfg();
+    const s = cfg.settings;
+    if (cfg.demo || s.chatProvider === 'ollama') return null;
+    const fast = s.chatModel || defaultChatModel(s.chatProvider);
+    const model = s.chatProvider === 'openrouter' ? s.deepModel || s.agentModel || AGENT_MODEL : s.deepModel;
+    if (!model || model === fast) return null;
+    const key = `${s.chatProvider}|${this.key(s.chatProvider === 'openrouter' ? 'openrouter' : s.chatProvider) ?? ''}|${model}`;
+    if (this.deepChatCache?.key !== key)
+      this.deepChatCache = { key, chat: createChat({ ...s, chatModel: model }, this.key) };
+    return this.deepChatCache.chat;
+  }
+
+  /** What the warm keeper keeps open: nothing in demo mode, while paused, or without keys. */
+  private warmTargets(): WarmTarget[] {
+    const cfg = this.config;
+    if (!cfg || cfg.demo || cfg.missing.length || cfg.settings.paused || !cfg.settings.keepVoiceWarm) return [];
+    const targets: WarmTarget[] = [
+      { name: 'answer model', everyMs: 60_000, warm: (signal) => this.chat().prewarm?.(signal) },
+      {
+        name: 'voice',
+        everyMs: 60_000,
+        warm: async (signal) => {
+          const speech = this.speech();
+          // The beats are rendered once per voice, then played from memory.
+          if (cfg.settings.spokenBeats) await speech.prerender?.(allBeatLines(), signal);
+          speech.prewarm?.(signal);
+        },
+      },
+      { name: 'speech recognition', everyMs: 240_000, warm: () => this.prewarm() },
+    ];
+    if (cfg.settings.deepRouting)
+      targets.push({
+        name: 'hard-question model',
+        everyMs: 60_000,
+        warm: (signal) => this.deepChat()?.prewarm?.(signal),
+      });
+    return targets;
+  }
+
+  /** Clicky is in use: keep the voice path warm (or let it go if that's switched off). */
+  private touchWarm(reason: string): void {
+    const s = this.config?.settings;
+    if (!s?.keepVoiceWarm || s.paused) {
+      this.warm.stop();
+      return;
+    }
+    this.warm.touch(reason);
+  }
 
   private localSpeech(): { files: ModelFiles; engine: LocalSpeechEngine } {
     const dir = this.cfg().modelsDir;
@@ -462,8 +555,12 @@ export class Engine {
           !prev ||
           JSON.stringify(prev.settings) !== JSON.stringify(msg.config.settings) ||
           !sameKeys(prev, msg.config)
-        )
+        ) {
           this.providers = {};
+          // What was warm belongs to the old providers.
+          if (prev) this.warm.stop();
+          this.touchWarm(prev ? 'settings changed' : 'launch');
+        }
         if (
           prev &&
           this.hook &&
@@ -508,6 +605,7 @@ export class Engine {
         );
         return;
       case 'prewarm':
+        this.touchWarm('app opened or PC woke');
         return this.prewarm();
       case 'input.reply': {
         const p = this.inputs.get(msg.id);
@@ -519,6 +617,10 @@ export class Engine {
       }
       case 'elements.reply':
         this.mainReplies.get(msg.id)?.(msg.elements);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'guideArm.reply':
+        this.mainReplies.get(msg.id)?.(msg.area);
         this.mainReplies.delete(msg.id);
         return;
       case 'renderSketch.reply':
@@ -573,6 +675,7 @@ export class Engine {
         // The port side handles in-flight requests; nothing to do for an in-process channel.
         return;
       case 'shutdown':
+        this.warm.stop();
         this.stopHoldKey();
         this.orchestrator.cancel('quitting');
         return;
@@ -604,6 +707,14 @@ export class Engine {
         onUserInput: (e) => {
           const now = Date.now();
           if (now < this.ownKeysUntil || now < this.ownMouseUntil) return;
+          // A walkthrough waits for the user's own click on the ringed step.
+          if (
+            this.orchestrator.guiding &&
+            (e.kind === 'click' || e.kind === 'move') &&
+            e.x !== undefined &&
+            e.y !== undefined
+          )
+            this.orchestrator.userInput({ kind: e.kind, x: e.x, y: e.y, ...(e.button ? { button: e.button } : {}) });
           if (e.kind === 'move') {
             // A small nudge or the pointer settling isn't taking over: only real movement counts.
             const a = this.moveAnchor;
@@ -795,7 +906,7 @@ export class Engine {
   }
 
   private askMain<T>(
-    req: 'elements' | 'otherAgent' | { type: 'renderSketch'; svg: string },
+    req: 'elements' | 'otherAgent' | { type: 'renderSketch'; svg: string } | { type: 'guideArm'; target: GuideTarget },
     fallback: T,
     ms: number,
   ): Promise<T> {
@@ -858,6 +969,22 @@ export class Engine {
     if (!app) return 'the app in front (it could not be checked)';
     const hay = `${app.process} ${app.title}`.toLowerCase().replace(/\s+/g, '');
     return list.some((n) => hay.includes(n)) ? app.title || app.process : null;
+  }
+
+  /** The app in front, or null if main doesn't say within `ms`. */
+  private foregroundApp(ms = 1500): Promise<AppInfo | null> {
+    const id = this.nextPlanId++;
+    return new Promise<AppInfo | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.foregrounds.delete(id);
+        resolve(null);
+      }, ms);
+      this.foregrounds.set(id, (a) => {
+        clearTimeout(timer);
+        resolve(a);
+      });
+      this.post({ type: 'foreground', id });
+    });
   }
 
   /** Ask main for the app in front and the selection; an empty context if main is slow. */

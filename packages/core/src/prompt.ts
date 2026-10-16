@@ -5,6 +5,7 @@
  */
 
 import { untrustedBlock, UNTRUSTED_RULE } from './safety/untrusted.js';
+import { GUIDE_FOLLOW_UP_RULES, GUIDE_OFFER_RULES } from './guide.js';
 
 export interface ScreenDescription {
   /** 1-based index the model uses in `screenN`. */
@@ -23,7 +24,23 @@ export interface PromptOptions {
   audioQuestion?: boolean;
   /** Agent mode exists: the model decides whether a request is a task and hands it over with [TASK:goal]. */
   tasks?: boolean;
+  /** A stronger model is available: the fast model may hand a hard question over with [DEEP]. */
+  deep?: boolean;
+  /**
+   * Guided walkthroughs: 'offer' lets the first answer ring a step with [TARGET]; 'follow-up' is a
+   * walkthrough's next step and adds its rules.
+   */
+  guide?: 'offer' | 'follow-up';
 }
+
+/** The fast model hands questions it can't answer well in a few quick sentences to the stronger one. */
+const DEEP_RULES = `Hard questions:
+- If the question needs careful reasoning or a long, exact answer that you can't give well in a
+  few quick sentences (working through maths or logic, reading and summing up a whole document or
+  long page, comparing several options in detail, finding the bug in code on screen, writing more
+  than a few sentences), reply with ONLY [DEEP] and nothing else: a stronger model answers it.
+- Answer everything else yourself, at once. Never use [DEEP] for quick facts, pointing, a
+  walkthrough step, or anything one to three sentences answer well.`;
 
 const BASE = `You are Clicky, a friendly assistant that lives next to the user's mouse cursor.
 The user holds a key, asks a question out loud, and you see screenshots of their screen.
@@ -145,9 +162,12 @@ export function buildSystemPrompt(options: PromptOptions): string {
   if (options.audioQuestion) {
     lines.push(
       '',
-      `The question is in the attached audio recording. Start your reply with [HEARD:the question as you heard it], then the POINT tag${options.tasks ? ' (or the TASK tag)' : ''}, then the spoken answer. If the audio has no speech, reply with [HEARD:] and nothing else.`,
+      `The question is in the attached audio recording. Start your reply with [HEARD:the question as you heard it], then the POINT tag${options.tasks || options.deep || options.guide ? ` (or ${[options.tasks ? 'the TASK tag' : '', options.deep ? 'the DEEP tag' : '', options.guide ? 'a TARGET tag' : ''].filter(Boolean).join(' or ')})` : ''}, then the spoken answer. If the audio has no speech, reply with [HEARD:] and nothing else.`,
     );
   }
+  if (options.guide === 'offer') lines.push('', GUIDE_OFFER_RULES);
+  if (options.guide === 'follow-up') lines.push('', GUIDE_FOLLOW_UP_RULES);
+  if (options.deep && options.guide !== 'follow-up') lines.push('', DEEP_RULES);
   const ctx = options.userContext?.trim();
   // Profile, notes and the open-windows list are information, never instructions (titles come
   // from websites and documents).

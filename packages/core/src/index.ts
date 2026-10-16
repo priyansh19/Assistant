@@ -29,3 +29,7 @@ export * from './safety/done-check.js';
 export * from './safety/ledger.js';
 export * from './safety/budget.js';
 export * from './safety/quiet.js';
+export * from './beat.js';
+export * from './deep.js';
+export * from './guide.js';
+export * from './warm.js';

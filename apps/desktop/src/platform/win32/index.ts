@@ -39,7 +39,8 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
   let dictDown = false;
   let onKeyDown: ((e: UiohookKeyboardEvent) => void) | null = null;
   let onKeyUp: ((e: UiohookKeyboardEvent) => void) | null = null;
-  let onMouse: ((e: UiohookMouseEvent | UiohookWheelEvent) => void) | null = null;
+  let onMouse: ((e: UiohookMouseEvent) => void) | null = null;
+  let onWheel: ((e: UiohookWheelEvent) => void) | null = null;
   let onMove: ((e: UiohookMouseEvent) => void) | null = null;
   return {
     start({ onDown, onUp, onCancel, onDictateDown, onDictateUp, onUserInput }) {
@@ -79,22 +80,29 @@ function createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null = null): H
       uIOhook.on('keyup', onKeyUp);
       if (onUserInput) {
         onMove = (e) => onUserInput({ kind: 'move', x: e.x, y: e.y });
-        onMouse = (e) => onUserInput({ kind: 'click', x: e.x, y: e.y });
+        // libuiohook numbers buttons 1 (left), 2 (right), 3 (middle).
+        onMouse = (e) =>
+          onUserInput({
+            kind: 'click',
+            x: e.x,
+            y: e.y,
+            button: e.button === 1 ? 'left' : e.button === 2 ? 'right' : 'middle',
+          });
+        onWheel = (e) => onUserInput({ kind: 'wheel', x: e.x, y: e.y });
         uIOhook.on('mousemove', onMove);
         uIOhook.on('mousedown', onMouse);
-        uIOhook.on('wheel', onMouse);
+        uIOhook.on('wheel', onWheel);
       }
       uIOhook.start();
     },
     stop() {
       if (onKeyDown) uIOhook.off('keydown', onKeyDown);
       if (onKeyUp) uIOhook.off('keyup', onKeyUp);
-      if (onMouse) {
-        uIOhook.off('mousedown', onMouse);
-        uIOhook.off('wheel', onMouse);
-      }
+      if (onMouse) uIOhook.off('mousedown', onMouse);
+      if (onWheel) uIOhook.off('wheel', onWheel);
       if (onMove) uIOhook.off('mousemove', onMove);
       onMouse = null;
+      onWheel = null;
       onMove = null;
       onKeyDown = onKeyUp = null;
       uIOhook.stop();

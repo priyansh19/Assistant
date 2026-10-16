@@ -692,6 +692,49 @@
             </div>
             <label class="toggle"><input type="checkbox" id="backupVoice" /><span></span></label>
           </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the voice path warm</div>
+              <div class="desc">
+                For 10 minutes after you use Clicky, keep its connections open so the next answer starts sooner.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="keepVoiceWarm" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Spoken beats</div>
+              <div class="desc">
+                Say a short "On it." before something that takes a while, such as a task or a hard question.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="spokenBeats" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Send hard questions to a stronger model</div>
+              <div class="desc">
+                Questions like "think it through" or "pros and cons" go to the hard-question model.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="deepRouting" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Hard-question model</div>
+              <div class="desc">OpenRouter model id. Leave empty to use the agent model.</div>
+            </div>
+            <input type="text" id="deepModel" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Guided walkthroughs</div>
+              <div class="desc">
+                For "how do I…" questions, ring the next thing to click and move on only when you click it.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="guidedWalkthroughs" /><span></span></label>
+          </div>
         </div>
       </section>
 

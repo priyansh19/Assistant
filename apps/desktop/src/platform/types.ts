@@ -13,8 +13,16 @@ export interface HoldKeyHook {
     onCancel?: () => void;
     onDictateDown?: () => void;
     onDictateUp?: () => void;
-    /** Any mouse movement, click or other key press (agent mode pauses when the user takes over). */
-    onUserInput?: (e: { kind: 'key' | 'move' | 'click'; x?: number; y?: number }) => void;
+    /**
+     * Any mouse movement, button press, wheel turn or other key press (agent mode pauses when the
+     * user takes over; walkthroughs watch left clicks). Mouse positions are physical screen pixels.
+     */
+    onUserInput?: (e: {
+      kind: 'key' | 'move' | 'click' | 'wheel';
+      x?: number;
+      y?: number;
+      button?: 'left' | 'right' | 'middle';
+    }) => void;
   }): void;
   stop(): void;
 }
