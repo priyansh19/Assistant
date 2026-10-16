@@ -48,8 +48,11 @@ export interface OverlayPort {
 export type InputAction =
   /** `target` names what's being clicked, so the live position can be looked up at click time. */
   | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2; target?: string }
-  /** Open an installed app by name, a website (default browser) or a folder or file. */
-  | { kind: 'open'; app?: string; url?: string; path?: string }
+  /**
+   * Open an installed app by name, a website (default browser) or a folder or file. `newTab`: never
+   * reuse the tab in front (it shows an app on the never-touch list).
+   */
+  | { kind: 'open'; app?: string; url?: string; path?: string; newTab?: boolean }
   /** Close a top-level window by its title (the app may still ask to save). */
   | { kind: 'close'; title: string }
   /** Find a control in the window in front by name (waiting a moment for it), then click it or put text in it. */

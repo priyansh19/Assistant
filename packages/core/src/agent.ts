@@ -571,6 +571,12 @@ export interface AgentDeps {
   fileExists?(path: string): Promise<boolean>;
   /** Time and model-call limits; at a limit the run asks before going on. */
   budget?: AgentBudget;
+  /**
+   * The goal was worked out by the answer model ([TASK:…]), not said by the user as a request: it
+   * may have been steered by what was on screen, so it never relaxes a check (an assistant app
+   * "named in the task" still asks before sending).
+   */
+  goalFromModel?: boolean;
   confirmMode: AgentConfirmMode;
   signal: AbortSignal;
   maxSteps?: number;
@@ -1551,7 +1557,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     // and the control it targets. The model's "risky" flag can only raise the level, never lower it.
     const el = a.type === 'click_element' || a.type === 'set_value' ? byId.get(a.id) : undefined;
     const rctx: RiskContext = {
-      goal,
+      ...(deps.goalFromModel ? {} : { goal }),
       window: windows[0] ?? '',
       ...(el
         ? { targetName: el.name, targetKind: el.password || el.kind.includes('(password)') ? 'password' : el.kind }
@@ -1812,15 +1818,15 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         }
         // The front may have changed while the user was asked or the cursor flew: never act on
         // an app on the never-touch list.
-        if (input.kind !== 'open') {
-          const nowBlocked = await blockedNow();
-          if (nowBlocked) {
-            deps.log?.(`agent refused: ${nowBlocked} came to the front`);
-            return finish({
-              outcome: 'failed',
-              summary: `I stopped: ${nowBlocked} came to the front, and it's on your list of apps I never touch.`,
-            });
-          }
+        const nowBlocked = await blockedNow();
+        // Opening something else is allowed (it takes over the front), but never in the blocked tab.
+        if (nowBlocked && input.kind === 'open' && input.url) input = { ...input, newTab: true };
+        else if (nowBlocked && input.kind !== 'open') {
+          deps.log?.(`agent refused: ${nowBlocked} came to the front`);
+          return finish({
+            outcome: 'failed',
+            summary: `I stopped: ${nowBlocked} came to the front, and it's on your list of apps I never touch.`,
+          });
         }
         try {
           await deps.input.run(input, deps.signal);

@@ -921,3 +921,32 @@ describe('learning only from checked runs', () => {
     ).toBeNull();
   });
 });
+
+describe('goals the model worked out', () => {
+  it('never let a model-made goal relax a check', async () => {
+    const send = '{"action":"key","keys":"enter","say":"Asking Grok"}';
+    const user = fakes([send, '{"action":"done","say":"Done."}']);
+    await runAgent('ask Grok about the weather', {
+      ...user.deps,
+      verifyDone: false,
+      openWindows: async () => ['Grok - Comet'],
+    });
+    expect(user.confirms).toEqual([]);
+    const model = fakes([send, '{"action":"done","say":"Done."}']);
+    await runAgent('ask Grok about the weather', {
+      ...model.deps,
+      verifyDone: false,
+      goalFromModel: true,
+      openWindows: async () => ['Grok - Comet'],
+    });
+    expect(model.confirms).toEqual(['Press Enter in "Grok - Comet"']);
+  });
+});
+
+describe('opening while a never-touch app is in front', () => {
+  it('opens a website in a new tab, never in the blocked one', async () => {
+    const f = fakes([]);
+    await runAgent('open youtube', { ...f.deps, verifyDone: false, blockedApp: async () => 'My Bank - Edge' });
+    expect(f.inputs).toEqual([{ kind: 'open', url: 'https://www.youtube.com/', newTab: true }]);
+  });
+});

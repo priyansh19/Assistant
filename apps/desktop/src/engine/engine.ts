@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   holdKeyLabel,
+  allowAllAnswers,
+  keyMayAllow,
   agentReady,
   buildUserContext,
   lessonFrom,
@@ -174,6 +176,8 @@ export class Engine {
   private ownKeysUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
   private pendingConfirm: ((ok: boolean) => void) | null = null;
+  /** How risky the pending question's step is, and when it was asked (for the hold key's answer). */
+  private pendingAsk: { level: RiskLevel; at: number; text: string } | null = null;
   /** The hold-key press that answered a confirmation; its release must not end anything. */
   private swallowUp = false;
 
@@ -542,7 +546,8 @@ export class Engine {
         this.allowAll = msg.on;
         this.post({ type: 'log', level: 'info', message: `allow all ${msg.on ? 'on' : 'off'}` });
         this.post({ type: 'allowAll', on: msg.on });
-        if (msg.on) this.pendingConfirm?.(true);
+        // Allow all never answers for a step it doesn't cover (one that can't be undone).
+        if (msg.on && allowAllAnswers(this.pendingAsk?.level)) this.pendingConfirm?.(true);
         return;
       case 'writeContext.reply': {
         const done = this.contexts.get(msg.id);
@@ -620,7 +625,17 @@ export class Engine {
     if (this.pendingConfirm) {
       // Agent mode asked "press the key to allow": this press is the answer, not a new question.
       this.swallowUp = true;
-      this.pendingConfirm(true);
+      const ask = this.pendingAsk;
+      if (keyMayAllow(ask?.level, Date.now() - (ask?.at ?? 0))) this.pendingConfirm(true);
+      else if (ask?.level === 'irreversible')
+        this.post({
+          type: 'overlay',
+          overlay: {
+            op: 'message',
+            text: `${ask.text}? Click Allow on the bar at the top to do this, or press Esc to stop.`,
+            kind: 'info',
+          },
+        });
       return;
     }
     const cfg = this.config;
@@ -901,7 +916,12 @@ export class Engine {
     const final = info?.level === 'irreversible' ? ' This can’t be undone.' : '';
     this.post({ type: 'log', level: 'info', message: `asking to allow: ${text}` });
     const key = holdKeyLabel(this.cfg().settings.holdKey);
-    const prompt = `${text}?${final} Press ${key} to allow, or Esc to stop.`;
+    const level = info?.level ?? 'confirm';
+    // A step that can't be undone is allowed with the button only, never the hold key.
+    const prompt =
+      level === 'irreversible'
+        ? `${text}?${final} Click Allow on the bar at the top to do it, or press Esc to stop.`
+        : `${text}? Press ${key} or click Allow to do it, or Esc to stop.`;
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
     return new Promise<boolean>((resolve) => {
       show();
@@ -913,13 +933,17 @@ export class Engine {
         clearInterval(again);
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
-        if (this.pendingConfirm === finish) this.pendingConfirm = null;
+        if (this.pendingConfirm === finish) {
+          this.pendingConfirm = null;
+          this.pendingAsk = null;
+        }
         this.post({ type: 'agentAsk', text: null });
         resolve(ok);
       };
       if (signal.aborted) return finish(false);
       signal.addEventListener('abort', onAbort, { once: true });
       this.pendingConfirm = finish;
+      this.pendingAsk = { level, at: Date.now(), text };
     });
   }
 

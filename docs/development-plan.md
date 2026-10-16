@@ -148,6 +148,9 @@ The official app runs its agents with no sandbox and no approval prompts, so all
 - **Never-touch apps fail closed:** no screenshot, model call or input while one is in front or when the check can't answer, re-checked right before each input.
 - **Outside text is data** (`untrusted.ts`): window titles, controls, notes, skills, lessons and earlier answers go into labelled `<untrusted>` blocks with Clicky's tags defused.
 - **Budgets** (`budget.ts`): after 15 minutes or 120 model calls the run asks before going on. **Quiet gate** (`quiet.ts`): background tasks don't start during calls or screen sharing.
+- **The hold key allows only steps that can be undone**, and not a press within 600 ms of the question showing. Irreversible steps need the Allow button, and turning Allow all on never answers one.
+- **A goal the answer model worked out** ([TASK:…]) still starts without a "Do this?" question (owner decision, kept for speed), but it never relaxes a check: an assistant app "named in the task" still asks before sending.
+- **Long pastes check the focus first**, and a website opened while a never-touch app is in front opens in a new tab. The instruction pack exported for installers is scrubbed (`scripts/scrub.mjs`), and lines that still name the owner are left out.
 
 ## 4. Phases
 

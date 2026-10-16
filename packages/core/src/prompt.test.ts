@@ -15,7 +15,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Start EVERY reply with exactly one tag');
     expect(prompt).toContain('screen1: 1280x800 px (the cursor is on this screen)');
     expect(prompt).toContain('screen2: 1280x720 px');
-    expect(prompt).toContain('About the user: new to Excel');
+    expect(prompt).toContain('About the user:\n<untrusted source="user context">\nnew to Excel');
     // Parity with the official Clicky's voice rules: long answers on request, no dead-end offers.
     expect(prompt).toContain('give the full explanation');
     expect(prompt).toContain('150 to 300');

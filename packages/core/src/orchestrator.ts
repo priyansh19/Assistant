@@ -797,7 +797,7 @@ export class Orchestrator {
       // Its goal is the request restated in full (references resolved, dropped words put back).
       run.latency.setMeta('routedBy', 'model');
       const cfg = this.deps.agent?.();
-      await this.runAgentTask(run, chat, speech, result.task, cfg?.confirm ?? 'risky');
+      await this.runAgentTask(run, chat, speech, result.task, cfg?.confirm ?? 'risky', true);
       return;
     }
     // A very short answer can finish before first audio was reported (e.g. muted output).
@@ -1058,6 +1058,7 @@ export class Orchestrator {
     speech: SpeechFactory,
     goal: string,
     confirmMode: AgentConfirmMode,
+    goalFromModel = false,
   ): Promise<void> {
     // A task's own summary ("…not saved yet") must not start another run to find things out.
     run.ranTask = true;
@@ -1086,6 +1087,7 @@ export class Orchestrator {
         confirm,
         confirmMode,
         signal,
+        ...(goalFromModel ? { goalFromModel } : {}),
         ...(userContext ? { userContext } : {}),
         ...(this.deps.log ? { log: this.deps.log } : {}),
         onStep: (say) => this.deps.overlay.caption?.(say),

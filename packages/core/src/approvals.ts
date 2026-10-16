@@ -31,3 +31,20 @@ export function needsAsking(level: RiskLevel, key: string, approvals: RunApprova
   if (level === 'irreversible' || level === 'forbidden') return true;
   return !(allowAll || approvals.covers(key, level));
 }
+
+/** A key press this soon after a question shows was already on its way: it doesn't answer it. */
+export const KEY_ALLOW_MIN_MS = 600;
+
+/**
+ * May a press of the hold key answer "allow"? Only for a step that can be undone, and only once the
+ * question has been up a moment. A step that can't be undone needs the Allow button, so a press
+ * meant as a new question never sends, deletes or pays.
+ */
+export function keyMayAllow(level: RiskLevel | undefined, msSinceAsked: number): boolean {
+  return (level ?? 'confirm') === 'confirm' && msSinceAsked >= KEY_ALLOW_MIN_MS;
+}
+
+/** Turning Allow all on answers a pending question only if Allow all covers that step. */
+export function allowAllAnswers(level: RiskLevel | undefined): boolean {
+  return (level ?? 'confirm') === 'confirm';
+}
