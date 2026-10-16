@@ -1187,3 +1187,45 @@ input:focus {
   gap: 8px;
   align-items: center;
 }
+
+/* Helpers, routines and connectors */
+.clicky-form {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.clicky-form input {
+  min-width: 0;
+}
+
+#clicky-error {
+  padding: 0 16px 12px;
+}
+
+.helper-notes {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.task-status.failed,
+.task-status.paused {
+  color: #e0442f;
+}
+
+#routine-owner {
+  max-width: 160px;
+}
+
+#conn-cmd-row input + input {
+  margin-left: 6px;
+}
+
+#connector-editor textarea {
+  width: 100%;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}

@@ -2,6 +2,7 @@ import { app, screen } from 'electron';
 import { join } from 'node:path';
 import { existsSync, writeFileSync } from 'node:fs';
 import {
+  agentReady,
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
   isResting,
@@ -26,6 +27,9 @@ import { TaskStrip } from './task-strip';
 import { AllowOrb } from './allow-orb';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
+import { ClickyStore } from './clicky-store';
+import { RoutineStore } from './routine-store';
+import { ConnectorStore } from './connector-store';
 import { LessonStore } from './lesson-store';
 import { Inventory } from './inventory';
 import { keepSketchPicture, renderSvg } from './render-svg';
@@ -93,6 +97,12 @@ export class Controller {
     state: () => this.current.state,
     ask: (q) => this.ask(q, 'action'),
   });
+  /** Named helpers, each with a folder and an AGENTS.md. */
+  readonly clickys = new ClickyStore();
+  /** Repeating tasks, run through the background queue. */
+  readonly routines: RoutineStore;
+  /** Custom connectors (MCP servers); keys stay in the credential store. */
+  readonly connectors: ConnectorStore;
   private anchorTimer: NodeJS.Timeout | null = null;
   private readonly strip = new TaskStrip({
     pause: (on) => this.engine.send({ type: 'agent.pause', on }),
@@ -112,6 +122,17 @@ export class Controller {
     private readonly worker: WorkerHost,
   ) {
     this.engine = new EngineHost(platform, worker);
+    this.routines = new RoutineStore({
+      tasks: this.tasks,
+      agentReady: () => agentReady(this.settings.get()),
+      busy: () => !isResting(this.current.state),
+      // The shared quiet gate (calls, presentations, Focus) belongs to the safety layer; until it
+      // lands, routines still only run through the idle-only background queue.
+      quiet: () => false,
+      clickys: () => new Set(this.clickys.list().map((c) => c.slug)),
+      clickyName: (slug) => this.clickys.get(slug)?.name,
+    });
+    this.connectors = new ConnectorStore();
     const driver = platform.createInputDriver();
     this.inventory = new Inventory(driver);
     this.input = new InputHost(driver, (name) => this.inventory.find(name));
@@ -153,9 +174,12 @@ export class Controller {
     this.lessons.onChange(push);
     this.inventory.onChange(push);
     this.skills.onChange(push);
+    this.clickys.onChange(push);
+    this.routines.onChange(push);
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
+    this.routines.start();
     this.inventory.start();
     void this.checkAltGr();
     this.skills.start();
@@ -183,6 +207,9 @@ export class Controller {
       skills: this.skills.list(),
       outputDir: join(app.getPath('documents'), 'Clicky'),
       dataDir: app.getPath('userData'),
+      clickys: this.clickys.list(),
+      clickyWorkspaces: this.clickys.workspaces(),
+      routineTitles: this.routines.titlesByOwner(),
     };
   }
 
@@ -308,6 +335,17 @@ export class Controller {
         return;
       case 'remember':
         this.lessons.remember(msg.note);
+        return;
+      case 'clickyNote': {
+        const refused = this.clickys.note(msg.slug, msg.note);
+        if (refused) log.info(`helper note not kept: ${refused}`);
+        return;
+      }
+      case 'clickyRestore':
+        this.clickys.setArchived(msg.slug, false);
+        return;
+      case 'routineCreate':
+        this.routines.create({ title: msg.title, task: msg.task, cadence: msg.cadence, owner: msg.owner }, true);
         return;
       case 'agentLesson':
         this.lessons.add(msg.lesson);
@@ -573,6 +611,8 @@ export class Controller {
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
     this.tasks.stop();
+    this.routines.stop();
+    void this.connectors.closeAll();
     this.inventory.stop();
     this.skills.stop();
     this.engine.stop();

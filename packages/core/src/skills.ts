@@ -1,3 +1,5 @@
+import { redactSecrets } from './secrets.js';
+
 /**
  * The agent's standing context and task skills, both plain Markdown the user can read and edit:
  *
@@ -43,7 +45,7 @@ working across several websites in a row, and turning what you find into files (
 
 ## Shopping and other sites
 - If a shop hides prices or says an item doesn't ship to the user's country, switch to the local
-  store for the user's region (for example amazon.in or amazon.ae) instead of opening each product.
+  store for the user's country (its local domain) instead of opening each product.
 - Read prices and details from the results list; open a product page only when the list doesn't
   show what you need.
 - If two searches on a store don't show the item, stop looking there: say it isn't listed (or
@@ -61,15 +63,14 @@ working across several websites in a row, and turning what you find into files (
   with when each was last used, which have unsaved changes, and each browser window's tabs (active,
   asleep, last in front). Answer questions about what is open, where something is and what the user
   was doing from these lists before looking anywhere else.
-- Websites open in the user's own browser (Comet), where they are signed in: open {"url": …}.
+- Websites open in the user's default browser, where they are signed in: open {"url": …}.
   Installed apps (WhatsApp, Claude, VS Code, the Microsoft Store) open with {"app": …}.
 - To install software, open the Microsoft Store app, search for it, open its page and press Get or
   Install (risky); for things like WSL say what the Store or Windows will ask.
 
-- Requests come from speech recognition, which mangles tool names: "Qubicle" or "cube control" is
-  kubectl, "doctor" in a terminal task is Docker, "get" is git, "clicky project" may be the
-  clickey folder. If a name matches nothing on this PC, try the closest real tool before saying it
-  isn't installed.
+- Requests come from speech recognition, which mangles tool names ("cube control" is kubectl,
+  "doctor" in a terminal task is Docker, "get" is git). If a name matches nothing on this PC, try
+  the closest real tool or folder before saying it isn't there.
 
 ## Tidying up windows and tabs
 - Tabs marked "asleep" or not in front for hours, and windows not used for a long time, are stale:
@@ -142,15 +143,15 @@ export const STARTER_SKILLS: AgentSkill[] = [
   how many rows it has.`,
   },
   {
-    id: 'comet-browser',
-    name: 'Browsing in Comet',
-    triggers: ['comet', 'browser', 'tab', 'website', '.com', 'site'],
-    body: `- Comet is the user's default browser: {"url": …} opens pages there.
+    id: 'web-browser',
+    name: 'Browsing',
+    triggers: ['browser', 'tab', 'website', '.com', 'site'],
+    body: `- {"url": …} opens pages in the user's default browser, where they are signed in.
 - After typing an address into the address bar, press delete before enter: the bar fills in the rest
   from history (an old page), and delete removes that.
 - ctrl+l focuses the address bar, ctrl+t opens a new tab, ctrl+tab or ctrl+<n> switches tabs,
   ctrl+w closes the tab.
-- Comet's assistant side panel is not part of the page; ignore it unless the task is about it.`,
+- A browser's own assistant side panel is not part of the page; ignore it unless the task is about it.`,
   },
   {
     id: 'windows-files',
@@ -241,11 +242,14 @@ const MAX_LEARNED = 8;
 
 /** The skill with one more "worked" line; the oldest is dropped past the limit. */
 export function learnIntoSkill(s: AgentSkill, goal: string, steps: readonly string[], when: Date): AgentSkill {
-  const line = `- ${when.toISOString().slice(0, 10)} "${goal.slice(0, 120).replace(/\n/g, ' ')}": ${steps
-    .slice(0, 10)
-    .join('; ')
-    .replace(/\n/g, ' ')
-    .slice(0, 500)}`;
+  // Steps can carry typed text; nothing that looks like a password or key is kept in a skill.
+  const line = redactSecrets(
+    `- ${when.toISOString().slice(0, 10)} "${goal.slice(0, 120).replace(/\n/g, ' ')}": ${steps
+      .slice(0, 10)
+      .join('; ')
+      .replace(/\n/g, ' ')
+      .slice(0, 500)}`,
+  );
   const at = s.body.indexOf(LEARNED);
   const head = (at === -1 ? s.body : s.body.slice(0, at)).trimEnd();
   const old =

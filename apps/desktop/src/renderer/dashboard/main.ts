@@ -1294,7 +1294,7 @@ function renderTasks(): void {
       }
       return el('div', { className: 'item' }, [
         el('div', { className: 'item-main' }, [
-          el('div', { className: 'item-q', text: t.goal }),
+          el('div', { className: 'item-q', text: t.label ?? t.goal }),
           ...(t.summary ? [el('div', { className: 'item-a', text: t.summary })] : []),
           el('div', { className: `task-status ${t.status}`, text: TASK_STATUS[t.status] ?? t.status }),
         ]),
@@ -1352,6 +1352,220 @@ function renderNotes(): void {
       ]),
     ),
   );
+}
+
+// ----------------------------------------------------------------- helpers, routines, connectors
+
+function when(ms: number): string {
+  const d = new Date(ms);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  return sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderHelpers(): void {
+  const list = $('clicky-list');
+  list.dataset['empty'] = 'No helpers yet. Make one above, or ask "Clicky, every morning…" for a routine.';
+  list.replaceChildren(
+    ...snap.clickys.map((c) => {
+      const buttons = el('div', { className: 'item-buttons' }, [
+        button('Open folder', 'secondary small', async () => void (await api.openClickyFolder(c.slug))),
+        button(c.archived ? 'Bring back' : 'Archive', 'secondary small', async () => {
+          snap = await api.archiveClicky(c.slug, !c.archived);
+          render();
+          toast(c.archived ? `${c.name} is back` : `${c.name} is archived. Its files and notes stay in its folder.`);
+        }),
+      ]);
+      const notes = c.notes.slice(0, 3);
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: `${c.name}${c.archived ? ' (archived)' : ''}` }),
+          el('div', { className: 'item-a', text: c.purpose }),
+          ...(notes.length
+            ? [el('ul', { className: 'helper-notes' }, notes.map((n) => el('li', { text: `${n.date}: ${n.text}` })))]
+            : []),
+          el('div', {
+            className: 'task-status',
+            text: `${c.notes.length} note${c.notes.length === 1 ? '' : 's'}. Ask it: "Clicky, ask ${c.name} to …"`,
+          }),
+        ]),
+        buttons,
+      ]);
+    }),
+  );
+  const owner = $<HTMLSelectElement>('routine-owner');
+  const keep = owner.value;
+  owner.replaceChildren(new Option('Clicky', ''), ...snap.clickys.filter((c) => !c.archived).map((c) => new Option(c.name, c.slug)));
+  owner.value = snap.clickys.some((c) => c.slug === keep) ? keep : '';
+  renderRoutines();
+  renderConnectors();
+}
+
+function routineStatus(r: DashboardSnapshot['routines'][number]): { text: string; cls: string } {
+  if (r.running) return { text: 'Running now', cls: 'running' };
+  if (r.paused)
+    return {
+      text: r.pausedReason === 'failures' ? 'Paused after failing three times in a row' : r.pausedReason === 'owner-gone' ? 'Paused: its helper was deleted' : 'Paused',
+      cls: 'paused',
+    };
+  if (r.waitingForNetwork) return { text: 'Waiting for the internet', cls: 'failed' };
+  const next = `Next: ${when(r.nextRunAt)}`;
+  return r.lastFailed ? { text: `Last run failed. ${next}`, cls: 'failed' } : { text: next, cls: '' };
+}
+
+function renderRoutines(): void {
+  const list = $('routine-list');
+  list.dataset['empty'] = 'No routines yet. Ask for something "every morning", "every few hours" or "every Monday".';
+  list.replaceChildren(
+    ...snap.routines.map((r) => {
+      const st = routineStatus(r);
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: `${r.title}${r.owner ? ` · ${r.owner}` : ''} · ${r.cadence}` }),
+          el('div', { className: 'item-a', text: r.lastSummary ?? r.task }),
+          el('div', { className: `task-status ${st.cls}`, text: `${st.text} · ${r.runCount} run${r.runCount === 1 ? '' : 's'}` }),
+        ]),
+        el('div', { className: 'item-buttons' }, [
+          ...(r.running
+            ? []
+            : [
+                button('Run now', 'secondary small', async () => {
+                  snap = await api.runRoutine(r.id);
+                  render();
+                  toast('Queued. It runs when you step away from the mouse.');
+                }),
+                button(r.paused ? 'Resume' : 'Pause', 'secondary small', async () => {
+                  snap = await api.pauseRoutine(r.id, !r.paused);
+                  render();
+                }),
+                button('Delete', 'secondary small', async () => {
+                  snap = await api.removeRoutine(r.id);
+                  render();
+                }),
+              ]),
+        ]),
+      ]);
+    }),
+  );
+}
+
+function renderConnectors(): void {
+  const list = $('connector-list');
+  list.dataset['empty'] = 'No connectors yet.';
+  list.replaceChildren(
+    ...snap.connectors.map((c) => {
+      const saved = [c.saved.bearer ? 'key saved' : '', ...c.saved.env, ...c.saved.headers].filter(Boolean).join(', ');
+      return el('div', { className: 'item' }, [
+        el('div', { className: 'item-main' }, [
+          el('div', { className: 'item-q', text: `${c.name}${c.enabled ? '' : ' (off)'}` }),
+          el('div', { className: 'item-a', text: c.capability ? `Can ${c.capability} (${c.toolCount ?? 0} tools)` : 'Not checked yet' }),
+          el('div', { className: 'task-status', text: `${c.transport === 'remote' ? c.url : `${c.command} ${c.args}`}${saved ? ` · ${saved}` : ''}` }),
+        ]),
+        el('div', { className: 'item-buttons' }, [
+          button('Check', 'secondary small', async () => {
+            const r = await api.checkConnector(c.id);
+            if (r.ok) snap = r.snapshot;
+            render();
+            toast(r.ok ? (r.message ?? 'Works.') : r.reason);
+          }),
+          button('Edit', 'secondary small', () => editConnector(c)),
+          button(c.enabled ? 'Turn off' : 'Turn on', 'secondary small', async () => {
+            snap = await api.enableConnector(c.id, !c.enabled);
+            render();
+          }),
+          button('Remove', 'secondary small', async () => {
+            snap = await api.removeConnector(c.id);
+            render();
+          }),
+        ]),
+      ]);
+    }),
+  );
+}
+
+function connectorTransport(t: string): void {
+  $('conn-url-row').hidden = t !== 'remote';
+  $('conn-cmd-row').hidden = t !== 'stdio';
+}
+
+function editConnector(c: DashboardSnapshot['connectors'][number] | null): void {
+  $<HTMLInputElement>('conn-id').value = c?.id ?? '';
+  $<HTMLInputElement>('conn-name').value = c?.name ?? '';
+  $<HTMLSelectElement>('conn-transport').value = c?.transport ?? 'remote';
+  $<HTMLInputElement>('conn-url').value = c?.url ?? '';
+  $<HTMLInputElement>('conn-command').value = c?.command ?? '';
+  $<HTMLInputElement>('conn-args').value = c?.args ?? '';
+  $<HTMLInputElement>('conn-token').value = '';
+  $<HTMLTextAreaElement>('conn-env').value = '';
+  $<HTMLTextAreaElement>('conn-headers').value = '';
+  $('conn-token-desc').textContent = c?.saved.bearer ? 'A key is saved. Leave empty to keep it.' : 'Leave empty if the server needs none.';
+  $('conn-message').textContent = c ? `Editing ${c.name}. Saved values stay unless you type new ones.` : '';
+  $('conn-cancel').hidden = !c;
+  connectorTransport(c?.transport ?? 'remote');
+  if (c) $('conn-name').focus();
+}
+
+function bindHelpers(): void {
+  $('clicky-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $<HTMLInputElement>('clicky-name');
+    const purpose = $<HTMLInputElement>('clicky-purpose');
+    const error = $('clicky-error');
+    const make = async (anyway: boolean): Promise<void> => {
+      const r = await api.createClicky({ name: name.value, purpose: purpose.value, anyway });
+      if (r.ok) {
+        snap = r.snapshot;
+        error.hidden = true;
+        toast(`${name.value.trim()} is ready. It hasn't started anything yet.`);
+        name.value = '';
+        purpose.value = '';
+        render();
+        return;
+      }
+      error.hidden = false;
+      error.replaceChildren(r.reason);
+      if (r.twin) error.append(' ', button('Make it anyway', 'secondary small', () => make(true)));
+    };
+    await make(false);
+  });
+  $('routine-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $<HTMLInputElement>('routine-input');
+    const owner = $<HTMLSelectElement>('routine-owner').value;
+    const r = await api.createRoutine(input.value, owner || undefined);
+    if (!r.ok) return toast(r.reason);
+    snap = r.snapshot;
+    input.value = '';
+    render();
+    toast(agentReady(snap.settings) ? (r.message ?? 'Routine added') : `${r.message ?? 'Routine added.'} Turn on agent mode in General so it can run.`);
+  });
+  $('conn-transport').addEventListener('change', () => connectorTransport($<HTMLSelectElement>('conn-transport').value));
+  $('conn-cancel').addEventListener('click', () => editConnector(null));
+  $('conn-save').addEventListener('click', async () => {
+    const r = await api.saveConnector({
+      ...($<HTMLInputElement>('conn-id').value ? { id: $<HTMLInputElement>('conn-id').value } : {}),
+      name: $<HTMLInputElement>('conn-name').value,
+      transport: $<HTMLSelectElement>('conn-transport').value === 'stdio' ? 'stdio' : 'remote',
+      url: $<HTMLInputElement>('conn-url').value,
+      command: $<HTMLInputElement>('conn-command').value,
+      args: $<HTMLInputElement>('conn-args').value,
+      token: $<HTMLInputElement>('conn-token').value,
+      env: $<HTMLTextAreaElement>('conn-env').value,
+      headers: $<HTMLTextAreaElement>('conn-headers').value,
+    });
+    // The key fields are cleared either way: secrets never stay in the page.
+    $<HTMLInputElement>('conn-token').value = '';
+    $<HTMLTextAreaElement>('conn-env').value = '';
+    $<HTMLTextAreaElement>('conn-headers').value = '';
+    if (!r.ok) {
+      $('conn-message').textContent = r.reason;
+      return;
+    }
+    snap = r.snapshot;
+    editConnector(null);
+    $('conn-message').textContent = r.message ?? 'Saved.';
+    render();
+  });
 }
 
 // ----------------------------------------------------------------- agent setup (consent)
@@ -1655,6 +1869,7 @@ function render(): void {
   renderActions();
   renderPlaybooks();
   renderNotes();
+  renderHelpers();
   if (!typingKey()) renderKeys();
   renderMissing();
   $('version').textContent = `Version ${snap.appVersion}`;
@@ -1729,6 +1944,7 @@ async function init(): Promise<void> {
     snap = await api.clearStyle();
     render();
   });
+  bindHelpers();
   $('task-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = $<HTMLInputElement>('task-input');
