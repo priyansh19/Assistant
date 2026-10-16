@@ -786,7 +786,7 @@ came from speech recognition: names may be spelled differently ("Clicky Test Fol
 
 /** Reasons to give up that only the user can fix; the run doesn't retry these. */
 const NEEDS_USER =
-  /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch|passkey|windows security|security key|user account control|\buac\b/i;
+  /sign ?in|log ?in|password|passcode|captcha|two-factor|2fa|not allowed|unsafe|never-touch|passkey|windows security|security key|user account control|\buac\b|administrator permission|sudo mode|consent|accept (?:the |new )?terms|privacy (?:consent|terms)|i agree/i;
 
 /** Typing, or a key that edits the text in the focused box (not shortcuts like esc or alt+tab). */
 function typesIntoFocus(input: InputAction): boolean {
