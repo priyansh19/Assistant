@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyInstructionPack } from './instruction-pack';
-import { app, Notification } from 'electron';
+import { app, Notification, powerMonitor } from 'electron';
 import { holdKeyLabel, type Settings } from '@clicky/core';
 import type { OverlayConfig } from '../shared/overlay-protocol';
 import { getPlatform } from '../platform';
@@ -108,6 +108,9 @@ if (!app.requestSingleInstanceLock()) {
     ctl.startHoldKey();
     ctl.syncMicArm();
     ctl.prewarm();
+    // Waking the PC or unlocking it usually comes right before a question: warm the voice path again.
+    powerMonitor.on('resume', () => ctl.prewarm());
+    powerMonitor.on('unlock-screen', () => ctl.prewarm());
     ctl.applyLaunchAtLogin(settings.get().launchAtLogin);
 
     settings.onChange((next, prev) => {

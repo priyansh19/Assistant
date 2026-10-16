@@ -17,6 +17,7 @@ import type {
   OverlayConfig,
   OverlayCursor,
   OverlayDrawing,
+  OverlayGuide,
   OverlayMessage,
   OverlayPoint,
 } from '../shared/overlay-protocol';
@@ -132,6 +133,31 @@ export class OverlayManager implements OverlayPort {
     if (this.anchored) this.anchor(null);
     this.setOwner(target.displayId, 12500);
     win.webContents.send(IPC.overlayPoint, p);
+  }
+
+  /** The display showing a walkthrough ring, if any. */
+  private guideDisplay: number | null = null;
+
+  /**
+   * Ring a walkthrough step until the user clicks it (or clear it with null). The companion stays on
+   * that display meanwhile, so it doesn't wander off to another screen with the pointer.
+   */
+  guide(ring: { displayId: number; x: number; y: number; r: number; label: string; hover: boolean } | null): void {
+    for (const [id, win] of this.windows) {
+      if (win.isDestroyed()) continue;
+      const g: OverlayGuide =
+        ring && ring.displayId === id
+          ? { x: ring.x, y: ring.y, r: ring.r, label: ring.label, hover: ring.hover }
+          : null;
+      win.webContents.send(IPC.overlayGuide, g);
+    }
+    if (ring) {
+      this.guideDisplay = ring.displayId;
+      if (!this.anchored) this.setOwner(ring.displayId, 60_000);
+    } else if (this.guideDisplay !== null) {
+      this.guideDisplay = null;
+      if (!this.anchored && isRestingState(this.current)) this.setOwner(this.owner, 3500);
+    }
   }
 
   /** Sit the companion beside the text caret (write mode), or go back to following the pointer. */
@@ -270,4 +296,8 @@ export class OverlayManager implements OverlayPort {
       win.webContents.send(IPC.overlayCursor, cursor);
     }
   }
+}
+
+function isRestingState(s: InteractionState): boolean {
+  return s === 'idle' || s === 'cancelled' || s === 'error';
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_TAG_LENGTH,
   MAX_TASK_TAG_LENGTH,
+  parseGuideTag,
   parsePointTag,
   parseTaskTag,
   PointStreamParser,
@@ -174,5 +175,72 @@ describe('TASK tag', () => {
       { type: 'invalid-tag', raw: '[TASK:]' },
       { type: 'text', text: 'Okay.' },
     ]);
+  });
+});
+
+describe('guided walkthrough tags', () => {
+  it('parses TARGET and HOVER with radius, label and screen', () => {
+    expect(parseGuideTag('[TARGET:120,210,40:add modifier]')).toEqual({
+      kind: 'click',
+      x: 120,
+      y: 210,
+      r: 40,
+      label: 'add modifier',
+      screen: null,
+    });
+    expect(parseGuideTag('[HOVER:500,20,30:File menu:screen2]')).toEqual({
+      kind: 'hover',
+      x: 500,
+      y: 20,
+      r: 30,
+      label: 'File menu',
+      screen: 2,
+    });
+  });
+
+  it('fills a missing or non-positive radius with null instead of dropping the step', () => {
+    expect(parseGuideTag('[TARGET:120,210:Save]')?.r).toBeNull();
+    expect(parseGuideTag('[TARGET:120,210,0:Save]')?.r).toBeNull();
+    expect(parseGuideTag('[TARGET:120,210,-5:Save]')?.r).toBeNull();
+  });
+
+  it('keeps colons inside the label and accepts negative centres (validated after mapping)', () => {
+    expect(parseGuideTag('[TARGET:10,20,30:Step 2: Export:screen1]')).toMatchObject({
+      label: 'Step 2: Export',
+      screen: 1,
+    });
+    expect(parseGuideTag('[TARGET:-4,20,30:edge]')).toMatchObject({ x: -4 });
+  });
+
+  it('rejects garbage and screen0', () => {
+    expect(parseGuideTag('[TARGET:abc]')).toBeNull();
+    expect(parseGuideTag('[TARGET:1,2,3:x:screen0]')).toBeNull();
+  });
+
+  it('streams a target split across chunks and never speaks it', () => {
+    const events = run(['[TAR', 'GET:120,2', '10,40:add mod', 'ifier] Click Add', ' Modifier.']);
+    expect(events[0]).toEqual({
+      type: 'target',
+      target: { kind: 'click', x: 120, y: 210, r: 40, label: 'add modifier', screen: null },
+    });
+    expect(spoken(events)).toBe(' Click Add Modifier.');
+  });
+
+  it('turns an unparseable target into an invalid tag, not speech', () => {
+    const events = run(['[TARGET:here please] Click it.']);
+    expect(events[0]).toEqual({ type: 'invalid-tag', raw: '[TARGET:here please]' });
+    expect(spoken(events)).toBe(' Click it.');
+  });
+});
+
+describe('DEEP tag', () => {
+  it('recognises [DEEP] and [DEEP:reason], split or whole, and never speaks them', () => {
+    expect(run(['[DEEP]'])).toEqual([{ type: 'deep' }]);
+    expect(run(['[DE', 'EP:long doc', 'ument]'])).toEqual([{ type: 'deep' }]);
+  });
+
+  it('leaves look-alikes as speech', () => {
+    expect(spoken(run(['The [DEEPER] end.']))).toBe('The [DEEPER] end.');
+    expect(spoken(run(['[DE', 'NT] it']))).toBe('[DENT] it');
   });
 });

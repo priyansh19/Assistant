@@ -177,6 +177,20 @@ export interface Settings {
   streamingVoice: boolean;
   /** Switch to the Windows voice if the cloud voice has not started after a moment. */
   backupVoice: boolean;
+  /**
+   * Keep the voice path warm between presses while Clicky is in use: the answer model's connection,
+   * a spare voice socket and a speech-recognition token, so the first press after a pause is as fast
+   * as the rest.
+   */
+  keepVoiceWarm: boolean;
+  /** Say a few words at once ("On it.") before slow work: agent tasks, hard questions, drawings. */
+  spokenBeats: boolean;
+  /** Hand hard questions to a stronger model (deepModel) instead of a quick, shallow answer. */
+  deepRouting: boolean;
+  /** OpenRouter model for hard questions; empty uses the agent model. */
+  deepModel: string;
+  /** "How do I…" questions in an app become walkthroughs that advance when the user clicks each step. */
+  guidedWalkthroughs: boolean;
   /** Hold-to-talk is ignored while paused (tray toggle). */
   paused: boolean;
   /** The first-run setup wizard has been completed or skipped. */
@@ -227,6 +241,11 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   warmImageCache: true,
   streamingVoice: true,
   backupVoice: true,
+  keepVoiceWarm: true,
+  spokenBeats: true,
+  deepRouting: true,
+  deepModel: '',
+  guidedWalkthroughs: true,
   paused: false,
   onboardingDone: false,
 });
@@ -331,6 +350,11 @@ export function normalizeSettings(input: unknown, base: Settings = DEFAULT_SETTI
     warmImageCache: bool(o['warmImageCache'], base.warmImageCache),
     streamingVoice: bool(o['streamingVoice'], base.streamingVoice),
     backupVoice: bool(o['backupVoice'], base.backupVoice),
+    keepVoiceWarm: bool(o['keepVoiceWarm'], base.keepVoiceWarm),
+    spokenBeats: bool(o['spokenBeats'], base.spokenBeats),
+    deepRouting: bool(o['deepRouting'], base.deepRouting),
+    deepModel: shortString(o['deepModel'], base.deepModel),
+    guidedWalkthroughs: bool(o['guidedWalkthroughs'], base.guidedWalkthroughs),
     paused: bool(o['paused'], base.paused),
     onboardingDone: bool(o['onboardingDone'], base.onboardingDone),
   };

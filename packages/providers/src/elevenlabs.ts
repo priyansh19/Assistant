@@ -14,6 +14,8 @@ const WS_BASE = 'wss://api.elevenlabs.io/v1';
 const WS_INACTIVITY_S = 180;
 /** A socket opened at key-down is reused only while younger than this. */
 const SPARE_MAX_AGE_MS = 150_000;
+/** Keep-warm: a spare older than this is replaced, so one is always ready well inside the server's idle limit. */
+export const SPARE_REFRESH_MS = 110_000;
 
 export interface ElevenLabsOptions {
   /** Speaking speed (capped to 0.7–1.2 by the service). */
@@ -50,6 +52,9 @@ export class ElevenLabsTts implements TtsProvider {
   private readonly fetchImpl: FetchLike;
   private readonly WS: WebSocketCtor | null;
   private spare: Promise<OpenSocket | null> | null = null;
+  private spareAt = 0;
+  /** The spare once it has opened (null while opening, or if it failed). */
+  private spareSock: OpenSocket | null = null;
 
   /** ElevenLabs accepts speeds from 0.7 to 1.2; faster settings are capped there. */
   private voiceSettings(): { voice_settings?: { speed: number } } {
@@ -69,10 +74,21 @@ export class ElevenLabsTts implements TtsProvider {
 
   prewarm(signal: AbortSignal): Promise<void> {
     if (this.WS) {
-      // Key-down: open and authenticate the answer's socket now, while the user is still talking.
+      // Key-down (or keep-warm at idle): open and authenticate the answer's socket ahead of time.
+      // A spare that is getting old is swapped for a fresh one rather than reused.
+      if (this.spare && (Date.now() - this.spareAt > SPARE_REFRESH_MS || this.spareSock?.closed)) {
+        const old = this.spare;
+        this.spare = null;
+        void old.then((s) => s?.ws.close());
+      }
       if (!this.spare) {
         const spare = this.openSocket().catch(() => null);
         this.spare = spare;
+        this.spareAt = Date.now();
+        this.spareSock = null;
+        void spare.then((s) => {
+          if (this.spare === spare) this.spareSock = s;
+        });
         signal.addEventListener(
           'abort',
           () => {
@@ -121,6 +137,7 @@ export class ElevenLabsTts implements TtsProvider {
   private async takeSocket(): Promise<OpenSocket | null> {
     const spare = this.spare;
     this.spare = null;
+    this.spareSock = null;
     const s = spare ? await spare : null;
     if (s && !s.closed && Date.now() - s.openedAt < SPARE_MAX_AGE_MS) return s;
     s?.ws.close();

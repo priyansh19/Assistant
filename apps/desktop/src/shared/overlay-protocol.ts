@@ -18,6 +18,12 @@ export interface OverlayDrawing {
   label: string;
 }
 
+/**
+ * A guided-walkthrough target to ring on this display (DIP, relative to the display): it stays until
+ * the user clicks it, the walkthrough ends, or another target replaces it. Null clears it.
+ */
+export type OverlayGuide = { x: number; y: number; r: number; label: string; hover: boolean } | null;
+
 /** The text caret the companion sits beside while dictating (DIP, relative to this display). */
 export type OverlayAnchor = { x: number; y: number; height: number } | null;
 

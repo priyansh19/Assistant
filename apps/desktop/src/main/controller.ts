@@ -10,6 +10,8 @@ import {
   type AskResult,
   type CredentialId,
   type InteractionState,
+  type GuideTarget,
+  type HitArea,
   type MappedPoint,
   type Settings,
 } from '@clicky/core';
@@ -306,6 +308,15 @@ export class Controller {
       case 'foreground':
         void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
         return;
+      case 'guideArm':
+        void this.armGuide(msg.target).then(
+          (area) => this.engine.send({ type: 'guideArm.reply', id: msg.id, area }),
+          () => this.engine.send({ type: 'guideArm.reply', id: msg.id, area: null }),
+        );
+        return;
+      case 'guideDisarm':
+        this.overlays.guide(null);
+        return;
       case 'remember':
         this.lessons.remember(msg.note);
         return;
@@ -512,7 +523,9 @@ export class Controller {
   private snapPoint(target: MappedPoint, label: string): void {
     const id = this.current.interactionId;
     const started = Date.now();
-    void this.input.snap(label, target.global, SNAP_TIMEOUT_MS).then((at) => {
+    const snapped = this.input.snap(label, target.global, SNAP_TIMEOUT_MS).catch(() => null);
+    this.lastSnap = { label, global: target.global, at: snapped };
+    void snapped.then((at) => {
       if (this.current.interactionId !== id) return;
       if (!at) {
         log.info(
@@ -530,6 +543,47 @@ export class Controller {
         label,
       );
     });
+  }
+
+  /** The last point's control lookup, so a walkthrough ring on the same spot reuses it. */
+  private lastSnap: {
+    label: string;
+    global: { x: number; y: number };
+    at: Promise<{ x: number; y: number } | null>;
+  } | null = null;
+
+  /**
+   * A walkthrough step: ring it on its display and tell the engine where a click counts. The ring
+   * sits on the real control when UI Automation finds it nearby (the same lookup the point used),
+   * and the hit area is in physical screen pixels, the space the mouse hook reports clicks in.
+   */
+  private async armGuide(target: GuideTarget): Promise<HitArea | null> {
+    const display = screen.getAllDisplays().find((d) => d.id === target.at.displayId);
+    if (!display) return null;
+    const near = (a: { x: number; y: number }, b: { x: number; y: number }): boolean =>
+      Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1;
+    const lookup =
+      this.lastSnap && this.lastSnap.label === target.label && near(this.lastSnap.global, target.at.global)
+        ? this.lastSnap.at
+        : this.input.snap(target.label, target.at.global, SNAP_TIMEOUT_MS).catch(() => null);
+    const snapped = await lookup;
+    const b = display.bounds;
+    const inside = (p: { x: number; y: number }): boolean =>
+      p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
+    const centre = snapped && inside(snapped) ? snapped : target.at.global;
+    this.overlays.guide({
+      displayId: display.id,
+      x: centre.x - b.x,
+      y: centre.y - b.y,
+      r: target.radius,
+      label: target.label,
+      hover: target.kind === 'hover',
+    });
+    const phys = screen.dipToScreenPoint(centre);
+    log.info(
+      `walkthrough ring "${target.label}" on display ${display.id} at ${Math.round(centre.x)},${Math.round(centre.y)}${snapped && centre === snapped ? ' (snapped to the control)' : ''}, radius ${Math.round(target.radius)}`,
+    );
+    return { x: phys.x, y: phys.y, r: target.radius * display.scaleFactor };
   }
 
   /**

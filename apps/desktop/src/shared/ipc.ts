@@ -20,6 +20,7 @@ export const IPC = {
   overlayDraw: 'overlay:draw',
   overlayAnchor: 'overlay:anchor',
   overlayOwner: 'overlay:owner',
+  overlayGuide: 'overlay:guide',
   stripState: 'strip:state',
   stripPause: 'strip:pause',
   stripStop: 'strip:stop',

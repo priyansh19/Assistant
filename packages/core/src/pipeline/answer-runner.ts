@@ -12,7 +12,8 @@
 import { fromThousandths, mapPointToDisplay } from '../coordinates.js';
 import type { MappedPoint } from '../coordinates.js';
 import { classifyFailure, StageError, type Stage } from '../errors.js';
-import type { PointTarget } from '../point-parser.js';
+import { mapGuideTag, type GuideTarget } from '../guide.js';
+import type { GuideTag, PointTarget } from '../point-parser.js';
 import { mapShapeToDisplay, scaleShape, type DrawShape, type MappedShape } from '../shapes.js';
 import type { ScreenCapture } from '../ports.js';
 import { buildSystemPrompt } from '../prompt.js';
@@ -58,6 +59,10 @@ export interface AnswerRunInput {
   cache?: boolean;
   /** Agent mode exists here: the model may hand a request over with [TASK:goal] instead of answering. */
   tasks?: boolean;
+  /** A stronger model exists: the model may hand a hard question over with [DEEP] instead of answering. */
+  deep?: boolean;
+  /** Guided walkthroughs: the model may ring a step with [TARGET] ('offer'), or this is a next step ('follow-up'). */
+  guide?: 'offer' | 'follow-up';
 }
 
 /**
@@ -66,7 +71,7 @@ export interface AnswerRunInput {
  */
 export function answerSystemPrompt(
   screens: ScreenCapture,
-  opts: { userContext?: string; audio?: unknown; tasks?: boolean },
+  opts: { userContext?: string; audio?: unknown; tasks?: boolean; deep?: boolean; guide?: 'offer' | 'follow-up' },
 ): string {
   return buildSystemPrompt({
     screens: screens.images.map((img, i) => ({
@@ -78,6 +83,8 @@ export function answerSystemPrompt(
     ...(opts.userContext ? { userContext: opts.userContext } : {}),
     ...(opts.audio ? { audioQuestion: true } : {}),
     ...(opts.tasks ? { tasks: true } : {}),
+    ...(opts.deep ? { deep: true } : {}),
+    ...(opts.guide ? { guide: opts.guide } : {}),
   });
 }
 
@@ -88,6 +95,8 @@ export interface AnswerRunHooks {
   caption?(answerSoFar: string): void;
   /** What the model heard, as soon as it says (direct listening only). */
   heard?(question: string): void;
+  /** A walkthrough step was rung ([TARGET]/[HOVER]): arm it now, so a click during the speech counts. */
+  target?(target: GuideTarget): void;
   firstAudio(): void;
   /**
    * The voice failed while the answer was still streaming. The caller should end the
@@ -102,13 +111,15 @@ export interface AnswerRunResult {
    * 'no-speech': the model listened and heard no question. 'task': the model handed the request to
    * agent mode ([TASK:goal]); nothing was spoken and `task` holds the goal.
    */
-  outcome: 'answered' | 'no-speech' | 'task';
+  outcome: 'answered' | 'no-speech' | 'task' | 'deep';
   answer: string;
   /** What the model heard, when it listened to the recording. */
   heard: string | null;
   pointLabel: string | null;
   /** The goal from a [TASK:goal] tag. */
   task?: string;
+  /** A walkthrough step the answer rang ([TARGET] or [HOVER]), with the words spoken for it. */
+  target?: GuideTarget;
 }
 
 /** Run the answer path. Throws a StageError on failure; returns quietly if `signal` aborts. */
@@ -155,6 +166,7 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
     output.onFirstAudio(() => {
       if (signal.aborted) return;
       trace.mark('firstAudio');
+      trace.mark('firstSound');
       input.hooks.firstAudio();
     });
 
@@ -208,6 +220,18 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         voice.stop();
         void iterator.return(undefined).catch(() => undefined);
         return { ...result, outcome: 'task', task: ev.goal };
+      } else if (ev.type === 'deep') {
+        // Only before anything was said: once the answer is playing, it is finished as it started.
+        if (input.deep && !result.answer.trim() && !result.target) {
+          input.hooks.log?.('DEEP from the answer model: handing the question to the stronger model');
+          voice.stop();
+          void iterator.return(undefined).catch(() => undefined);
+          return { ...result, outcome: 'deep' };
+        }
+        input.hooks.log?.('DEEP ignored (no stronger model, or the answer had started)');
+      } else if (ev.type === 'target') {
+        sawTag = true;
+        guideAt(ev.target, screens, result, input);
       } else if (ev.type === 'heard') {
         result.heard = ev.text;
         input.hooks.heard?.(ev.text);
@@ -221,6 +245,8 @@ export async function runAnswer(input: AnswerRunInput): Promise<AnswerRunResult>
         `POINT missing: the reply had no tag (starts "${result.answer.slice(0, 80).replace(/\s+/g, ' ')}")`,
       );
     result.answer = result.answer.trim();
+    // The same object the caller armed: it learns what was said for the step.
+    if (result.target) result.target.instruction = result.answer.slice(0, 300);
     if (!result.answer) {
       if (input.audio && !result.heard) {
         // The model heard no speech in the recording.
@@ -262,6 +288,31 @@ function drawShape(shape: DrawShape, screens: ScreenCapture, drawn: { count: num
   }
   drawn.count++;
   input.hooks.draw(mapped.shape);
+}
+
+/**
+ * A walkthrough step: the cursor flies to it like a POINT, and the target goes back to the caller,
+ * which rings it and waits for the user's click once the step has been spoken. Without walkthroughs
+ * (or for a second target in one answer) it is only a point.
+ */
+function guideAt(tag: GuideTag, screens: ScreenCapture, result: AnswerRunResult, input: AnswerRunInput): void {
+  const mapped = mapGuideTag(tag, screens.geometry);
+  if (!mapped.ok) {
+    input.hooks.log?.(`TARGET skipped: ${mapped.detail}`);
+    return;
+  }
+  const t = mapped.target;
+  if (input.guide && !result.target) {
+    result.target = { ...t, instruction: '' };
+    input.hooks.target?.(result.target);
+    input.hooks.log?.(
+      `TARGET ${tag.kind} ${tag.x},${tag.y} r=${tag.r ?? 'default'}${tag.screen ? ` screen${tag.screen}` : ''} "${t.label}" → display ${t.at.displayId} at ${Math.round(t.at.local.x)},${Math.round(t.at.local.y)} radius ${Math.round(t.radius)}`,
+    );
+  }
+  if (result.pointLabel !== null) return;
+  result.pointLabel = t.label;
+  input.trace.mark('firstPoint');
+  input.hooks.point(t.at, t.label, { snap: true });
 }
 
 function pointAt(
