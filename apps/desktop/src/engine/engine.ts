@@ -174,6 +174,12 @@ export class Engine {
   private readonly learnedAt = new Map<StyleContext, number>();
   /** Until then, an Esc may be one Clicky typed itself. */
   private ownKeysUntil = 0;
+  /**
+   * Until when an Esc the hook sees is Clicky's own (it's pressing Esc in a step). Only that Esc is
+   * ignored: the user's Esc stops a run even while Clicky is typing (it was ignored for the whole
+   * typing step before, found by the critic review).
+   */
+  private ownEscUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
   private pendingConfirm: ((ok: boolean) => void) | null = null;
   /** How risky the pending question's step is, and when it was asked (for the hold key's answer). */
@@ -590,7 +596,7 @@ export class Engine {
           this.orchestrator.keyUp();
         },
         onCancel: () => {
-          if (Date.now() < this.ownKeysUntil) return;
+          if (Date.now() < this.ownEscUntil) return;
           this.pendingConfirm?.(false);
           this.orchestrator.cancel('escape');
         },
@@ -881,12 +887,15 @@ export class Engine {
       this.ownMouseUntil = Date.now() + 60_000;
     if (action.kind === 'open' || action.kind === 'element' || action.kind === 'control')
       this.ownKeysUntil = Date.now() + 60_000;
+    const ownEsc = action.kind === 'keys' && action.keys.includes('esc');
+    if (ownEsc) this.ownEscUntil = Date.now() + 60_000;
     this.moveAnchor = null;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {
         clearTimeout(timer);
         this.inputs.delete(id);
         this.ownKeysUntil = Math.min(this.ownKeysUntil, Date.now() + OWN_KEYS_MS);
+        if (ownEsc) this.ownEscUntil = Date.now() + OWN_KEYS_MS;
         // The pointer and windows settle for a moment after a click.
         this.ownMouseUntil = Math.min(this.ownMouseUntil, Date.now() + 800);
       };
