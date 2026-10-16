@@ -92,6 +92,7 @@ export class Controller {
     settings: () => this.settings.get(),
     state: () => this.current.state,
     ask: (q) => this.ask(q, 'action'),
+    quietSignals: async () => ({ windows: await this.input.windows() }),
   });
   private anchorTimer: NodeJS.Timeout | null = null;
   private readonly strip = new TaskStrip({

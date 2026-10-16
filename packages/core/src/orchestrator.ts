@@ -122,9 +122,16 @@ export interface OrchestratorDeps {
     | 'listFiles'
     | 'findFiles'
     | 'moveFiles'
+    | 'allowAll'
+    | 'pathPolicy'
+    | 'fileExists'
+    | 'focusIsPassword'
+    | 'budget'
   >;
-  /** Ask the user to allow an agent step. */
-  confirm?(text: string, signal: AbortSignal): Promise<boolean>;
+  /** Ask the user to allow an agent step (the run decides when to ask; this only asks). */
+  confirm?: AgentDeps['confirm'];
+  /** An agent run ended, however it ended (done, failed, stopped or an error). */
+  agentRunEnded?(): void;
   /** Write mode: the app in front and any selected text, read at key-up. */
   writeContext?(signal: AbortSignal): Promise<WriteContext>;
   /** The model for agent steps, when it differs from chat() (agents need precise click positions). */
@@ -1088,6 +1095,8 @@ export class Orchestrator {
     } catch (e) {
       if (!signal.aborted) this.fail(run, e, 'answer');
       return;
+    } finally {
+      this.deps.agentRunEnded?.();
     }
     if (signal.aborted) return;
     this.deps.log?.(`agent ${result.outcome} after ${result.steps.length} steps`);
