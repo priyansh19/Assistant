@@ -801,7 +801,7 @@ while ($true) {
       'snap'   { $out = [ClickyInput]::Snap([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4], [int]$p[5]) }
       'locate' { $out = [ClickyInput]::Locate([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2])), [int]$p[3], [int]$p[4]) }
       'apps'   { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress))) }
-      'launch' { Start-Process ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
+      'launch' { Start-Process explorer.exe -ArgumentList ('shell:AppsFolder\' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[2]))) }
       'windows' { $out = [ClickyInput]::Windows() }
       'elements' { $out = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([ClickyInput]::Elements([int]$p[2], [int]$p[3]))) }
       'elact'   { $out = [ClickyInput]::ElementAct([int]$p[2], $p[3], $(if ($p.Length -gt 4) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p[4])) } else { '' })) }

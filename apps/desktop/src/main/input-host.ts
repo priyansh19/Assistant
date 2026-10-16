@@ -24,6 +24,27 @@ const TABBED_EDITORS = ['notepad'];
 const MAP_REFRESH_MS = 6000;
 const MAP_FRESH_MS = 8000;
 
+/**
+ * Throws if Windows is showing a User Account Control prompt (the app asked for administrator
+ * rights): Clicky can't see or click it, and nothing else works until the user answers it.
+ */
+function adminPrompt(app: string): void {
+  let out = '';
+  try {
+    out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq consent.exe', '/NH'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000,
+    });
+  } catch {
+    return;
+  }
+  if (/consent\.exe/i.test(out))
+    throw new Error(
+      `${app} asked for administrator permission: Windows' User Account Control prompt is waiting for you to answer Yes or No`,
+    );
+}
+
 /** Text longer than this is pasted rather than typed key by key. */
 const PASTE_OVER = 40;
 
@@ -385,11 +406,13 @@ export class InputHost {
       // Several windows (the icon would only show thumbnails) or the click didn't bring one up.
       await d.launch(a.id);
       await d.maximizeNew(before, 3000, '').catch(() => undefined);
+      adminPrompt(a.name);
       return this.showWindow(a.name);
     }
     await this.show(await this.taskbarButton('Start'), `Start: ${a.name}`);
     await d.launch(a.id);
     await d.maximizeNew(before, 3000, '').catch(() => undefined);
+    adminPrompt(a.name);
     log.info(`opened ${a.name} from Start`);
     return this.showWindow(a.name);
   }
