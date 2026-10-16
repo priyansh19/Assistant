@@ -262,7 +262,7 @@ function Close-NewWindows {
     # is the owner's, so it stays. Browsers, Explorer and Store-app frames are Clicky's usual hosts.
     $hosts = @('explorer', 'ApplicationFrameHost', 'notepad', 'comet', 'msedge', 'chrome', 'WindowsTerminal', 'cmd', 'powershell', 'pwsh', 'Code')
     $log = Get-Content (Join-Path $env:TEMP 'clicky-task-log.txt') -Raw -ErrorAction SilentlyContinue
-    if ($w.Process -notin $hosts -and -not ($log -and ($log -replace '\s', '').IndexOf($w.Process, [StringComparison]::OrdinalIgnoreCase) -ge 0)) { continue }
+    if ($w.Process -notin $hosts -and -not ($log -and ($log -replace '\s', '').IndexOf(($w.Process -replace '\s', ''), [StringComparison]::OrdinalIgnoreCase) -ge 0)) { continue }
     [void][LiveTop.W]::PostMessage([IntPtr]$w.Handle, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)
     $closed += $w.Process
   }

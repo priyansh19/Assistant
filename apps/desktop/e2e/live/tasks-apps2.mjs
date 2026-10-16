@@ -55,8 +55,12 @@ export const APPS2 = [
     id: 'NU07',
     say: 'Clicky, which Ollama models do I have installed?',
     maxMinutes: 4,
-    check: "$m = ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\\s+')[0] }; if ($m) { $m -join '|' } else { 'none' }; exit 0",
-    pass: (out, r) => out === 'none' ? said(r, /no models|none/i) : out.split('|').some((m) => r.answer.toLowerCase().includes(m.split(':')[0].toLowerCase())),
+    check:
+      "$m = ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\\s+')[0] }; if ($m) { $m -join '|' } else { 'none' }; exit 0",
+    pass: (out, r) =>
+      out === 'none'
+        ? said(r, /no models|none/i)
+        : out.split('|').some((m) => r.answer.toLowerCase().includes(m.split(':')[0].toLowerCase())),
   },
   {
     id: 'NU08',
@@ -93,7 +97,9 @@ export const APPS2 = [
     maxMinutes: 5,
     check: `$f = Get-ChildItem (${pics}) -Recurse -Filter 'clicky-shot*' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($f) { $f.FullName } else { 'missing' }`,
     pass: (out) => out.trim() !== 'missing',
-    cleanup: [`Get-ChildItem (${pics}) -Recurse -Filter 'clicky-shot*' -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue`],
+    cleanup: [
+      `Get-ChildItem (${pics}) -Recurse -Filter 'clicky-shot*' -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue`,
+    ],
   },
   {
     id: 'NU13',

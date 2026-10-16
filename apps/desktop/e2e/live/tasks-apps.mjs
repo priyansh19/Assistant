@@ -73,7 +73,10 @@ export const APPS = [
     maxMinutes: 5,
     check: "'n/a'",
     pass: (_o, r) => said(r, /hello from docker|working correctly|installation appears/i),
-    cleanup: ['docker rm -f $(docker ps -aq --filter ancestor=hello-world) 2>$null | Out-Null'],
+    // Docker Desktop and its WSL VM use ~3 GB: the test started them, so it stops them.
+    cleanup: [
+      'docker rm -f $(docker ps -aq --filter ancestor=hello-world) 2>$null | Out-Null; docker desktop stop 2>$null | Out-Null',
+    ],
   },
   {
     id: 'AP07',
