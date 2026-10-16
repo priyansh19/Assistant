@@ -5,7 +5,7 @@
  */
 
 import { HeardTagFilter } from '../audio.js';
-import { PointStreamParser, type ParserEvent, type PointTarget } from '../point-parser.js';
+import { PointStreamParser, type GuideTag, type ParserEvent, type PointTarget } from '../point-parser.js';
 import type { VisionChatProvider, VisionChatRequest } from '../providers.js';
 import type { DrawShape } from '../shapes.js';
 import { withTimeout } from './budget.js';
@@ -17,6 +17,10 @@ export type AnswerEvent =
   | { type: 'draw'; shape: DrawShape }
   /** The model says this is a task for agent mode, not a question ([TASK:goal]). */
   | { type: 'task'; goal: string }
+  /** A guided-walkthrough step to arm ([TARGET:…] or [HOVER:…]). */
+  | { type: 'target'; target: GuideTag }
+  /** The fast model handed the question to the stronger model ([DEEP]). */
+  | { type: 'deep' }
   /** Something that looked like a tag but didn't parse; dropped, never spoken. */
   | { type: 'invalid-tag'; raw: string }
   /** What the model heard, when it listened to the recording itself. */
@@ -38,7 +42,7 @@ function* fromParser(events: ParserEvent[]): Generator<AnswerEvent> {
   for (const ev of events) {
     if (ev.type === 'text') yield ev;
     else if (ev.type === 'point') yield { type: 'point', tag: ev.tag.kind === 'point' ? ev.tag : null };
-    else if (ev.type === 'draw' || ev.type === 'task') yield ev;
+    else if (ev.type === 'draw' || ev.type === 'task' || ev.type === 'target' || ev.type === 'deep') yield ev;
     else yield { type: 'invalid-tag', raw: ev.raw };
   }
 }

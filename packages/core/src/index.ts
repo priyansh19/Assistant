@@ -22,3 +22,7 @@ export * from './memory.js';
 export * from './wake.js';
 export * from './skills.js';
 export * from './approvals.js';
+export * from './beat.js';
+export * from './deep.js';
+export * from './guide.js';
+export * from './warm.js';

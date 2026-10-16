@@ -6,6 +6,8 @@ import type {
   AskResult,
   CredentialId,
   DisplayGeometry,
+  GuideTarget,
+  HitArea,
   HistoryEntry,
   InputAction,
   InteractionState,
@@ -86,6 +88,8 @@ export type MainToEngine =
   | { type: 'otherAgent.reply'; id: number; text: OtherAgent | null }
   /** A sketch rendered to a PNG (base64), or null if it couldn't be. */
   | { type: 'renderSketch.reply'; id: number; png: string | null }
+  /** Where clicks count for a walkthrough step (physical screen px, like the hook's mouse events), or null. */
+  | { type: 'guideArm.reply'; id: number; area: HitArea | null }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }
@@ -131,6 +135,10 @@ export type EngineToMain =
   | { type: 'elements'; id: number }
   /** Is another agent driving this PC (checked before each agent step)? */
   | { type: 'otherAgent'; id: number }
+  /** Ring a walkthrough step and say where clicks count (main owns the screen API and the control lookup). */
+  | { type: 'guideArm'; id: number; target: GuideTarget }
+  /** Take the walkthrough ring down. */
+  | { type: 'guideDisarm' }
   /** Render a sketch's SVG so the model can check the drawing. */
   | { type: 'renderSketch'; id: number; svg: string }
   /** Agent mode was asked for but isn't set up: open its rules screen. */

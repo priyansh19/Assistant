@@ -4,6 +4,7 @@
  */
 
 import type { CaptureGeometry, MappedPoint } from './coordinates.js';
+import type { GuideTarget, HitArea } from './guide.js';
 import type { InteractionState } from './interaction.js';
 import type { MappedShape } from './shapes.js';
 import type { ImageInput } from './providers.js';
@@ -70,4 +71,18 @@ export type InputAction =
 export interface InputPort {
   /** Resolves when the OS has received the input. */
   run(action: InputAction, signal: AbortSignal): Promise<void>;
+}
+
+/** Guided walkthroughs: ring a target on screen and say where clicks count. */
+export interface GuidePort {
+  /**
+   * Show the ring for this step and return where a click counts, in the coordinate space of the
+   * mouse events the app passes to Orchestrator.userInput (the app may snap the centre onto the
+   * real control). Null if the target can't be shown (its display is gone).
+   */
+  arm(target: GuideTarget): Promise<HitArea | null>;
+  /** Take the ring down. */
+  disarm(): void;
+  /** The process name of the app in front, if the app can tell. */
+  foreground?(): Promise<string | null>;
 }

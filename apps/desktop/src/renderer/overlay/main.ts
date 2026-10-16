@@ -6,6 +6,7 @@ import type {
   OverlayAnchor,
   OverlayConfig,
   OverlayDrawing,
+  OverlayGuide,
   OverlayMessage,
   OverlayPoint,
 } from '../../shared/overlay-protocol';
@@ -577,6 +578,32 @@ function drawShapes(now: number): void {
   if (!pen && next) pen = strokeStart(next.d);
 }
 
+/** The walkthrough step being waited on: a steady ring the size of the control, plus a slow pulse. */
+let guideRing: { at: Pt; r: number; hover: boolean; since: number } | null = null;
+
+function drawGuideRing(now: number): void {
+  if (!guideRing) return;
+  const { at, r, hover, since } = guideRing;
+  const appear = Math.min(1, (now - since) / 250);
+  const t = ((now - since) % 1600) / 1600;
+  ctx.save();
+  ctx.strokeStyle = color();
+  ctx.lineWidth = 2.5;
+  ctx.globalAlpha = 0.9 * appear;
+  // A dashed ring for hover targets ("rest here"), solid for click targets.
+  if (hover) ctx.setLineDash([6, 5]);
+  ctx.beginPath();
+  ctx.arc(at.x, at.y, r * (0.85 + 0.15 * appear), 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = (1 - t) * 0.55 * appear;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(at.x, at.y, r + 4 + t * 16, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawTargetRing(at: Pt, since: number, now: number): void {
   const t = ((now - since) % 1400) / 1400;
   ctx.save();
@@ -606,6 +633,7 @@ function frame(now: number): void {
 
   // Draw the marks first: that tells us where the pen is this frame.
   drawShapes(now);
+  drawGuideRing(now);
   // The pen wins over pointing: a model often points at what it is about to draw. The point is
   // remembered and the companion flies back to it once the drawing is done.
   const drawing = pen !== null && !anchor;
@@ -712,6 +740,7 @@ function frame(now: number): void {
     !resting ||
     mode.kind !== 'follow' ||
     drawings.length > 0 ||
+    guideRing !== null ||
     message !== null ||
     (idleSince > 0 && now - idleSince < LINGER_MS);
   const wantPresence = config.showCompanion || inUse ? 1 : 0;
@@ -734,7 +763,14 @@ function frame(now: number): void {
     mode.kind === 'follow' &&
     (!visible || (pos !== null && target !== null && Math.hypot(target.x - pos.x, target.y - pos.y) < 0.3));
   // A message only keeps the loop alive while it's visible here (the cursor may be on another display).
-  if (!settled || !resting || drawings.length > 0 || (message !== null && pos !== null) || presence !== wantPresence)
+  if (
+    !settled ||
+    !resting ||
+    drawings.length > 0 ||
+    guideRing !== null ||
+    (message !== null && pos !== null) ||
+    presence !== wantPresence
+  )
     requestAnimationFrame(frame);
   else running = false;
 }
@@ -801,6 +837,11 @@ window.clicky.onOwner((id) => {
 
 window.clicky.onAnchor((a) => {
   anchor = a;
+  kick();
+});
+
+window.clicky.onGuide((g: OverlayGuide) => {
+  guideRing = g ? { at: { x: g.x, y: g.y }, r: g.r, hover: g.hover, since: performance.now() } : null;
   kick();
 });
 

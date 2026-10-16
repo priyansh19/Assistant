@@ -270,6 +270,11 @@ function renderControls(s: Settings): void {
   check('warmImageCache', s.warmImageCache);
   check('streamingVoice', s.streamingVoice);
   check('backupVoice', s.backupVoice);
+  check('keepVoiceWarm', s.keepVoiceWarm);
+  check('spokenBeats', s.spokenBeats);
+  check('deepRouting', s.deepRouting);
+  set('deepModel', s.deepModel);
+  check('guidedWalkthroughs', s.guidedWalkthroughs);
   set('chatProvider', s.chatProvider);
   set('chatModel', s.chatModel);
   renderModelPick(s);
@@ -456,6 +461,7 @@ function renderHome(): void {
 
 const STAGE_LABELS: Record<(typeof STAGE_METRICS)[number], string> = {
   keyUpToFirstAudioMs: 'Letting go → first word',
+  keyUpToFirstSoundMs: 'Letting go → first sound',
   transcriptMs: 'Finishing the transcript',
   keyUpToRequestMs: 'Letting go → question sent',
   modelFirstTokenMs: 'AI writing its first word',
@@ -1786,6 +1792,11 @@ async function init(): Promise<void> {
   bindToggle('warmImageCache');
   bindToggle('streamingVoice');
   bindToggle('backupVoice');
+  bindToggle('keepVoiceWarm');
+  bindToggle('spokenBeats');
+  bindToggle('deepRouting');
+  bindText('deepModel');
+  bindToggle('guidedWalkthroughs');
   bindSelect('chatProvider');
   bindText('chatModel');
   $<HTMLSelectElement>('chatModelPick').addEventListener('change', (e) => {

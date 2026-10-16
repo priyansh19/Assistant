@@ -1,8 +1,8 @@
 import { DEFAULT_SETTINGS, describeError, type TtsAudioChunk } from '@clicky/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AnthropicChat } from './anthropic.js';
 import { AssemblyAIStt, type WebSocketLike } from './assemblyai.js';
-import { ElevenLabsTts } from './elevenlabs.js';
+import { ElevenLabsTts, SPARE_REFRESH_MS } from './elevenlabs.js';
 import { ensureOk, ProviderError, sseData, type FetchLike } from './http.js';
 import { createChat, createTts } from './index.js';
 import { pcmToWav } from './openai-audio.js';
@@ -458,6 +458,28 @@ describe('ElevenLabsTts', () => {
       { text: 'then click Export. ', flush: true },
       { text: '' },
     ]);
+  });
+
+  it('keep-warm: reuses a young spare, swaps an old or closed one for a fresh socket', async () => {
+    reset();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const tts = new ElevenLabsTts({ apiKey: 'k', WebSocket: FakeElevenWS, fetch: async () => new Response('') });
+      const sig = signal();
+      await tts.prewarm(sig);
+      await tts.prewarm(sig);
+      expect(FakeElevenWS.all).toHaveLength(1);
+      vi.setSystemTime(Date.now() + SPARE_REFRESH_MS + 1);
+      await tts.prewarm(sig);
+      expect(FakeElevenWS.all).toHaveLength(2);
+      expect(FakeElevenWS.all[0]?.readyState).toBe(3);
+      // The server closed the spare: the next warm-up replaces it.
+      FakeElevenWS.all[1]?.onclose?.({ code: 1000 });
+      await tts.prewarm(sig);
+      expect(FakeElevenWS.all).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls back to one HTTP stream per sentence when the socket will not open', async () => {
