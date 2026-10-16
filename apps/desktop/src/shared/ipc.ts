@@ -68,6 +68,18 @@ export const IPC = {
   dashStyleClear: 'dash:style-clear',
   dashModels: 'dash:models',
   dashNoteRemove: 'dash:note-remove',
+  dashClickyCreate: 'dash:clicky-create',
+  dashClickyArchive: 'dash:clicky-archive',
+  dashClickyRemove: 'dash:clicky-remove',
+  dashClickyOpen: 'dash:clicky-open',
+  dashRoutineCreate: 'dash:routine-create',
+  dashRoutinePause: 'dash:routine-pause',
+  dashRoutineRun: 'dash:routine-run',
+  dashRoutineRemove: 'dash:routine-remove',
+  dashConnectorSave: 'dash:connector-save',
+  dashConnectorCheck: 'dash:connector-check',
+  dashConnectorRemove: 'dash:connector-remove',
+  dashConnectorEnable: 'dash:connector-enable',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -103,7 +115,72 @@ export interface DashboardSnapshot {
   tasks: TaskView[];
   /** Things the user asked Clicky to remember. */
   notes: string[];
+  /** Named helpers. */
+  clickys: ClickyView[];
+  routines: RoutineView[];
+  connectors: ConnectorView[];
 }
+
+export interface ClickyView {
+  slug: string;
+  name: string;
+  role: string;
+  purpose: string;
+  archived: boolean;
+  standing: string[];
+  notes: { date: string; text: string }[];
+  folder: string;
+}
+
+export interface RoutineView {
+  id: string;
+  title: string;
+  task: string;
+  /** The owning helper's name, if any. */
+  owner: string | null;
+  cadence: string;
+  paused: boolean;
+  pausedReason: string | null;
+  nextRunAt: number;
+  runCount: number;
+  lastSummary: string | null;
+  lastFailed: boolean;
+  waitingForNetwork: boolean;
+  running: boolean;
+}
+
+export interface ConnectorView {
+  id: string;
+  name: string;
+  transport: 'remote' | 'stdio';
+  url: string;
+  command: string;
+  args: string;
+  enabled: boolean;
+  capability: string | null;
+  toolCount: number | null;
+  /** Names of saved secrets only; values never reach a renderer. */
+  saved: { bearer: boolean; env: string[]; headers: string[] };
+}
+
+/** The connector form as typed: secrets as text, sent once and never sent back. */
+export interface ConnectorForm {
+  id?: string;
+  name: string;
+  transport: 'remote' | 'stdio';
+  url: string;
+  command: string;
+  args: string;
+  /** API key or token; empty keeps the saved one. */
+  token: string;
+  /** NAME=value lines. */
+  env: string;
+  /** Name: value lines. */
+  headers: string;
+}
+
+export type ClickyCreateResult = { ok: true; snapshot: DashboardSnapshot } | { ok: false; reason: string; twin?: string };
+export type FormResult = { ok: true; snapshot: DashboardSnapshot; message?: string } | { ok: false; reason: string };
 
 /** One OpenRouter model for the picker. */
 export interface ModelOption {
@@ -122,6 +199,8 @@ export interface TaskView {
   addedAt: number;
   endedAt?: number;
   summary?: string;
+  /** Shown instead of the goal (routine runs). */
+  label?: string;
 }
 
 export interface LocalModelView {

@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { CredentialId, Playbook, Settings } from '@clicky/core';
 import type {
+  ClickyCreateResult,
+  ConnectorForm,
+  FormResult,
   ActionSaveResult,
   DashboardSnapshot,
   IpcChannel,
@@ -53,6 +56,19 @@ const api = {
   clearStyle: () => invoke<DashboardSnapshot>('dash:style-clear'),
   models: () => invoke<ModelOption[]>('dash:models'),
   removeNote: (index: number) => invoke<DashboardSnapshot>('dash:note-remove', index),
+  createClicky: (c: { name: string; role?: string; purpose: string; anyway?: boolean }) =>
+    invoke<ClickyCreateResult>('dash:clicky-create', c),
+  archiveClicky: (slug: string, archived: boolean) => invoke<DashboardSnapshot>('dash:clicky-archive', slug, archived),
+  removeClicky: (slug: string) => invoke<DashboardSnapshot>('dash:clicky-remove', slug),
+  openClickyFolder: (slug: string) => invoke<undefined>('dash:clicky-open', slug),
+  createRoutine: (text: string, owner?: string) => invoke<FormResult>('dash:routine-create', text, owner),
+  pauseRoutine: (id: string, paused: boolean) => invoke<DashboardSnapshot>('dash:routine-pause', id, paused),
+  runRoutine: (id: string) => invoke<DashboardSnapshot>('dash:routine-run', id),
+  removeRoutine: (id: string) => invoke<DashboardSnapshot>('dash:routine-remove', id),
+  saveConnector: (form: ConnectorForm) => invoke<FormResult>('dash:connector-save', form),
+  checkConnector: (id: string) => invoke<FormResult>('dash:connector-check', id),
+  removeConnector: (id: string) => invoke<DashboardSnapshot>('dash:connector-remove', id),
+  enableConnector: (id: string, on: boolean) => invoke<DashboardSnapshot>('dash:connector-enable', id, on),
   onHoldKey(fn: (down: boolean, key: 'talk' | 'dictate') => void): void {
     const ch: IpcChannel = 'dash:hold-key';
     ipcRenderer.on(ch, (_e, down: boolean, key: 'talk' | 'dictate') => fn(down, key));

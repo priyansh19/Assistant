@@ -21,6 +21,7 @@
       <button class="nav-item" data-page="actions">Actions</button>
       <button class="nav-item" data-page="voice">Writes like me</button>
       <button class="nav-item" data-page="playbooks">Playbooks</button>
+      <button class="nav-item" data-page="helpers">Helpers</button>
       <div class="nav-sep"></div>
       <button class="nav-item" data-page="general">General</button>
       <button class="nav-item" data-page="cursor">Cursor</button>
@@ -299,6 +300,109 @@
         <div class="card list" id="playbook-list"></div>
       </section>
 
+      <!-- Helpers: named agents, their routines, and custom connectors -->
+      <section class="page" id="page-helpers">
+        <h1>Helpers</h1>
+        <p class="intro">
+          A helper is Clicky with a job and a memory, like "Pitch Lab" for decks or "Inbox Desk" for email. Ask it by name
+          ("Clicky, ask Pitch Lab to tighten slide 3") and it works with its own notes and its own folder in
+          Documents\Clicky. Making one starts nothing.
+        </p>
+        <div class="card">
+          <form id="clicky-form" class="clicky-form">
+            <input type="text" id="clicky-name" placeholder="Name, two words for the job (Pitch Lab)" maxlength="30" autocomplete="off" />
+            <input type="text" id="clicky-purpose" placeholder="What it does for you, in one sentence" maxlength="200" autocomplete="off" />
+            <button class="primary" type="submit">Make helper</button>
+          </form>
+          <div class="key-error" id="clicky-error" hidden></div>
+        </div>
+        <div class="card list" id="clicky-list"></div>
+
+        <div class="section-head">
+          <h2>Routines</h2>
+        </div>
+        <div class="card">
+          <form id="routine-form" class="row">
+            <input
+              type="text"
+              id="routine-input"
+              placeholder="e.g. every morning summarize the emails waiting on me"
+              maxlength="600"
+              autocomplete="off"
+            />
+            <select id="routine-owner" aria-label="Helper"><option value="">Clicky</option></select>
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <div class="desc ask-hint" id="routine-hint">
+            Routines run on this PC while it's on and Clicky is open, one at a time, when you step away from the mouse.
+            The first run does the whole job; later runs report only what changed. Three failures in a row pause one.
+          </div>
+        </div>
+        <div class="card list" id="routine-list"></div>
+
+        <div class="section-head">
+          <h2>Connectors</h2>
+        </div>
+        <p class="intro">
+          Connect any MCP server: a URL, or a command on this PC. Keys are encrypted with Windows and never shown again.
+        </p>
+        <div class="card" id="connector-editor">
+          <input type="hidden" id="conn-id" />
+          <div class="row">
+            <div class="label"><div class="title">Name</div></div>
+            <input type="text" id="conn-name" placeholder="e.g. Linear" maxlength="40" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">Type</div></div>
+            <select id="conn-transport">
+              <option value="remote">Server URL</option>
+              <option value="stdio">Command on this PC</option>
+            </select>
+          </div>
+          <div class="row" id="conn-url-row">
+            <div class="label"><div class="title">Server URL</div></div>
+            <input type="text" id="conn-url" placeholder="https://…" autocomplete="off" />
+          </div>
+          <div class="row" id="conn-cmd-row" hidden>
+            <div class="label">
+              <div class="title">Command</div>
+              <div class="desc">The program, then everything after it, quoted like a shell.</div>
+            </div>
+            <input type="text" id="conn-command" placeholder="npx" autocomplete="off" />
+            <input type="text" id="conn-args" placeholder="-y some-mcp-server --flag value" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">API key or token</div>
+              <div class="desc" id="conn-token-desc">Leave empty if the server needs none.</div>
+            </div>
+            <input type="password" id="conn-token" autocomplete="off" />
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Environment variables</div>
+              <div class="desc">One per line, like API_TOKEN=value. For commands on this PC.</div>
+            </div>
+            <textarea id="conn-env" rows="2" spellcheck="false"></textarea>
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Extra headers</div>
+              <div class="desc">One per line, like X-Api-Key: value. For server URLs.</div>
+            </div>
+            <textarea id="conn-headers" rows="2" spellcheck="false"></textarea>
+          </div>
+          <div class="row">
+            <div class="label"><div class="desc" id="conn-message"></div></div>
+            <div class="item-buttons">
+              <button type="button" class="secondary small" id="conn-cancel" hidden>Cancel</button>
+              <button type="button" class="primary small" id="conn-save">Save connector</button>
+            </div>
+          </div>
+        </div>
+        <div class="card list" id="connector-list"></div>
+      </section>
+
       <!-- General -->
       <section class="page" id="page-general">
         <h1>General</h1>
@@ -382,7 +486,7 @@
         </div>
         <h2>What Clicky remembers</h2>
         <p class="intro">
-          Tell Clicky things to remember, like "Clickey, Comet is on my taskbar" or "remember my reports are in
+          Tell Clicky things to remember, like "Clicky, Excel is on my taskbar" or "remember my reports are in
           D:\Reports". It uses them from then on. Stored on this PC.
         </p>
         <div class="card list" id="notes-list"></div>

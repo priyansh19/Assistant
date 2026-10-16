@@ -15,6 +15,7 @@
 import { agentGoal, onScreenDrawing, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
 import { bareGreeting, memoryNote, noteRefusal } from './memory.js';
+import { visibleText } from './final-message.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
@@ -71,6 +72,17 @@ export interface AskResult {
   answer: string;
   pointLabel: string | null;
   detail?: string;
+}
+
+/** How an agent task runs: as a named helper, with a repeat set up after the first run. */
+export interface AgentTaskPlan {
+  goal: string;
+  /** Added to the agent's briefing (the helper's identity, job and notes). */
+  briefing?: string;
+  /** The helper's name, for the run log. */
+  helper?: string;
+  /** Said after the result when the run worked ("I'll do this every day at 08:00…"). */
+  after?: string;
 }
 
 export interface OrchestratorDeps {
@@ -138,6 +150,13 @@ export interface OrchestratorDeps {
   /** Skills (task playbooks) that match the task, and Clicky's standing briefing (agents.md). */
   agentSkills?(goal: string): string | undefined;
   agentBriefing?(): string | undefined;
+  /**
+   * Before an agent task: the named helper that does it (its briefing and notes), a repeat to set
+   * up ("every morning…"), and the goal without the cadence words. Null to run the goal as is.
+   */
+  agentTaskPlan?(goal: string): AgentTaskPlan | null;
+  /** "Pitch Lab, remember…": keep a note for that helper. The line to say, or null if not one. */
+  helperNote?(question: string): string | null;
   /** A run finished: its steps and their checks, for the run log and learning. */
   agentRunFinished?(goal: string, result: AgentResult): void;
   /** Move the companion to the text caret (agent typing steps). */
@@ -718,6 +737,12 @@ export class Orchestrator {
       await this.sayOnly(run, speech, 'Yes? What can I help with?');
       return;
     }
+    const helperLine = audio ? null : (this.deps.helperNote?.(question) ?? null);
+    if (helperLine) {
+      spec?.discard();
+      await this.sayOnly(run, speech, helperLine);
+      return;
+    }
     const note = audio || !this.deps.remember ? null : memoryNote(question);
     const refused = note ? noteRefusal(note) : null;
     if (note && refused) {
@@ -1066,13 +1091,18 @@ export class Orchestrator {
     if (!input || !confirm) return this.fail(run, new ConfigError('Agent mode is not available here.'), 'config');
     run.latency.setMeta('agent', true);
     const userContext = this.deps.userContext?.();
+    const plan = this.deps.agentTaskPlan?.(goal) ?? null;
+    if (plan) {
+      goal = plan.goal;
+      if (plan.helper) run.latency.setMeta('helper', plan.helper);
+    }
     let result: AgentResult;
     try {
       const hints = this.deps.agentHints?.(goal);
       const inventory = this.deps.inventory?.();
       const skills = this.deps.agentSkills?.(goal);
       const conversation = this.conversationText(run);
-      const briefing = this.deps.agentBriefing?.();
+      const briefing = [this.deps.agentBriefing?.(), plan?.briefing].filter(Boolean).join('\n\n') || undefined;
       result = await runAgent(goal, {
         ...(hints ? { hints } : {}),
         ...(skills ? { skills } : {}),
@@ -1107,12 +1137,14 @@ export class Orchestrator {
       at: this.now(),
     });
     this.recentRuns.splice(5);
-    run.answer = result.summary;
+    // Tag text from a final-message tail is never spoken; a repeat that was set up is confirmed.
+    const spoken = [visibleText(result.summary), result.outcome === 'done' ? plan?.after : undefined].filter(Boolean).join(' ');
+    run.answer = spoken;
     const out = speech.create(signal);
     out.onFirstAudio(() => {
       if (this.run === run && this.machine.state === 'thinking') this.machine.dispatch({ type: 'firstAudio' });
     });
-    out.say(result.summary);
+    out.say(spoken);
     out.end();
     try {
       await withTimeout(out.done, 30_000, 'speech', 'saying the result', signal);

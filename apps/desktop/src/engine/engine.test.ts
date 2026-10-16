@@ -74,6 +74,9 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   skills: [],
   outputDir: '',
   dataDir: '',
+  clickys: [],
+  clickyWorkspaces: {},
+  routineTitles: {},
   ...over,
 });
 
