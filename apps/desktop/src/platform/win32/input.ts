@@ -334,6 +334,8 @@ public static class ClickyInput {
               var ts = ((System.Windows.Automation.TogglePattern)tp).Current.ToggleState;
               kind += ts == System.Windows.Automation.ToggleState.On ? " (ticked)" : ts == System.Windows.Automation.ToggleState.Off ? " (not ticked)" : "";
             }
+            // Password boxes are marked so the agent never types into one.
+            if (c.IsPassword) kind += " (password)";
             sb.Append(snap.Count).Append('|').Append(kind).Append('|').Append(name).Append('|')
               .Append((int)r.X).Append(',').Append((int)r.Y).Append(',').Append((int)r.Width).Append(',').Append((int)r.Height).Append('\n');
           }
@@ -1037,7 +1039,7 @@ export function createWin32InputDriver(): InputDriver {
         .map((line) => {
           const [id = '0', kind = '', name = '', box = '0,0,0,0'] = line.split('|');
           const [x = 0, y = 0, w = 0, h = 0] = box.split(',').map(Number);
-          return { id: Number(id), kind, name, x, y, w, h };
+          return { id: Number(id), kind, name, x, y, w, h, ...(kind.includes('(password)') ? { password: true } : {}) };
         }),
     elementAct: async (id, op, text = '') => {
       const r = await send(

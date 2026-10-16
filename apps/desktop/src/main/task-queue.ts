@@ -1,7 +1,15 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, Notification, powerMonitor } from 'electron';
-import { agentReady, isResting, type AskResult, type InteractionState, type Settings } from '@clicky/core';
+import {
+  agentReady,
+  isResting,
+  quietVerdict,
+  type AskResult,
+  type InteractionState,
+  type QuietSignals,
+  type Settings,
+} from '@clicky/core';
 import { log } from './log';
 
 export interface QueuedTask {
@@ -18,6 +26,8 @@ export interface TaskQueueDeps {
   settings(): Settings;
   state(): InteractionState;
   ask(question: string): Promise<AskResult | null>;
+  /** What says the user is busy (on a call, sharing the screen): a task never starts then. */
+  quietSignals?(): Promise<QuietSignals>;
 }
 
 /** Run a queued task only after the user has left the mouse and keyboard alone this long. */
@@ -36,6 +46,10 @@ export class TaskQueue {
   private running: QueuedTask | null = null;
   private timer: NodeJS.Timeout | null = null;
   private readonly listeners = new Set<() => void>();
+  /** Why the last start was held back, so the log says it once, not every tick. */
+  private heldBack = '';
+  /** A tick is checking whether the user is busy (ticks overlap while it waits). */
+  private checking = false;
 
   constructor(private readonly deps: TaskQueueDeps) {
     try {
@@ -113,6 +127,21 @@ export class TaskQueue {
     const next = [...this.tasks].reverse().find((t) => t.status === 'queued' && (!onlyId || t.id === onlyId));
     if (!next) return;
     if (!force && powerMonitor.getSystemIdleTime() < IDLE_S) return;
+    // On a call or sharing the screen: a task moving the mouse would be seen by everyone. Even a
+    // task started by hand waits (a check that fails counts as quiet).
+    if (this.checking) return;
+    this.checking = true;
+    const quiet = this.deps.quietSignals
+      ? quietVerdict(await this.deps.quietSignals().catch(() => ({ windows: [], screenShared: true })))
+      : { quiet: false as const };
+    this.checking = false;
+    if (quiet.quiet) {
+      if (this.heldBack !== quiet.reason) log.info(`background task waiting: ${quiet.reason}`);
+      this.heldBack = quiet.reason;
+      return;
+    }
+    this.heldBack = '';
+    if (this.running) return;
     this.running = next;
     next.status = 'running';
     this.save();

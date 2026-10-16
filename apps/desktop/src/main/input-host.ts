@@ -264,7 +264,7 @@ export class InputHost {
           // Follow-ups reuse the tab Clicky opened (the browser window it last used is still in
           // front): go to the address there instead of opening yet another tab.
           const last = this.lastBrowser;
-          if (last && last.handle === before && Date.now() - last.at < REUSE_TAB_MS) {
+          if (!action.newTab && last && last.handle === before && Date.now() - last.at < REUSE_TAB_MS) {
             await d.keys(['ctrl', 'l']);
             await delay(150);
             await d.type(action.url);
@@ -304,12 +304,19 @@ export class InputHost {
         return d.scroll(p.x, p.y, action.amount);
       }
       case 'type': {
+        // The window that has the focus as the step starts: a paste checks it's still there.
+        const startHandle = await d.foregroundHandle().catch(() => '');
         await this.showTyping(action.text);
         // Several lines, or a long line, are pasted, not typed: apps like Windows 11 Notepad
         // autocorrect and mix up typed text ("delta" came out as "eelta"; a 3-idea list came out
         // garbled 12 times in a row), found by the live suite.
         if (action.text.includes('\n') || action.text.length > PASTE_OVER) {
           const app = await d.foreground().catch(() => null);
+          // Pasting is one keystroke, so the typing guard can't stop it half way: check first that
+          // the focus is still in the window the step started in.
+          const nowHandle = await d.foregroundHandle().catch(() => '');
+          if (!startHandle || nowHandle !== startHandle)
+            throw new Error('FOCUS_MOVED: the window in front changed before I could paste, so I typed nothing');
           if (app && !isTerminal(app) && (await this.paste(action.text))) return;
         }
         return d.type(action.text);

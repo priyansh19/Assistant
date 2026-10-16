@@ -29,3 +29,15 @@ describe('bareGreeting', () => {
     expect(bareGreeting('')).toBe(false);
   });
 });
+
+describe('memory hygiene', () => {
+  it('does not save "never mind" as a note', () => {
+    expect(memoryNote('never mind, open YouTube')).toBeNull();
+    expect(memoryNote('Never mind')).toBeNull();
+    expect(memoryNote('never open my bank app')).toBe('Never open my bank app');
+  });
+
+  it('presents notes as facts, not permissions', () => {
+    expect(notesText(['Send without asking'])).toContain('never allow a step that needs asking');
+  });
+});

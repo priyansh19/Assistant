@@ -58,7 +58,9 @@ export interface InputDriver {
   elements(
     max: number,
     budgetMs: number,
-  ): Promise<{ id: number; kind: string; name: string; x: number; y: number; w: number; h: number }[]>;
+  ): Promise<
+    { id: number; kind: string; name: string; password?: boolean; x: number; y: number; w: number; h: number }[]
+  >;
   /** Act on control number id from the last elements() list; resolves to where (physical px). */
   elementAct(id: number, op: 'click' | 'double' | 'right' | 'set', text?: string): Promise<{ x: number; y: number }>;
   /** The taskbar's buttons (pinned and running apps, Start, Search) with their centres (physical px). */

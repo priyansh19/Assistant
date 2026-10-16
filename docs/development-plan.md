@@ -136,6 +136,22 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 - **History is text only** (question, answer, pointed-at label, timing) and opt-out; it feeds follow-up context and saved actions.
 - **`CLICKY_DEMO=1`** swaps in offline providers so the full loop (mic, capture, overlay flight, voice, history) can be smoke-tested on the laptop without keys.
 
+### 3.5 Agent safety layer (2026-10-16)
+
+The official app runs its agents with no sandbox and no approval prompts, so all of its safety sits in its own app code (consent gate, deny lists, done checks, untrusted-data framing). Ours is now built the same way, as pure tested code in `packages/core/src/safety/`, and it replaces the model-only judgement found by the release critique:
+
+- **The app judges every step** (`risk.ts`): safe, confirm, irreversible or forbidden, from the action itself, the window it lands in and the control it targets. The model's `risky` flag can only raise the level. Forbidden steps (passwords, card numbers, security windows, network paths, Ctrl+Alt+Del) end the run and say why.
+- **Confirmations show the real action** ("Press Enter in "Ana - WhatsApp""), never the model's wording. An approval covers that exact step for the current run only. Allow all covers confirm steps for one run and never irreversible ones. The 90 s follow-up window and the similar-step approval memory are removed.
+- **File steps reach only the user's own folders** (`paths.ts`): no network or device paths, system folders, AppData, Startup or Clicky's own data.
+- **Done is checked by the app first** (`done-check.ts`): the plan names what will be true (text, a window, a file), and the app checks it before the model's second look. A check that fails or can't answer is never reported as done for sure, and such runs never become lessons. Shorter routes are kept only when every step really ran and worked.
+- **A ledger of outside actions** (`ledger.ts`) is shown to the model on retries and new approaches; repeating an irreversible step asks again and says it already happened.
+- **Never-touch apps fail closed:** no screenshot, model call or input while one is in front or when the check can't answer, re-checked right before each input.
+- **Outside text is data** (`untrusted.ts`): window titles, controls, notes, skills, lessons and earlier answers go into labelled `<untrusted>` blocks with Clicky's tags defused.
+- **Budgets** (`budget.ts`): after 15 minutes or 120 model calls the run asks before going on. **Quiet gate** (`quiet.ts`): background tasks don't start during calls or screen sharing.
+- **The hold key allows only steps that can be undone**, and not a press within 600 ms of the question showing. Irreversible steps need the Allow button, and turning Allow all on never answers one.
+- **A goal the answer model worked out** ([TASK:…]) still starts without a "Do this?" question (owner decision, kept for speed), but it never relaxes a check: an assistant app "named in the task" still asks before sending.
+- **Long pastes check the focus first**, and a website opened while a never-touch app is in front opens in a new tab. The instruction pack exported for installers is scrubbed (`scripts/scrub.mjs`), and lines that still name the owner are left out.
+
 ## 4. Phases
 
 Every phase ends with something runnable on the Windows laptop and a short demo checklist in its PR.

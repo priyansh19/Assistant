@@ -1,14 +1,16 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   holdKeyLabel,
+  allowAllAnswers,
+  keyMayAllow,
   agentReady,
   buildUserContext,
   lessonFrom,
   lessonHints,
   shortestRoute,
   makeComboKey,
-  ApprovalMemory,
   matchSkills,
   skillsText,
   contextOf,
@@ -34,6 +36,8 @@ import {
   type UiElement,
   type Sketch,
   type OtherAgent,
+  type PathPolicy,
+  type RiskLevel,
 } from '@clicky/core';
 import { createChat, createStt, createTts } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
@@ -159,10 +163,11 @@ export class Engine {
   /** Waiting for another agent to finish (the strip shows it as a pause). */
   private waitingForAgent = false;
   private ignoreOtherAgentUntil = 0;
-  /** "Allow all" on the notch: every risky step runs without asking, for this session. */
+  /**
+   * "Allow all" on the notch: steps that only need a confirmation run without asking, for the
+   * current run (it turns off when the run ends). Irreversible steps are always asked.
+   */
   private allowAll = false;
-  /** Steps the user allowed; similar ones (not deletes or closes) run without asking again. */
-  private readonly approvals = new ApprovalMemory();
   /** Where a burst of mouse movement started, to ignore jitter. */
   private moveAnchor: { x: number; y: number; at: number } | null = null;
   /** Last style lesson per context, so learning runs at most every couple of minutes. */
@@ -171,6 +176,8 @@ export class Engine {
   private ownKeysUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
   private pendingConfirm: ((ok: boolean) => void) | null = null;
+  /** How risky the pending question's step is, and when it was asked (for the hold key's answer). */
+  private pendingAsk: { level: RiskLevel; at: number; text: string } | null = null;
   /** The hold-key press that answered a confirmation; its release must not end anything. */
   private swallowUp = false;
 
@@ -237,6 +244,12 @@ export class Engine {
       agentBriefing: () => this.cfg().briefing || undefined,
       remember: (note) => this.post({ type: 'remember', note }),
       inventory: () => this.cfg().inventory,
+      agentRunEnded: () => {
+        // Allow all covers one run only.
+        if (!this.allowAll) return;
+        this.allowAll = false;
+        this.post({ type: 'allowAll', on: false });
+      },
       agentRunFinished: (goal, result) => {
         const lesson = lessonFrom(goal, result, Date.now());
         // Every run is reviewed afterwards (a standing rule): could it have taken fewer steps? A
@@ -268,6 +281,9 @@ export class Engine {
       },
       agentHooks: () => ({
         blockedApp: () => this.blockedApp(),
+        allowAll: () => this.allowAll,
+        pathPolicy: this.pathPolicy(),
+        fileExists: async (path) => existsSync(this.realPath(path)),
         whilePaused: async (signal) => {
           // A wait for another agent that a stopped run left behind isn't a pause.
           if (this.waitingForAgent) {
@@ -312,7 +328,7 @@ export class Engine {
         moveFiles: async (from, pattern, to, copy) => moveFiles(this.realPath(from), pattern, this.realPath(to), copy),
         saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
-      confirm: (text, signal) => this.confirm(text, signal),
+      confirm: (text, signal, info) => this.confirm(text, signal, info),
       writeContext: () => this.writeContext(),
       atCaret: () => this.post({ type: 'caretAnchor' }),
       tidyDictation: () => settings().tidyDictation,
@@ -530,7 +546,8 @@ export class Engine {
         this.allowAll = msg.on;
         this.post({ type: 'log', level: 'info', message: `allow all ${msg.on ? 'on' : 'off'}` });
         this.post({ type: 'allowAll', on: msg.on });
-        if (msg.on) this.pendingConfirm?.(true);
+        // Allow all never answers for a step it doesn't cover (one that can't be undone).
+        if (msg.on && allowAllAnswers(this.pendingAsk?.level)) this.pendingConfirm?.(true);
         return;
       case 'writeContext.reply': {
         const done = this.contexts.get(msg.id);
@@ -608,7 +625,17 @@ export class Engine {
     if (this.pendingConfirm) {
       // Agent mode asked "press the key to allow": this press is the answer, not a new question.
       this.swallowUp = true;
-      this.pendingConfirm(true);
+      const ask = this.pendingAsk;
+      if (keyMayAllow(ask?.level, Date.now() - (ask?.at ?? 0))) this.pendingConfirm(true);
+      else if (ask?.level === 'irreversible')
+        this.post({
+          type: 'overlay',
+          overlay: {
+            op: 'message',
+            text: `${ask.text}? Click Allow on the bar at the top to do this, or press Esc to stop.`,
+            kind: 'info',
+          },
+        });
       return;
     }
     const cfg = this.config;
@@ -698,6 +725,22 @@ export class Engine {
     if (this.agentChatCache?.key !== key)
       this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };
     return this.agentChatCache.chat;
+  }
+
+  /**
+   * Where agent file steps may reach: the user's own folders (as Windows has them, and the usual
+   * names under the profile the model may write), Clicky's output folder; never Clicky's own data.
+   */
+  private pathPolicy(): PathPolicy {
+    const home = homedir();
+    const known = ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos', 'OneDrive'].map(
+      (f) => `${home}\\${f}`,
+    );
+    const cfg = this.cfg();
+    const folders = cfg.inventory.folders
+      .map((f) => /^[A-Z][a-z]+ folder: (.+)$/.exec(f)?.[1])
+      .filter((f): f is string => !!f);
+    return { allowed: [...known, ...folders, cfg.outputDir], denied: [cfg.dataDir] };
   }
 
   /** "C:\\Users\\me\\Desktop" when the real Desktop is elsewhere (OneDrive): the folder the user sees. */
@@ -805,7 +848,8 @@ export class Engine {
       });
       this.post({ type: 'foreground', id });
     });
-    if (!app) return null;
+    // No answer from main: it couldn't be checked, so it counts as blocked (never fail open).
+    if (!app) return 'the app in front (it could not be checked)';
     const hay = `${app.process} ${app.title}`.toLowerCase().replace(/\s+/g, '');
     return list.some((n) => hay.includes(n)) ? app.title || app.process : null;
   }
@@ -864,19 +908,20 @@ export class Engine {
     });
   }
 
-  /** Agent mode: show what's about to happen and wait for a hold-key press (allow) or Esc (stop). */
-  private confirm(text: string, signal: AbortSignal): Promise<boolean> {
-    if (this.allowAll) {
-      this.post({ type: 'log', level: 'info', message: `allowed (allow all is on): ${text}` });
-      return Promise.resolve(true);
-    }
-    if (this.approvals.covers(text)) {
-      this.post({ type: 'log', level: 'info', message: `allowed (like a step allowed before): ${text}` });
-      return Promise.resolve(true);
-    }
+  /**
+   * Agent mode: show the exact step and wait for a hold-key press (allow) or Esc (stop). The run
+   * decides whether to ask (Allow all and earlier approvals are applied there): this only asks.
+   */
+  private confirm(text: string, signal: AbortSignal, info?: { level: RiskLevel; reasons: string[] }): Promise<boolean> {
+    const final = info?.level === 'irreversible' ? ' This can’t be undone.' : '';
     this.post({ type: 'log', level: 'info', message: `asking to allow: ${text}` });
     const key = holdKeyLabel(this.cfg().settings.holdKey);
-    const prompt = `${text}? Press ${key} to allow, or Esc to stop.`;
+    const level = info?.level ?? 'confirm';
+    // A step that can't be undone is allowed with the button only, never the hold key.
+    const prompt =
+      level === 'irreversible'
+        ? `${text}?${final} Click Allow on the bar at the top to do it, or press Esc to stop.`
+        : `${text}? Press ${key} or click Allow to do it, or Esc to stop.`;
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
     return new Promise<boolean>((resolve) => {
       show();
@@ -888,14 +933,17 @@ export class Engine {
         clearInterval(again);
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
-        if (this.pendingConfirm === finish) this.pendingConfirm = null;
+        if (this.pendingConfirm === finish) {
+          this.pendingConfirm = null;
+          this.pendingAsk = null;
+        }
         this.post({ type: 'agentAsk', text: null });
-        if (ok) this.approvals.allow(text);
         resolve(ok);
       };
       if (signal.aborted) return finish(false);
       signal.addEventListener('abort', onAbort, { once: true });
       this.pendingConfirm = finish;
+      this.pendingAsk = { level, at: Date.now(), text };
     });
   }
 
