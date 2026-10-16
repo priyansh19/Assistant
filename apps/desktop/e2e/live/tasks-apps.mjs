@@ -6,7 +6,7 @@ const has = (r, re) => re.test(r.rawLog);
 const said = (r, re) => re.test(r.answer);
 const reg = (path, name) => `(Get-ItemProperty '${path}').${name}`;
 const PERSONALIZE = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize';
-const ADVANCED = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced';
+const _ADVANCED = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced';
 const desk = "[Environment]::GetFolderPath('Desktop')";
 /** True when Explorer shows file name extensions. */
 const SHOW_EXT = '(New-Object -ComObject Shell.Application).GetSetting(0x2)';
