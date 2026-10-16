@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RunApprovals, needsAsking } from './approvals.js';
+import { RunApprovals, allowAllAnswers, keyMayAllow, needsAsking } from './approvals.js';
 
 describe('RunApprovals', () => {
   it('covers only the exact step that was allowed', () => {
@@ -30,5 +30,18 @@ describe('needsAsking', () => {
     const a = new RunApprovals();
     a.allow('k', 'confirm');
     expect(needsAsking('confirm', 'k', a, false)).toBe(false);
+  });
+});
+
+describe('answering a pending question', () => {
+  it('lets the hold key allow only undoable steps, and not a press already on its way', () => {
+    expect(keyMayAllow('confirm', 1000)).toBe(true);
+    expect(keyMayAllow('confirm', 100)).toBe(false);
+    expect(keyMayAllow('irreversible', 5000)).toBe(false);
+  });
+
+  it('lets Allow all answer only steps it covers', () => {
+    expect(allowAllAnswers('confirm')).toBe(true);
+    expect(allowAllAnswers('irreversible')).toBe(false);
   });
 });

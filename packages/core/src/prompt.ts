@@ -4,6 +4,8 @@
  * the tag comes FIRST so the dot can move before speech starts, and answers are short.
  */
 
+import { untrustedBlock, UNTRUSTED_RULE } from './safety/untrusted.js';
+
 export interface ScreenDescription {
   /** 1-based index the model uses in `screenN`. */
   index: number;
@@ -147,6 +149,8 @@ export function buildSystemPrompt(options: PromptOptions): string {
     );
   }
   const ctx = options.userContext?.trim();
-  if (ctx) lines.push('', `About the user: ${ctx.slice(0, 500)}`);
+  // Profile, notes and the open-windows list are information, never instructions (titles come
+  // from websites and documents).
+  if (ctx) lines.push('', UNTRUSTED_RULE, '', 'About the user:', untrustedBlock('user context', ctx.slice(0, 500)));
   return lines.join('\n');
 }
