@@ -136,6 +136,17 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 - **History is text only** (question, answer, pointed-at label, timing) and opt-out; it feeds follow-up context and saved actions.
 - **`CLICKY_DEMO=1`** swaps in offline providers so the full loop (mic, capture, overlay flight, voice, history) can be smoke-tested on the laptop without keys.
 
+### 3.5 Helpers, routines, connectors and onboarding (2026-10-16)
+
+Gaps found by reverse engineering HeyClicky 1.0.53 and the pre-release critique, built as pure `core` logic with tests and thin main-process stores:
+
+- **Helpers (named Clickys).** Each has a unique two-word name, a job, and a folder `Documents\Clicky\<Name>` whose `AGENTS.md` is the source of truth for standing preferences and dated notes (newest wins per "Subject:"; secrets refused). "Ask Pitch Lab to …" or "Pitch Lab, …" runs the task as that helper. Notes are framed as background facts that never grant permission. A new helper that duplicates an existing one is refused unless the user insists. Making a helper starts nothing.
+- **Routines.** "Every morning …" sets one up; the run happening now counts as the first. They go through the background task queue (so they inherit its idle and quiet gates), wait for the network instead of failing, retry a transient failure after 15 minutes, and pause after 3 failures in a row. Later runs report only what changed, and retries must not repeat side effects.
+- **Custom connectors (MCP).** Stdio and Streamable HTTP servers, keys in `safeStorage`, https required for remote servers, a save-time check that lists tools. **Not yet:** the agent can't call connector tools; that needs an action in the agent loop that goes through the safety layer's risk checks.
+- **Final-message protocol and turn checks.** Agent summaries are parsed for a short summary, next actions, artifacts and notes, with limits enforced in code; spoken turns are checked against word caps before speaking.
+- **Onboarding state machine** (resume, per-step completion, skip, funnel) and starter-helper suggestions are built and tested; the wizard does not use them yet.
+- **Honest eval scoring.** `scoreRun` counts a success claim with a failed check as false-done, flags typed runs and missing cursor moves, and only an answer-checking oracle can't pass a task. Ten should-not-succeed probes ship with it. A fresh-profile test fails the build if the owner's personal data appears in defaults or core sources.
+
 ## 4. Phases
 
 Every phase ends with something runnable on the Windows laptop and a short demo checklist in its PR.

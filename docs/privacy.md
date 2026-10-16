@@ -28,6 +28,12 @@ Clicky is a personal tool that calls AI providers directly with your own API key
 
 **OpenRouter** uses free models (names ending in `:free`) by default, and falls back to another free model in the list if one is busy. Free models on OpenRouter may be run by providers that log or train on prompts, including screenshots; pick a paid model in Settings if that matters for what is on your screen.
 
+**Helpers** (named Clickys you make on the Helpers page) add their job, standing preferences and recent notes to the agent prompt when you ask one of them for something, so the answer model receives that text with each step of that task. Notes that look like keys, passwords, PINs or card numbers are refused and never written.
+
+**Routines** run an agent task on a schedule, only while you are away from the mouse and the PC is online. Each run sends the same things as any agent task.
+
+**Custom connectors** (MCP servers you add) receive the keys you give them: as environment variables for a local server, or as request headers for a remote one. When you press Check, Clicky connects and asks the server for its list of tools; nothing else is sent. Clicky does not yet call connector tools during tasks.
+
 Key checks in the dashboard call each provider's key or model endpoint; they send no screenshots or audio.
 
 ## What is stored on this PC
@@ -42,6 +48,9 @@ All under `%APPDATA%\Clicky\`:
 | `actions.json` | Saved actions (name + question). |
 | `style.json` | What *Writes like me* has learned about your writing: a short text summary and a few example sentences. Clear it from the dashboard. |
 | `playbooks\` | Your playbooks, one text file each. |
+| `clickys.json` | Your helpers: name, job and when each was made. Their notes and preferences live in `Documents\Clicky\<Name>\AGENTS.md`, next to their `output` and `tmp` folders. Removing a helper never deletes its folder. |
+| `routines.json` | Your routines: what to do, how often, and the last run's short result. |
+| `connectors.json`, `connector-secrets.json` | Custom connectors by name, address or command. Their keys are in the second file, encrypted with DPAPI like your API keys; the dashboard only ever shows which keys are saved, never their values. Changing a connector's address or command clears its saved keys. |
 | `logs/clicky.log`, `logs/latency.jsonl` | Diagnostics and per-question timing per stage, plus which provider and model answered and, on failure, which stage and provider failed. Strings that look like API keys are masked. No audio, images, questions or answers are logged. |
 
 Screenshots and audio are never written to disk. Clicky's own windows (its cursor, bubbles, task bar and orb) are kept out of every screenshot while *Keep Clicky out of screenshots* is on (the default). This uses Windows' capture exclusion, so they don't appear in screen recordings or screen sharing either.
