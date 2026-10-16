@@ -20,6 +20,7 @@ import { TONIGHT } from './tasks-tonight.mjs';
 import { APPS } from './tasks-apps.mjs';
 import { APPS2 } from './tasks-apps2.mjs';
 import { APPS3 } from './tasks-apps3.mjs';
+import { APPS4 } from './tasks-apps4.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
