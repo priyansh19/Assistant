@@ -362,8 +362,11 @@ public static class ClickyInput {
         Click(cx, cy, false, 1); Thread.Sleep(120); Text(text);
       }
     } else {
-      object ip;
-      if (op == "click" && e.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out ip)) ((System.Windows.Automation.InvokePattern)ip).Invoke();
+      object ip, tp;
+      // A tick option flips with Toggle: invoking it only closed the menu (found live with File
+      // Explorer's "File name extensions"), and a real click is what a person does.
+      if (op == "click" && e.TryGetCurrentPattern(System.Windows.Automation.TogglePattern.Pattern, out tp)) Click(cx, cy, false, 1);
+      else if (op == "click" && e.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out ip)) ((System.Windows.Automation.InvokePattern)ip).Invoke();
       else Click(cx, cy, op == "right", op == "double" ? 2 : 1);
     }
     return cx + " " + cy;
