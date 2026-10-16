@@ -282,6 +282,7 @@ for (const t of queue) {
   );
   for (const s of t.cleanup ?? []) ps(s);
   // Whatever the task opened is closed, so windows don't pile up on the owner's screen.
+  fs.writeFileSync(path.join(os.tmpdir(), 'clicky-task-log.txt'), log);
   if (!t.keepWindows) say(ps('Close-NewWindows').trim());
   // …and the tab it opened in Comet (the newest one, still in front).
   if (!t.keepWindows && /opened https?:\/\/\S+ in Comet$/m.test(log)) say(`tab: ${ps("Close-FrontTab '.'").trim()}`);
