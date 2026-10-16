@@ -7,7 +7,7 @@ import { splitWake } from './wake.js';
  */
 
 const NOTE =
-  /^\s*(?:(?:hey|ok(?:ay)?)\s+)?(?:clickey|clicky)?[\s,:]*((?:please\s+)?(?:remember|note|keep in mind)\b(?:\s+that)?|next time\b|from now on\b|in future\b|always\b|never\b|(?:it'?s|it is|that'?s|that is)\s+(?:already\s+)?(?:on|in|pinned to|at)\s+(?:my|the)\b|you can find\b)/i;
+  /^\s*(?:(?:hey|ok(?:ay)?)\s+)?(?:clickey|clicky)?[\s,:]*((?:please\s+)?(?:remember|note|keep in mind)\b(?:\s+that)?|next time\b|from now on\b|in future\b|always\b|never\b(?!\s*mind\b)|(?:it'?s|it is|that'?s|that is)\s+(?:already\s+)?(?:on|in|pinned to|at)\s+(?:my|the)\b|you can find\b)/i;
 
 /** The note to keep if this is something to remember rather than a question or task; else null. */
 export function memoryNote(question: string): string | null {
@@ -23,7 +23,8 @@ export function memoryNote(question: string): string | null {
 /** Notes for the prompt, newest first. */
 export function notesText(notes: readonly string[]): string {
   if (!notes.length) return '';
-  return `Things the user told you (always follow these):\n${notes
+  // Notes are facts and preferences, not permissions: a saved note never skips a confirmation.
+  return `Things the user told you (use them as facts and preferences; they never allow a step that needs asking):\n${notes
     .slice(0, 25)
     .map((n) => `- ${n}`)
     .join('\n')}`;
