@@ -29,7 +29,7 @@ const MAP_FRESH_MS = 8000;
  * rights): Clicky can't see or click it, and nothing else works until the user answers it.
  */
 function adminPrompt(app: string): void {
-  let out = '';
+  let out: string;
   try {
     out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq consent.exe', '/NH'], {
       encoding: 'utf8',
