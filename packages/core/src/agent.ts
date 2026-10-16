@@ -1339,6 +1339,19 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (repeats === 1)
       note =
         'You just did this same step and it did not change anything. If the task is done, reply done; otherwise try a different way, such as a keyboard shortcut.';
+    // Going round in a loop (select all, type, select all, type… found live in Notepad): the same
+    // step four times in the last ten is not progress.
+    const sameAgo = steps.slice(-10).filter((s) => s === describe(a)).length;
+    // (Closing twenty windows with the same key is fine: only a loop of steps that didn't work counts.)
+    const failingLately = checked.slice(-6).filter((c) => c.ok === false).length >= 2;
+    if (
+      sameAgo >= 3 &&
+      failingLately &&
+      a.type !== 'note' &&
+      a.type !== 'wait' &&
+      (await recover(`going round in a loop: ${describe(a)} again`))
+    )
+      continue;
     if (a.type === 'done') {
       // The final eval: look at the screen once more before telling the user it's done.
       if ((deps.verifyDone ?? true) && steps.length >= 1) {

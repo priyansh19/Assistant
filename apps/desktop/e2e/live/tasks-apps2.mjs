@@ -25,8 +25,9 @@ export const APPS2 = [
     id: 'NU03',
     say: 'Clicky, use Character Map to copy the euro sign.',
     maxMinutes: 4,
-    check: 'Get-Clipboard',
-    pass: (out) => out.includes('€'),
+    // The console mangles €: compare the character code (8364).
+    check: "((Get-Clipboard) -join '').ToCharArray() | ForEach-Object { [int]$_ }",
+    pass: (out) => out.split(/\s+/).includes('8364'),
   },
   {
     id: 'NU04',

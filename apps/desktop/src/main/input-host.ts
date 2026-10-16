@@ -24,6 +24,9 @@ const TABBED_EDITORS = ['notepad'];
 const MAP_REFRESH_MS = 6000;
 const MAP_FRESH_MS = 8000;
 
+/** Text longer than this is pasted rather than typed key by key. */
+const PASTE_OVER = 40;
+
 /** How often Clicky notes which window is in front. */
 const USE_POLL_MS = 3000;
 
@@ -281,9 +284,10 @@ export class InputHost {
       }
       case 'type': {
         await this.showTyping(action.text);
-        // Several lines are pasted, not typed: apps like Windows 11 Notepad autocorrect and mix up
-        // typed lines ("delta" came out as "eelta"), found by the live suite.
-        if (action.text.includes('\n')) {
+        // Several lines, or a long line, are pasted, not typed: apps like Windows 11 Notepad
+        // autocorrect and mix up typed text ("delta" came out as "eelta"; a 3-idea list came out
+        // garbled 12 times in a row), found by the live suite.
+        if (action.text.includes('\n') || action.text.length > PASTE_OVER) {
           const app = await d.foreground().catch(() => null);
           if (app && !isTerminal(app) && (await this.paste(action.text))) return;
         }
