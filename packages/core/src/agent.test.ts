@@ -655,3 +655,18 @@ describe('on-screen drawing requests', () => {
     expect(onScreenDrawing('Clicky, open Notepad and write a list')).toBe(false);
   });
 });
+
+describe('confirmations of an allowed action', () => {
+  it("doesn't ask again for the site's own are-you-sure steps right after the user allowed it", async () => {
+    const f = fakes([
+      '{"action":"click_control","name":"Delete this repository","say":"Deleting the repository","risky":true}',
+      '{"action":"click_control","name":"I want to delete this repository","say":"Confirming the deletion","risky":true}',
+      '{"action":"click_control","name":"I have read and understand these effects","say":"Confirming I understand","risky":true}',
+      '{"action":"click_control","name":"Merge pull request","say":"Merging pull request 3","risky":true}',
+      '{"action":"done","say":"Done."}',
+    ]);
+    await runAgent('delete the repo then merge', { ...f.deps, verifyDone: false });
+    // Asked for the delete and for the separate merge, not for the two confirmations in between.
+    expect(f.confirms).toEqual(['Deleting the repository', 'Merging pull request 3']);
+  });
+});

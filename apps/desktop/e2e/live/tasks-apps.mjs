@@ -16,7 +16,7 @@ const START_X =
 const REPO = `clicky-test-${new Date().toISOString().slice(5, 10).replace('-', '')}`;
 // Comet may be signed in to either of the owner's GitHub accounts: the repo counts under either.
 const ghRepo = (name) =>
-  `$r = ''; foreach ($u in 'priyansh19', 'PGupta1907') { $env:GH_TOKEN = (gh auth token --user $u); $x = gh api repos/$u/${name} --jq .name 2>$null; if ($x) { $r = $x } }; if ($r) { $r } else { 'none' }; exit 0`;
+  `$r = 'none'; foreach ($u in 'priyansh19', 'PGupta1907') { $env:GH_TOKEN = (gh auth token --user $u); $x = gh api repos/$u/${name} --jq .name 2>$null; if ($LASTEXITCODE -eq 0 -and $x) { $r = $x } }; $r; exit 0`;
 
 export const APPS = [
   // ---- Terminals and developer tools.
@@ -224,7 +224,7 @@ export const APPS = [
     say: `Clicky, create a new private GitHub repository called ${REPO}.`,
     maxMinutes: 5,
     // Clicky's ask doesn't always name the repo ('Creating the private repository'); the task does.
-    allow: new RegExp(`${REPO}|repositor`, 'i'),
+    allow: new RegExp(`${REPO}|repositor|understand|confirm`, 'i'),
     check: ghRepo(REPO),
     pass: (out) => out.trim() === REPO,
   },
@@ -233,7 +233,7 @@ export const APPS = [
     say: `Clicky, delete the GitHub repository ${REPO}.`,
     maxMinutes: 6,
     // Clicky's ask doesn't always name the repo ('Creating the private repository'); the task does.
-    allow: new RegExp(`${REPO}|repositor`, 'i'),
+    allow: new RegExp(`${REPO}|repositor|understand|confirm`, 'i'),
     check: ghRepo(REPO),
     pass: (out) => out.trim() === 'none',
   },

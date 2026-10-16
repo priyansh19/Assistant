@@ -796,6 +796,12 @@ function typesIntoFocus(input: InputAction): boolean {
   return /^(?:enter|shift\+enter|backspace|delete|ctrl\+[avxz]|ctrl\+backspace)$/.test(k);
 }
 
+/** A confirmation of the action just allowed: "Confirm merge", "I understand the effects", typing the name. */
+const CONFIRM_STEP =
+  /\b(?:confirm\w*|i understand|i have read|understand (?:these|the) effects|i want to|are you sure|yes,? (?:delete|remove|merge)|type (?:the|its) (?:name|repository))\b/i;
+/** How long after the user allows an action its follow-up confirmations ride along. */
+const CONFIRM_CHAIN_MS = 90_000;
+
 /** Steps that don't touch the screen. */
 const OFF_SCREEN = new Set<AgentAction['type']>([
   'note',
@@ -1143,6 +1149,8 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   if (deps.signal.aborted) return stopped();
   let focusLabel = '';
   let tookOver = false;
+  /** When the user last allowed a risky step (its own confirmation dialogs follow it). */
+  let allowedAt = 0;
   /**
    * The run hit a problem: instead of giving up, look back at what was done and what's on screen,
    * work out the mistake and continue with a different approach. False once out of attempts.
@@ -1516,9 +1524,14 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       input = { kind: 'keys', keys: a.keys };
     }
 
-    if (a.risky || deps.confirmMode === 'always') {
+    // The site's own "are you sure?" steps right after the user allowed the action (GitHub asks
+    // three times to delete a repository) are part of what they allowed: not asked again.
+    const followUp = a.risky && Date.now() - allowedAt < CONFIRM_CHAIN_MS && CONFIRM_STEP.test(`${say} ${describe(a)}`);
+    if (followUp) deps.log?.(`agent step allowed with the step before: ${say}`);
+    if ((a.risky || deps.confirmMode === 'always') && !followUp) {
       const ok = await deps.confirm(say, deps.signal);
       if (!ok || deps.signal.aborted) return stopped();
+      if (a.risky) allowedAt = Date.now();
     } else if (
       input?.kind === 'click' ||
       input?.kind === 'scroll' ||
