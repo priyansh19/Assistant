@@ -10,7 +10,7 @@ import type { AppInfo } from './write.js';
 
 export interface VoiceProfile {
   name: string;
-  /** How they sign emails, e.g. "Best,\nPriyansh". */
+  /** How they sign emails, e.g. "Best,\nSam". */
   signOff: string;
   /** A few words, e.g. "friendly, direct, no jargon". */
   tone: string;

@@ -14,7 +14,7 @@
 
 import { agentGoal, onScreenDrawing, runAgent, type AgentDeps, type AgentResult } from './agent.js';
 import { pcmToWav } from './audio.js';
-import { bareGreeting, memoryNote } from './memory.js';
+import { bareGreeting, memoryNote, noteRefusal } from './memory.js';
 import { ConfigError, classifyFailure, userMessage, type Stage } from './errors.js';
 import type { HistoryEntry } from './history.js';
 import { InteractionMachine, type Interaction, type InteractionState } from './interaction.js';
@@ -719,6 +719,13 @@ export class Orchestrator {
       return;
     }
     const note = audio || !this.deps.remember ? null : memoryNote(question);
+    const refused = note ? noteRefusal(note) : null;
+    if (note && refused) {
+      spec?.discard();
+      this.deps.log?.(`note not kept (${refused.split('.')[0]})`);
+      await this.sayOnly(run, speech, `I won't remember that, because ${refused}.`);
+      return;
+    }
     if (note) {
       spec?.discard();
       this.deps.remember?.(note);
