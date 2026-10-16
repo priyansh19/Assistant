@@ -18,11 +18,12 @@ import { DRAWING } from './tasks-drawing.mjs';
 import { SCREEN } from './tasks-screen.mjs';
 import { TONIGHT } from './tasks-tonight.mjs';
 import { APPS } from './tasks-apps.mjs';
+import { APPS2 } from './tasks-apps2.mjs';
 import { TASKS as BASE } from './tasks.mjs';
 
 // --nameless: the same tasks without saying the name ("make a folder…" instead of "Clicky, make…").
 const stripName = (t) => t.replace(/^\s*(?:hey\s+)?click(?:y|ey)[,.!]?\s*/i, '').replace(/^./, (c) => c.toUpperCase());
-const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN, ...TONIGHT, ...APPS].map((t) =>
+const TASKS = [...BASE, ...BATCH3, ...UNDERSTANDING, ...DRAWING, ...SCREEN, ...TONIGHT, ...APPS, ...APPS2].map((t) =>
   process.argv.includes('--nameless')
     ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }
     : t,
