@@ -595,6 +595,35 @@ describe('the answer model routes tasks ([TASK:goal])', () => {
     expect(r?.outcome).toBe('answered');
   });
 
+  it("plans the task over the question's screenshot instead of taking another", async () => {
+    const chat = scriptedChat([
+      ['[TASK:Save the document]'],
+      ['{"understood":"Save it","steps":[{"action":"key","keys":"ctrl+s"}]}'],
+      ['{"action":"done","say":"Saved.","check":"worked"}'],
+    ]);
+    let takes = 0;
+    const keys: unknown[] = [];
+    const t = setup({
+      chat: () => chat,
+      capture: {
+        begin: vi.fn(),
+        take: async () => {
+          takes++;
+          return screens;
+        },
+      },
+      input: { run: async (a) => void keys.push(a) },
+      agent: () => ({ enabled: true, confirm: 'risky' }),
+      agentHooks: () => ({ planFirst: true, verifyDone: false, settleMs: 0 }),
+      confirm: async () => true,
+    });
+    const r = await t.o.ask('save this', 'typed');
+    expect(r?.answer).toBe('Saved.');
+    expect(keys).toEqual([{ kind: 'keys', keys: ['ctrl', 's'] }]);
+    // One for the question; the plan reuses it; one more for the look after the plan ran out.
+    expect(takes).toBe(2);
+  });
+
   it('answers and points as usual when the model answers instead', async () => {
     const actions: unknown[] = [];
     const t = setup({

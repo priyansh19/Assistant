@@ -16,6 +16,7 @@ import {
 } from './agent.js';
 import type { CapturePort, InputAction, OverlayPort, ScreenCapture } from './ports.js';
 import type { VisionChatProvider } from './providers.js';
+import { delay } from './pipeline/budget.js';
 
 describe('agentGoal with the "Clickey" trigger', () => {
   it('runs tasks addressed to Clickey or Clicky, and keeps Agent working', () => {
@@ -539,6 +540,115 @@ describe('plan first', () => {
     });
     expect(inputs.map((i) => i.kind)).toEqual(['control']);
     expect(f.questions[1]).toContain('Your plan stopped at that step');
+  });
+});
+
+describe('streaming plan', () => {
+  /** A model that writes the plan in pieces, waiting on `gate` before each piece after the first. */
+  function streamingChat(pieces: string[], gate: () => Promise<void>, later: string[] = []) {
+    const questions: string[] = [];
+    const chat: VisionChatProvider = {
+      id: 'fake',
+      async *stream(req) {
+        questions.push(req.question);
+        if (questions.length > 1) {
+          yield later.shift() ?? '{"action":"done","say":"Done."}';
+          return;
+        }
+        for (const [n, piece] of pieces.entries()) {
+          if (n > 0) await gate();
+          yield piece;
+        }
+      },
+    };
+    return { chat, questions };
+  }
+  const PLAN = [
+    '{"understood":"Write hi in Notepad","done_when":{"window":"Notepad"},"steps":[{"action":"open","app":"Notepad"},',
+    '{"action":"click_control","name":"Text editor","kind":"document"},',
+    '{"action":"type","text":"hi"}]}',
+  ];
+
+  it('starts the first step while the model is still writing the rest', async () => {
+    const f = fakes([]);
+    let release!: () => void;
+    const firstStepRan = new Promise<void>((r) => (release = r));
+    // The second piece of the plan only comes once the first step has run: without streaming this hangs.
+    const gate = (): Promise<void> => Promise.race([firstStepRan, delay(2000)]);
+    const { chat, questions } = streamingChat(PLAN, gate);
+    const order: string[] = [];
+    const r = await runAgent('write hi in notepad', {
+      ...f.deps,
+      chat,
+      planFirst: true,
+      verifyDone: false,
+      inventory: { apps: ['Notepad'], folders: [] },
+      // The done check reads the window the streamed plan named.
+      openWindows: async () => ['Untitled - Notepad'],
+      onPlan: (steps) => order.push(`plan ${steps.length}`),
+      input: {
+        run: async (a) => {
+          order.push(a.kind);
+          release();
+        },
+      },
+    });
+    expect(r).toMatchObject({ outcome: 'done', verified: 'checked' });
+    expect(order.slice(0, 2)).toEqual(['plan 1', 'open']);
+    expect(order.filter((o) => !o.startsWith('plan'))).toEqual(['open', 'control', 'type']);
+    expect(questions).toHaveLength(2);
+    expect(questions[1]).toContain('You carried out your plan');
+  });
+
+  it('never runs steps the model writes after an earlier step failed', async () => {
+    const f = fakes([]);
+    let failed!: () => void;
+    const stepFailed = new Promise<void>((r) => (failed = r));
+    const { chat } = streamingChat(
+      ['{"steps":[{"action":"click_control","name":"Missing"},', '{"action":"type","text":"never typed"}]}'],
+      () => Promise.race([stepFailed, delay(2000)]),
+    );
+    const inputs: InputAction[] = [];
+    await runAgent('do it', {
+      ...f.deps,
+      chat,
+      planFirst: true,
+      verifyDone: false,
+      input: {
+        run: async (a) => {
+          inputs.push(a);
+          if (a.kind === 'control') {
+            failed();
+            throw new Error('there is no "Missing" in the window in front');
+          }
+        },
+      },
+    });
+    await delay(10);
+    expect(inputs.map((i) => i.kind)).toEqual(['control']);
+  });
+
+  it('plans over the key-press screenshot instead of taking another', async () => {
+    const f = fakes([
+      '{"steps":[{"action":"key","keys":"ctrl+s"}]}',
+      '{"action":"done","say":"Saved.","check":"worked"}',
+    ]);
+    let takes = 0;
+    await runAgent('save it', {
+      ...f.deps,
+      planFirst: true,
+      verifyDone: false,
+      screens: screen,
+      capture: {
+        begin: () => undefined,
+        take: async () => {
+          takes++;
+          return screen;
+        },
+      },
+    });
+    // Only the look after the plan ran out takes a new screenshot.
+    expect(takes).toBe(1);
   });
 });
 

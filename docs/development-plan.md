@@ -171,6 +171,14 @@ Gaps found by reverse engineering HeyClicky 1.0.53 and the pre-release critique,
 - **Onboarding state machine** (resume, per-step completion, skip, funnel) and starter-helper suggestions are built and tested; the wizard does not use them yet.
 - **Honest eval scoring.** `scoreRun` counts a success claim with a failed check as false-done, flags typed runs and missing cursor moves, and only an answer-checking oracle can't pass a task. Ten should-not-succeed probes ship with it. A fresh-profile test fails the build if the owner's personal data appears in defaults or core sources.
 
+### 3.7 Streaming the agent's plan (2026-10-17)
+
+The question path already streams end to end (speculative answer on the interim transcript, first clause to a warm voice socket). Agent tasks did not: Clicky waited for the model to write the **whole** plan before it moved, so the time to the first action included every step the model wrote.
+
+- **Steps run as they are written** (core `PlanStream`). The plan reply is read as it streams; each step is handed to the step loop the moment its closing brace arrives, so step one runs while the model is still writing step two. Each step still goes through the same checks as before (risk, approvals, paths, never-touch apps). A step that fails, or a new approach, drops the rest of the plan, including steps not yet written. A plan cut off mid-way keeps the steps that arrived whole; the step loop carries on from the screen as before.
+- **The plan reuses the question's screenshot** when it is under 6 s old (`AGENT_SCREENS_FRESH_MS`), and the screenshot, window list and controls are fetched together instead of one after the other.
+- **Not changed:** the plan still uses up to 1024 hidden reasoning tokens, and the model writes nothing visible until they are done. That is now the largest fixed cost before the first action; lowering it trades plan quality for speed and should be decided with `pnpm bench` numbers, which still don't exist.
+
 ## 4. Phases
 
 Every phase ends with something runnable on the Windows laptop and a short demo checklist in its PR.

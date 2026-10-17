@@ -285,6 +285,9 @@ const SKETCH_ATTEMPTS = 3;
 /** Longest an answer waits for the list of open windows and tabs. */
 const PC_MAP_WAIT_MS = 2500;
 
+/** A key-press screenshot younger than this is good enough for an agent task's first plan. */
+export const AGENT_SCREENS_FRESH_MS = 6000;
+
 interface Run {
   /**
    * What's open on the PC (windows, last used, unsaved work, browser tabs), fetched when the key
@@ -316,6 +319,8 @@ interface Run {
   speed: SpeedOptions;
   /** The screenshot taken during the press for the cache warm-up; used for the answer too. */
   earlyScreens?: Promise<ScreenCapture>;
+  /** When this run's screenshot was taken (an agent task plans over it if it is recent). */
+  screensAt?: number;
   /** A warm-up request went out for this press. */
   cacheWarmed: boolean;
   listenTimer?: ReturnType<typeof setTimeout>;
@@ -494,7 +499,7 @@ export class Orchestrator {
       if (signal.aborted) throw new Error('cancelled');
       return this.deps.capture.take(signal);
     });
-    run.earlyScreens = screens;
+    run.earlyScreens = this.stamp(run, screens);
     screens.then(
       (s) => {
         if (signal.aborted || this.machine.state !== 'listening') return;
@@ -518,6 +523,23 @@ export class Orchestrator {
       },
       () => undefined,
     );
+  }
+
+  /** Note when the screenshot arrives, so an agent task can tell whether it is still fresh. */
+  private stamp(run: Run, screens: Promise<ScreenCapture>): Promise<ScreenCapture> {
+    screens.then(
+      () => (run.screensAt = this.now()),
+      () => undefined,
+    );
+    return screens;
+  }
+
+  /** The run's screenshot, if it is already here and recent enough to plan a task over. */
+  private async freshScreens(run: Run, screens?: Promise<ScreenCapture>): Promise<ScreenCapture | undefined> {
+    if (!screens) return undefined;
+    const shot = await Promise.race([screens.catch(() => null), delay(0).then(() => null)]);
+    if (!shot || run.screensAt === undefined || this.now() - run.screensAt > AGENT_SCREENS_FRESH_MS) return undefined;
+    return shot;
   }
 
   /**
@@ -586,7 +608,7 @@ export class Orchestrator {
     const run = this.newRun(interaction, source, q);
     run.latency.mark('keyUp');
     this.machine.dispatch({ type: 'keyUp' });
-    const screens = this.deps.capture.take(interaction.signal);
+    const screens = this.stamp(run, this.deps.capture.take(interaction.signal));
     screens.catch(() => undefined); // handled (or deliberately dropped) in answer()
     await this.answer(run, screens, q);
     return run.result ?? null;
@@ -599,8 +621,8 @@ export class Orchestrator {
     if (run.mode === 'dictate') return this.dictate(run, listen);
     // With a warm-up, the answer uses that screenshot (if taking it failed, take one now).
     const screens = run.earlyScreens
-      ? run.earlyScreens.catch(() => this.deps.capture.take(signal))
-      : this.deps.capture.take(signal);
+      ? run.earlyScreens.catch(() => this.stamp(run, this.deps.capture.take(signal)))
+      : this.stamp(run, this.deps.capture.take(signal));
     screens.catch(() => undefined); // handled in answer()
     // The interim transcript often already holds the whole question: start answering it now.
     const partial = listen.partial;
@@ -859,7 +881,7 @@ export class Orchestrator {
     if (agent) {
       spec?.discard();
       run.latency.setMeta('routedBy', 'name');
-      await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm);
+      await this.runAgentTask(run, chat, speech, agent.goal, agent.confirm, false, screens);
       return;
     }
 
@@ -926,7 +948,7 @@ export class Orchestrator {
       // Its goal is the request restated in full (references resolved, dropped words put back).
       run.latency.setMeta('routedBy', 'model');
       const cfg = this.deps.agent?.();
-      await this.runAgentTask(run, chat, speech, result.task, cfg?.confirm ?? 'risky', true);
+      await this.runAgentTask(run, chat, speech, result.task, cfg?.confirm ?? 'risky', true, screens);
       return;
     }
     // A very short answer can finish before first audio was reported (e.g. muted output).
@@ -1468,6 +1490,8 @@ export class Orchestrator {
     goal: string,
     confirmMode: AgentConfirmMode,
     goalFromModel = false,
+    /** The screenshot the request was asked over: the first plan reuses it while it is fresh. */
+    screens?: Promise<ScreenCapture>,
   ): Promise<void> {
     // A task's own summary ("…not saved yet") must not start another run to find things out.
     run.ranTask = true;
@@ -1490,7 +1514,10 @@ export class Orchestrator {
       const skills = this.deps.agentSkills?.(goal);
       const conversation = this.conversationText(run);
       const briefing = [this.deps.agentBriefing?.(), plan?.briefing].filter(Boolean).join('\n\n') || undefined;
+      const shot = await this.freshScreens(run, screens);
+      if (shot) run.latency.event('answer', 'agent-plans-over-key-screenshot');
       result = await runAgent(goal, {
+        ...(shot ? { screens: shot } : {}),
         ...(hints ? { hints } : {}),
         ...(skills ? { skills } : {}),
         ...(conversation ? { conversation } : {}),

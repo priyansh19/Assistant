@@ -19,6 +19,7 @@ import { checkPath, type PathPolicy } from './safety/paths.js';
 import { checkDone, hasCriteria, NO_CRITERIA, parseDoneCriteria, type DoneCriteria } from './safety/done-check.js';
 import { ActionLedger } from './safety/ledger.js';
 import { BudgetMeter, DEFAULT_BUDGET, type AgentBudget } from './safety/budget.js';
+import { PlanStream, type PlanStreamEvent } from './plan-stream.js';
 
 export type AgentAction =
   | {
@@ -629,7 +630,15 @@ export interface AgentDeps {
    * carries them out with its cursor, falling back to step-by-step when one doesn't work.
    */
   planFirst?: boolean;
-  /** The plan, for the step strip ("1. Click Comet…"). */
+  /**
+   * The screenshot the request was asked over, when it is only a few seconds old: the first plan
+   * reads it instead of taking another, so planning starts at once.
+   */
+  screens?: ScreenCapture;
+  /**
+   * The plan, for the step strip ("1. Click Comet…"). Steps run as the model writes them, so this
+   * is called again with the longer list as each one arrives.
+   */
   onPlan?(steps: string[]): void;
   /** How often to look for another agent while waiting for it to finish (default 3 s). */
   otherAgentPollMs?: number;
@@ -717,7 +726,20 @@ const SCROLLS_WITHOUT_NOTES = 10;
 /** Consecutive unparseable replies before giving up. */
 const MAX_BAD_REPLIES = 2;
 
-async function ask(deps: AgentDeps, system: string, question: string, screens: ScreenCapture): Promise<string> {
+/** How a model call is read: `onText` sees the reply as it streams; `signal` can end it early. */
+interface AskOptions {
+  onText?(chunk: string): void;
+  signal?: AbortSignal;
+}
+
+async function ask(
+  deps: AgentDeps,
+  system: string,
+  question: string,
+  screens: ScreenCapture,
+  opts: AskOptions = {},
+): Promise<string> {
+  const signal = opts.signal ?? deps.signal;
   const stream = deps.chat.stream({
     system,
     history: [],
@@ -726,7 +748,7 @@ async function ask(deps: AgentDeps, system: string, question: string, screens: S
     // Room for a save_sheet with many rows.
     maxTokens: 2000,
     thinkingTokens: deps.thinkingTokens ?? 1024,
-    signal: deps.signal,
+    signal,
   });
   const it = stream[Symbol.asyncIterator]();
   let text = '';
@@ -734,9 +756,10 @@ async function ask(deps: AgentDeps, system: string, question: string, screens: S
   try {
     for (let first = true; ; first = false) {
       const left = first ? STEP_FIRST_TOKEN_MS : Math.max(1, STEP_TOTAL_MS - (Date.now() - started));
-      const r = await withTimeout(it.next(), left, 'answer', 'the agent step', deps.signal);
+      const r = await withTimeout(it.next(), left, 'answer', 'the agent step', signal);
       if (r.done) break;
       text += r.value;
+      opts.onText?.(r.value);
     }
   } finally {
     void it.return?.().catch(() => undefined);
@@ -915,19 +938,40 @@ export function parsePlan(reply: string): { understood: string; steps: AgentActi
   }
   const raw = Array.isArray(o['steps']) ? o['steps'] : Array.isArray(o['plan']) ? o['plan'] : [];
   const steps: AgentAction[] = [];
-  for (const s of raw.slice(0, 15)) {
-    if (typeof s !== 'object' || s === null) continue;
-    const p = parseAgentAction(JSON.stringify(s));
-    if (!p.ok) continue;
-    // Positions and numbers from the first screenshot are stale by the time a later step runs.
-    if (
-      ['click', 'double_click', 'right_click', 'scroll', 'drag', 'click_element', 'set_value'].includes(p.action.type)
-    )
-      break;
-    steps.push(p.action);
-    if (p.action.type === 'done') break;
+  for (const s of raw.slice(0, MAX_PLAN_STEPS)) {
+    const p = planStep(s);
+    if (p === 'stop') break;
+    if (!p) continue;
+    steps.push(p);
+    if (p.type === 'done') break;
   }
   return { understood: str(o['understood'], 200), steps, doneWhen: parseDoneCriteria(o['done_when']) };
+}
+
+/** JSON from a model reply, or undefined if it doesn't parse. */
+function safeParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Plan entries read; the prompt asks for at most 12 steps. */
+const MAX_PLAN_STEPS = 15;
+
+/**
+ * One entry of a plan: the action, null to skip an entry that isn't one, or 'stop' for a step that
+ * needs positions (from the first screenshot they are stale by the time a later step runs), where
+ * the plan ends and Clicky looks again.
+ */
+function planStep(s: unknown): AgentAction | 'stop' | null {
+  if (typeof s !== 'object' || s === null) return null;
+  const p = parseAgentAction(JSON.stringify(s));
+  if (!p.ok) return null;
+  if (['click', 'double_click', 'right_click', 'scroll', 'drag', 'click_element', 'set_value'].includes(p.action.type))
+    return 'stop';
+  return p.action;
 }
 
 /** The "done_when" object in a step reply, if there is one. */
@@ -1180,15 +1224,26 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
   const meter = new BudgetMeter(deps.budget ?? DEFAULT_BUDGET);
   /** What will be true when the task is done (from the plan or the first reply), checked by the app. */
   let doneWhen: DoneCriteria = NO_CRITERIA;
-  const finish = (r: Pick<AgentResult, 'outcome' | 'summary'> & Partial<AgentResult>): AgentResult => ({
-    steps,
-    checked,
-    ...(ledger.entries.length ? { actions: ledger.entries.map((e) => e.what) } : {}),
-    ...r,
-  });
-  const think = (system: string, question: string, screens: ScreenCapture): Promise<string> => {
+  /**
+   * The plan being written. Its steps join planQueue as the model writes them, so the first one
+   * runs while the rest is still coming; the step loop waits on `changed` when it has caught up.
+   */
+  let planning: { ac: AbortController; changed: Promise<void> } | null = null;
+  /** The plan being written, read through a call (TypeScript can't see the closures that set it). */
+  const writingPlan = (): typeof planning => planning;
+  const finish = (r: Pick<AgentResult, 'outcome' | 'summary'> & Partial<AgentResult>): AgentResult => {
+    // The run is over: a plan still being written is no longer needed.
+    writingPlan()?.ac.abort();
+    return {
+      steps,
+      checked,
+      ...(ledger.entries.length ? { actions: ledger.entries.map((e) => e.what) } : {}),
+      ...r,
+    };
+  };
+  const think = (system: string, question: string, screens: ScreenCapture, opts?: AskOptions): Promise<string> => {
     meter.call();
-    return ask(deps, system, question, screens);
+    return ask(deps, system, question, screens, opts);
   };
   /**
    * An app on the never-touch list in front, or null. A check that fails or times out counts as
@@ -1202,20 +1257,77 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
       return 'the app in front (it could not be checked)';
     }
   };
-  const makePlan = async (why: string): Promise<void> => {
-    try {
+  let wakePlan = (): void => undefined;
+  const planChanged = (): Promise<void> => new Promise((r) => (wakePlan = r));
+  /** Drop the rest of the plan, including steps the model hasn't written yet. */
+  const dropPlan = (): void => {
+    planning?.ac.abort();
+    planning = null;
+    planQueue = [];
+    planned = [];
+    wakePlan();
+  };
+  /** The key-press screenshot, used once, for the first plan. */
+  let firstScreens = deps.screens ?? null;
+  const makePlan = (why: string): void => {
+    dropPlan();
+    if (deps.signal.aborted) return;
+    const ac = new AbortController();
+    const follow = (): void => ac.abort();
+    deps.signal.addEventListener('abort', follow, { once: true });
+    const me = { ac, changed: planChanged() };
+    planning = me;
+    const changed = (): void => {
+      if (planning !== me) return;
+      const wake = wakePlan;
+      me.changed = planChanged();
+      wake();
+    };
+    const write = async (): Promise<void> => {
       // Never screenshot an app on the never-touch list: the step loop says so and stops.
-      if (await blockedNow()) {
-        planQueue = [];
-        return;
-      }
-      const screens = await deps.capture.take(deps.signal);
-      lastScreens = screens;
-      const [windows, controls] = await Promise.all([
+      if (await blockedNow()) return;
+      const reuse = firstScreens;
+      firstScreens = null;
+      // The screenshot, the window list and the controls don't depend on each other: get them together.
+      const [screens, windows, controls] = await Promise.all([
+        reuse ? Promise.resolve(reuse) : deps.capture.take(ac.signal),
         deps.openWindows?.().catch(() => []),
         deps.elements?.().catch(() => [] as UiElement[]),
       ]);
-      const reply = await think(
+      if (planning !== me) return;
+      lastScreens = screens;
+      const stream = new PlanStream();
+      let entries = 0;
+      let closed = false;
+      const take = (events: PlanStreamEvent[]): void => {
+        for (const ev of events) {
+          if (planning !== me) return;
+          if (ev.type === 'member') {
+            if (ev.key === 'understood' && !steps.length) {
+              const understood = str(safeParse(ev.raw), 200);
+              if (understood) {
+                deps.log?.(`agent understood: ${understood}`);
+                shown = understood;
+              }
+            } else if (ev.key === 'done_when') {
+              const criteria = parseDoneCriteria(safeParse(ev.raw));
+              if (hasCriteria(criteria)) doneWhen = criteria;
+            }
+            continue;
+          }
+          if (closed || entries++ >= MAX_PLAN_STEPS) continue;
+          const step = planStep(safeParse(ev.raw));
+          if (step === 'stop') closed = true;
+          if (!step || step === 'stop') continue;
+          const action = viaOpen(step, deps.inventory?.apps);
+          if (action.type === 'done') closed = true;
+          planQueue.push(action);
+          planned.push(describe(action));
+          deps.onPlan?.([...planned]);
+          changed();
+        }
+      };
+      await think(
         agentSystemPrompt(screens, deps.userContext, deps.inventory, deps.briefing, PLAN_PROMPT),
         [
           `Task: ${goal}`,
@@ -1238,22 +1350,22 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
           .filter(Boolean)
           .join('\n\n'),
         screens,
+        { onText: (chunk) => take(stream.push(chunk)), signal: ac.signal },
       );
-      const plan = parsePlan(reply);
-      if (plan.understood && !steps.length) {
-        deps.log?.(`agent understood: ${plan.understood}`);
-        shown = plan.understood;
-      }
-      if (hasCriteria(plan.doneWhen)) doneWhen = plan.doneWhen;
-      planQueue = plan.steps.map((s) => viaOpen(s, deps.inventory?.apps));
-      planned = planQueue.map(describe);
-      deps.log?.(`agent plan: ${planned.map((p, n) => `${n + 1}. ${p}`).join('; ') || '(none)'}`);
-      if (planned.length) deps.onPlan?.(planned);
-    } catch (e) {
-      if (deps.signal.aborted) return;
-      deps.log?.(`agent plan failed: ${e instanceof Error ? e.message : String(e)}`);
-      planQueue = [];
-    }
+      if (planning === me) deps.log?.(`agent plan: ${planned.map((p, n) => `${n + 1}. ${p}`).join('; ') || '(none)'}`);
+    };
+    void write()
+      .catch((e: unknown) => {
+        if (ac.signal.aborted) return;
+        // Steps already handed out stand (each is checked as it runs); the loop carries on from them.
+        deps.log?.(`agent plan failed: ${e instanceof Error ? e.message : String(e)}`);
+      })
+      .finally(() => {
+        deps.signal.removeEventListener('abort', follow);
+        if (planning !== me) return;
+        planning = null;
+        wakePlan();
+      });
   };
   // "Open YouTube": no thinking needed, the route is known.
   const quick = quickOpen(goal, deps.inventory?.apps);
@@ -1261,7 +1373,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     planQueue = quick;
     planned = quick.map(describe);
     deps.log?.(`agent quick route: ${planned.join('; ')}`);
-  } else if (deps.planFirst) await makePlan('');
+  } else if (deps.planFirst) makePlan('');
   if (deps.signal.aborted) return stopped();
   let focusLabel = '';
   let tookOver = false;
@@ -1309,7 +1421,7 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     lastSig = null;
     scrolls = 0;
     note = 'Start the new approach from your review now.';
-    if (deps.planFirst) await makePlan(`The first approach went wrong: ${problem}. ${review}`);
+    if (deps.planFirst) makePlan(`The first approach went wrong: ${problem}. ${review}`);
     return true;
   };
   for (let i = 0; i < max;) {
@@ -1339,6 +1451,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
         });
       meter.extend();
     }
+    // Caught up with a plan that is still being written: wait for its next step (or its end).
+    for (let p = writingPlan(); p && !planQueue.length && !deps.signal.aborted; p = writingPlan()) await p.changed;
+    if (deps.signal.aborted) return stopped();
     // An app on the never-touch list in front: Clicky never screenshots it, sends it to a model or
     // acts on it. Only a planned step that needs no screenshot (opening something else, which takes
     // over the front, or a step off screen) may still run.
@@ -1599,10 +1714,9 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
     if (refusedPath) {
       deps.log?.(`agent refused a path: ${refusedPath}`);
       note = `Clicky can't use ${refusedPath}. Use only the user's own folders, or tell the user what you need.`;
-      if (planQueue.length || fromPlan) {
+      if (planQueue.length || fromPlan || writingPlan()) {
         note += ' Your plan stopped at that step: look at the screen and carry on from here.';
-        planQueue = [];
-        planned = [];
+        dropPlan();
       }
       steps.push(`(refused: ${describe(a)}: ${refusedPath})`);
       checked.push({ step: describe(a), ok: false });
@@ -1876,15 +1990,13 @@ export async function runAgent(goal: string, deps: AgentDeps): Promise<AgentResu
           steps.push(`(stopped typing: the focus moved: ${describe(a)})`);
           checked.push({ step: describe(a), ok: false });
           // The rest of the plan (pressing Enter on half a message) mustn't run.
-          planQueue = [];
-          planned = [];
+          dropPlan();
           continue;
         }
         note = `That step failed: ${why}. Try a different way (check the exact name or path in the lists above).`;
-        if (planQueue.length || fromPlan) {
+        if (planQueue.length || fromPlan || writingPlan()) {
           note += ' Your plan stopped at that step: look at the screen and carry on from here.';
-          planQueue = [];
-          planned = [];
+          dropPlan();
         }
         steps.push(`(failed: ${describe(a)}: ${why.slice(0, 120)})`);
         checked.push({ step: describe(a), ok: false });
