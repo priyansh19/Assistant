@@ -1,0 +1,24 @@
+{
+  "name": "Prompt longer than a minute (about 75 s)",
+  "key": "dictate",
+  "realtime": true,
+  "pauseMs": 1500,
+  "say": "very long dictation",
+  "segments": [
+    "Point number 1 is that the team should keep notes for every meeting.",
+    "We also agreed to share them on the same day.",
+    "Point number 3 is that the team should keep notes for every meeting.",
+    "We also agreed to share them on the same day.",
+    "Point number 5 is that the team should keep notes for every meeting.",
+    "We also agreed to share them on the same day.",
+    "Point number 7 is that the team should keep notes for every meeting.",
+    "We also agreed to share them on the same day.",
+    "Point number 9 is that the team should keep notes for every meeting.",
+    "We also agreed to share them on the same day.",
+    "Point number 11 is that the team should keep notes for every meeting.",
+    "That is the end of the list."
+  ],
+  "expect": {
+    "typed": ["point number", "same day", "end of the list"]
+  }
+}

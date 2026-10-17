@@ -108,7 +108,8 @@ export class Inventory {
       } catch {
         continue;
       }
-      folders.push(base);
+      // Labelled, so "my desktop" is the real one (often under OneDrive), not a guess.
+      folders.push(`${r.charAt(0).toUpperCase()}${r.slice(1)} folder: ${base}`);
       try {
         for (const f of readdirSync(base).slice(0, 200)) {
           if (f.startsWith('.')) continue;

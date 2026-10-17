@@ -14,6 +14,7 @@ const engine = new Engine({
   post: (msg) => parent.postMessage(msg),
   media,
   createHoldKeyHook: (key, dictationKey) => platform.createHoldKeyHook(key, dictationKey),
+  recordKeys: (ms) => platform.recordKeys(ms),
 });
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {

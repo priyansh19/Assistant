@@ -70,6 +70,13 @@ const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
   lessons: [],
   notes: [],
   inventory: { apps: [], folders: [] },
+  briefing: '',
+  skills: [],
+  outputDir: '',
+  dataDir: '',
+  clickys: [],
+  clickyWorkspaces: {},
+  routineTitles: {},
   ...over,
 });
 
@@ -93,6 +100,8 @@ function setup(cfg = config()) {
           },
         }),
       );
+    // …and the list of open windows (answers wait a moment for it).
+    if (m.type === 'windows') queueMicrotask(() => engine.handle({ type: 'windows.reply', id: m.id, windows: [] }));
   };
   const origPush = posts.push.bind(posts);
   posts.push = (...items: EngineToMain[]) => {

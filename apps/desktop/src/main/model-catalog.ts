@@ -2,6 +2,18 @@ import { net } from 'electron';
 import type { ModelOption } from '../shared/ipc';
 import { log } from './log';
 
+/** Models installed in Ollama on this PC (names), or empty if Ollama isn't running. */
+export async function ollamaModels(url: string): Promise<string[]> {
+  try {
+    const res = await net.fetch(`${url}/api/tags`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: Array<{ name: string }> };
+    return (data.models ?? []).map((m) => m.name);
+  } catch {
+    return [];
+  }
+}
+
 /** Open-weight model families, for the "Open-source" group. */
 const OPEN =
   /^(meta-llama|qwen|mistralai|google\/gemma|deepseek|~deepseek|nvidia|microsoft|z-ai|moonshotai|inclusionai|allenai|thudm|baidu|tencent|nousresearch|01-ai|ibm-granite|arcee-ai|bytedance)/i;

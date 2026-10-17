@@ -1,0 +1,13 @@
+{
+  "name": "Three sites → spreadsheet (weather in three cities)",
+  "say": "Clicky, look up the current temperature in Dubai, Abu Dhabi and Sharjah and put them in a spreadsheet.",
+  "maxMinutes": 10,
+  "expect": {
+    "agentDone": true,
+    "sheet": {
+      "minRows": 3
+    }
+  },
+  "typed": true,
+  "live": "all"
+}

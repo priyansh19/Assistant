@@ -1,0 +1,24 @@
+{
+  "name": "YouTube: search (slow page, typing into a site)",
+  "say": "Clicky, open YouTube and search for lo-fi study music.",
+  "maxMinutes": 5,
+  "expect": {
+    "agentDone": true,
+    "anyAction": [
+      {
+        "kind": "type",
+        "text": "study music"
+      },
+      {
+        "kind": "open",
+        "url": "study+music"
+      },
+      {
+        "kind": "open",
+        "url": "study%20music"
+      }
+    ]
+  },
+  "typed": true,
+  "live": "all"
+}

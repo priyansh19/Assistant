@@ -1,5 +1,8 @@
-import { app, Notification } from 'electron';
-import { HOLD_KEY_LABELS, type Settings } from '@clicky/core';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { applyInstructionPack } from './instruction-pack';
+import { app, Notification, powerMonitor } from 'electron';
+import { holdKeyLabel, type Settings } from '@clicky/core';
 import type { OverlayConfig } from '../shared/overlay-protocol';
 import { getPlatform } from '../platform';
 import { Controller } from './controller';
@@ -11,6 +14,7 @@ import { log } from './log';
 import { OverlayManager } from './overlay-manager';
 import { SettingsStore } from './settings-store';
 import { AppTray } from './tray';
+import { setHideFromCapture } from './capture-privacy';
 import { WorkerHost } from './worker-host';
 
 // Keep references so they aren't garbage-collected.
@@ -20,7 +24,13 @@ let controller: Controller | null = null;
 let worker: WorkerHost | null = null;
 
 function overlayConfig(s: Settings): OverlayConfig {
-  return { color: s.cursorColor, size: s.cursorSize, showLabels: s.showPointLabels, paused: s.paused };
+  return {
+    color: s.cursorColor,
+    size: s.cursorSize,
+    showLabels: s.showPointLabels,
+    showCompanion: s.showCompanion,
+    paused: s.paused,
+  };
 }
 
 process.on('uncaughtException', (e) => log.error('uncaught exception', e.stack ?? String(e)));
@@ -39,23 +49,49 @@ if (!app.requestSingleInstanceLock()) {
     const history = new HistoryStore();
     worker = new WorkerHost();
     void worker.start().catch((e: unknown) => log.error('worker failed to start', String(e)));
+    setHideFromCapture(settings.get().hideFromCapture);
     overlays = new OverlayManager(platform, overlayConfig(settings.get()));
     overlays.start();
+    // The shipped instruction pack (agents.md, skills, learned routes) before the stores read them.
+    applyInstructionPack();
     controller = new Controller(platform, settings, credentials, history, overlays, worker);
     const dashboard = new DashboardWindow(settings, credentials, history, controller, worker);
     const ctl = controller;
+    /** "Meet Clicky": the dashboard steps aside so Clicky sees (and can point at) the user's screen. */
+    const hello = async (): Promise<void> => {
+      const restore = dashboard.stepAside();
+      try {
+        await ctl.sayHello();
+      } finally {
+        setTimeout(restore, 1500);
+      }
+    };
     // Demo mode only: let the smoke-test harness drive the loop without a real keyboard.
     if (DEMO || process.env['CLICKY_TEST_HOOKS'] === '1')
       (globalThis as { __clicky?: unknown }).__clicky = { controller: ctl, dashboard, settings, history };
+    // The live suite at night (volume down): requests arrive as a file instead of out loud.
+    if (process.env['CLICKY_TEST_HOOKS'] === '1') {
+      const drop = join(app.getPath('userData'), 'test-ask.txt');
+      setInterval(() => {
+        if (!existsSync(drop)) return;
+        const question = readFileSync(drop, 'utf8').trim();
+        rmSync(drop, { force: true });
+        if (!question) return;
+        log.info(`test ask: ${question.slice(0, 200)}`);
+        void ctl.ask(question, 'typed');
+      }, 500);
+    }
 
     tray = new AppTray({
       openDashboard: (page) => dashboard.open(page),
-      holdKeyLabel: () => HOLD_KEY_LABELS[settings.get().holdKey],
+      holdKeyLabel: () => holdKeyLabel(settings.get().holdKey),
       paused: () => settings.get().paused,
       setPaused: (paused) => settings.update({ paused }),
       actions: () => history.listActions(),
       runAction: (id) => void dashboard.runAction(id),
       needsSetup: () => !settings.get().onboardingDone || ctl.missingKeys().length > 0,
+      showDrawing: () => overlays?.sketch(),
+      sayHello: () => void hello(),
     });
     controller.onState((s) => tray?.setState(s));
     history.onChange(() => tray?.refresh());
@@ -72,12 +108,17 @@ if (!app.requestSingleInstanceLock()) {
     ctl.startHoldKey();
     ctl.syncMicArm();
     ctl.prewarm();
+    // Waking the PC or unlocking it usually comes right before a question: warm the voice path again.
+    powerMonitor.on('resume', () => ctl.prewarm());
+    powerMonitor.on('unlock-screen', () => ctl.prewarm());
     ctl.applyLaunchAtLogin(settings.get().launchAtLogin);
 
     settings.onChange((next, prev) => {
       if (next.holdKey !== prev.holdKey) ctl.startHoldKey();
       if (next.launchAtLogin !== prev.launchAtLogin) ctl.applyLaunchAtLogin(next.launchAtLogin);
       if (next.paused && !prev.paused) ctl.cancel('paused');
+      // Setup just finished: say hi, the way the official Clicky's first run does.
+      if (next.onboardingDone && !prev.onboardingDone) setTimeout(() => void hello(), 800);
       if (
         next.micAlwaysReady !== prev.micAlwaysReady ||
         next.paused !== prev.paused ||
@@ -86,6 +127,7 @@ if (!app.requestSingleInstanceLock()) {
       ) {
         ctl.syncMicArm();
       }
+      if (next.hideFromCapture !== prev.hideFromCapture) setHideFromCapture(next.hideFromCapture);
       overlays?.setConfig(overlayConfig(next));
       tray?.refresh();
     });
@@ -96,7 +138,7 @@ if (!app.requestSingleInstanceLock()) {
     } else if (Notification.isSupported()) {
       new Notification({
         title: 'Clicky is ready',
-        body: `Hold ${HOLD_KEY_LABELS[settings.get().holdKey]} and ask about anything on your screen.`,
+        body: `Hold ${holdKeyLabel(settings.get().holdKey)} and ask about anything on your screen.`,
         silent: true,
       }).show();
     }

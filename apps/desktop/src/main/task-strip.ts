@@ -1,14 +1,15 @@
 import { join } from 'node:path';
-import { BrowserWindow, ipcMain, screen } from 'electron';
+import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import type { StripState } from '../preload/strip';
 import { IPC } from '../shared/ipc';
+import { keepOutOfScreenshots } from './capture-privacy';
 
-const WIDTH = 540;
-const HEIGHT = 48;
+const WIDTH = 600;
+const HEIGHT = 46;
 
 /**
  * A slim bar at the top of the screen while Clicky does a task: the goal, the current step, and
- * Pause / Stop / Allow. It's non-focusable, so clicking it never takes focus from the app Clicky
+ * Pause / Stop / Allow / Allow all. It's non-focusable, so clicking it never takes focus from the app Clicky
  * is working in.
  */
 export class TaskStrip {
@@ -16,10 +17,14 @@ export class TaskStrip {
   private state: StripState = { goal: '', step: 0, max: 0, say: '', ask: null, paused: false, color: '#2f8cff' };
   private hideTimer: NodeJS.Timeout | null = null;
 
-  constructor(handlers: { pause(on: boolean): void; stop(): void; allow(): void }) {
-    ipcMain.on(IPC.stripPause, (_e, on: unknown) => handlers.pause(on === true));
-    ipcMain.on(IPC.stripStop, () => handlers.stop());
-    ipcMain.on(IPC.stripAllow, () => handlers.allow());
+  constructor(handlers: { pause(on: boolean): void; stop(): void; allow(): void; allowAll(on: boolean): void }) {
+    // Allow and Allow all let Clicky act without asking: only the strip's own window may send them.
+    const mine = (e: IpcMainEvent): boolean =>
+      !!this.win && !this.win.isDestroyed() && e.sender === this.win.webContents;
+    ipcMain.on(IPC.stripPause, (e, on: unknown) => mine(e) && handlers.pause(on === true));
+    ipcMain.on(IPC.stripStop, (e) => mine(e) && handlers.stop());
+    ipcMain.on(IPC.stripAllow, (e) => mine(e) && handlers.allow());
+    ipcMain.on(IPC.stripAllowAll, (e, on: unknown) => mine(e) && handlers.allowAll(on === true));
   }
 
   update(patch: Partial<StripState>): void {
@@ -88,6 +93,7 @@ export class TaskStrip {
       },
     });
     win.setAlwaysOnTop(true, 'screen-saver');
+    keepOutOfScreenshots(win);
     if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0); // smoke tests
     win.webContents.once('did-finish-load', () => win.webContents.send(IPC.stripState, this.state));
     if (process.env['ELECTRON_RENDERER_URL'])

@@ -1,9 +1,23 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
-  HOLD_KEY_LABELS,
+  allBeatLines,
+  WarmKeeper,
+  type GuideTarget,
+  type HitArea,
+  type WarmTarget,
+  holdKeyLabel,
+  allowAllAnswers,
+  keyMayAllow,
   agentReady,
   buildUserContext,
   lessonFrom,
   lessonHints,
+  shortestRoute,
+  makeComboKey,
+  matchSkills,
+  skillsText,
   contextOf,
   learningAllowed,
   parseStyleReply,
@@ -24,15 +38,23 @@ import {
   type SttProvider,
   type TtsProvider,
   type VisionChatProvider,
+  type UiElement,
+  type Sketch,
+  type OtherAgent,
+  type PathPolicy,
+  type RiskLevel,
 } from '@clicky/core';
-import { createChat, createStt, createTts } from '@clicky/providers';
+import { createChat, createStt, createTts, defaultChatModel } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
 import type { HoldKeyHook } from '../platform/types';
+import { helperNoteLine, planAgentTask } from './helpers';
 import { demoChat, demoStt } from './demo';
 import { LocalSpeechEngine } from './local-speech/engine';
 import { ModelFiles } from './local-speech/files';
 import { localStt, localTts } from './local-speech/providers';
 import type { MediaChannel } from './media-channel';
+import { saveXlsx } from './xlsx';
+import { findFiles, listFiles, mapKnownFolder, moveFiles } from './files';
 import { createAudioSink, createCapturePort, createMicPort, systemSpeech } from './media-ports';
 
 export interface EngineOptions {
@@ -40,13 +62,64 @@ export interface EngineOptions {
   post(msg: EngineToMain): void;
   media: MediaChannel;
   createHoldKeyHook(key: HoldKey, dictationKey: HoldKey | null): HoldKeyHook;
+  /** Record a key combination from the keyboard (settings "Record keys"). */
+  recordKeys?(timeoutMs: number): Promise<{ codes: number[]; label: string } | null>;
   now?(): number;
 }
+
+/** Words speech recognition should expect in requests to Clicky. */
+const KEYTERMS = [
+  'Clicky',
+  'Clickey',
+  'open',
+  'close',
+  'minimise',
+  'maximise',
+  'make a folder',
+  'draw',
+  'box',
+  'circle',
+  'underline',
+  'highlight',
+  'Notepad',
+  'Calculator',
+  'File Explorer',
+  'Downloads',
+  'Desktop',
+  'Documents',
+  'Comet',
+  'GitHub',
+  'LinkedIn',
+  'YouTube',
+  'spreadsheet',
+  'pull request',
+  // Developer words speech recognition gets wrong ("kubectl" came out as "Qubicle").
+  'kubectl',
+  'Kubernetes',
+  'Docker',
+  'container',
+  'git',
+  'npm',
+  'WSL',
+  'Ubuntu',
+  'PowerShell',
+  'Terminal',
+  'VS Code',
+  'Postman',
+  'Claude Code',
+  'Codex',
+  'Grok',
+  'repository',
+  'Python',
+  'IDLE',
+];
 
 /** How long main may take to answer a capture plan request before the question fails. */
 const PLAN_TIMEOUT_MS = 3000;
 /** OpenRouter model for agent steps when the defaults are in use (accurate clicks, still cheap). */
 const AGENT_MODEL = 'anthropic/claude-haiku-5.5';
+/** How long main may take to show a walkthrough ring (it looks the control up first). */
+const GUIDE_ARM_MS = 4000;
 /** A mouse or keyboard request main hasn't answered in this long has failed. */
 const INPUT_TIMEOUT_MS = 25_000;
 /** How long agent mode waits for the user to allow a risky step. */
@@ -57,6 +130,10 @@ const OWN_KEYS_MS = 300;
 const TAKEOVER_PX = 60;
 /** After the user takes over, carry on once they've left the mouse and keyboard alone this long. */
 const RESUME_IDLE_MS = 3000;
+/** How long the agent waits for the list of open windows and tabs from main. */
+const OPEN_WINDOWS_MS = 6000;
+/** After the user presses play to go on while another agent works, Clicky stops checking this long. */
+const IGNORE_OTHER_AGENT_MS = 10 * 60_000;
 
 /**
  * The data plane (architecture §4): hold-to-talk hook, orchestrator and providers. It runs in
@@ -82,6 +159,8 @@ export class Engine {
   private readonly inputs = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
   private readonly contexts = new Map<number, (c: WriteContext) => void>();
   private readonly foregrounds = new Map<number, (a: AppInfo | null) => void>();
+  private readonly windowLists = new Map<number, (w: string[]) => void>();
+  private readonly mainReplies = new Map<number, (v: unknown) => void>();
   /** Last mouse or key use that wasn't Clicky's own input. */
   private lastUserInputAt = 0;
   /** Mouse events until then are Clicky's own clicks moving the pointer. */
@@ -89,28 +168,55 @@ export class Engine {
   /** When the current agent step started, to tell if the user acted since. */
   private stepStartedAt = 0;
   private agentPaused = false;
+  /** Waiting for another agent to finish (the strip shows it as a pause). */
+  private waitingForAgent = false;
+  private ignoreOtherAgentUntil = 0;
+  /**
+   * "Allow all" on the notch: steps that only need a confirmation run without asking, for the
+   * current run (it turns off when the run ends). Irreversible steps are always asked.
+   */
+  private allowAll = false;
   /** Where a burst of mouse movement started, to ignore jitter. */
   private moveAnchor: { x: number; y: number; at: number } | null = null;
   /** Last style lesson per context, so learning runs at most every couple of minutes. */
   private readonly learnedAt = new Map<StyleContext, number>();
   /** Until then, an Esc may be one Clicky typed itself. */
   private ownKeysUntil = 0;
+  /**
+   * Until when an Esc the hook sees is Clicky's own (it's pressing Esc in a step). Only that Esc is
+   * ignored: the user's Esc stops a run even while Clicky is typing (it was ignored for the whole
+   * typing step before, found by the critic review).
+   */
+  private ownEscUntil = 0;
   /** Agent mode is waiting for the user to allow a step with the hold key. */
   private pendingConfirm: ((ok: boolean) => void) | null = null;
+  /** How risky the pending question's step is, and when it was asked (for the hold key's answer). */
+  private pendingAsk: { level: RiskLevel; at: number; text: string } | null = null;
   /** The hold-key press that answered a confirmation; its release must not end anything. */
   private swallowUp = false;
+  /** Keeps the answer model, voice and speech recognition connections warm while Clicky is in use. */
+  private readonly warm = new WarmKeeper({
+    targets: () => this.warmTargets(),
+    log: (message) => this.post({ type: 'log', level: 'info', message }),
+  });
+  /** An interaction is running (the warm keeper stays warm meanwhile, however long it takes). */
+  private inInteraction = false;
 
   constructor(private readonly opts: EngineOptions) {
     const settings = () => this.cfg().settings;
     this.orchestrator = new Orchestrator({
-      chat: () => (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(settings(), this.key)),
+      chat: () => this.chat(),
       stt: () => (this.providers.stt ??= this.createStt()),
       speech: () => this.speech(),
       capture: createCapturePort(opts.media, (all) => this.plan(all), settings),
       mic: createMicPort(opts.media, () => settings().micDeviceId),
       overlay: {
         state: (state) => this.post({ type: 'overlay', overlay: { op: 'state', state } }),
-        point: (target, label) => this.post({ type: 'overlay', overlay: { op: 'point', target, label } }),
+        point: (target, label, opts) =>
+          this.post({
+            type: 'overlay',
+            overlay: { op: 'point', target, label, ...(opts?.snap ? { snap: true } : {}) },
+          }),
         draw: (shape) => this.post({ type: 'overlay', overlay: { op: 'draw', shape } }),
         message: (text, kind) => this.post({ type: 'overlay', overlay: { op: 'message', text, kind } }),
         caption: (text) => this.post({ type: 'overlay', overlay: { op: 'caption', text } }),
@@ -123,6 +229,14 @@ export class Engine {
         this.post({ type: 'state', state, interactionId: interaction.id });
         // After each answer, get the speech-to-text service ready for the next question.
         if (isResting(state)) this.prewarm();
+        if (!isResting(state) && !this.inInteraction) {
+          this.inInteraction = true;
+          this.touchWarm('in use');
+          this.warm.busy(true);
+        } else if (isResting(state) && this.inInteraction) {
+          this.inInteraction = false;
+          this.warm.busy(false);
+        }
       },
       log: (message) => this.post({ type: 'log', level: 'info', message }),
       input: { run: (action, signal) => this.input(action, signal) },
@@ -136,12 +250,59 @@ export class Engine {
       }),
       agentNotReady: () => this.post({ type: 'agentSetup' }),
       agentChat: () => this.agentChat(),
+      renderSketch: async (svg) => {
+        const png = await this.askMain<string | null>({ type: 'renderSketch', svg }, null, 8000);
+        return png ? { data: Buffer.from(png, 'base64'), mediaType: 'image/png', width: 512, height: 512 } : null;
+      },
+      sketchLibrary: {
+        get: (key) => this.sketches().get(key),
+        put: (key, sketch) => {
+          const all = this.sketches();
+          all.set(key, sketch);
+          // The newest 200 drawings are kept.
+          const keep = [...all.entries()].slice(-200);
+          try {
+            writeFileSync(join(this.cfg().dataDir, 'sketches.json'), JSON.stringify(Object.fromEntries(keep)));
+          } catch {
+            // a drawing that isn't kept is drawn again next time
+          }
+        },
+      },
       agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
+      agentSkills: (goal) => skillsText(matchSkills(goal, this.cfg().skills)) || undefined,
+      agentBriefing: () => this.cfg().briefing || undefined,
+      agentTaskPlan: (goal) => planAgentTask(goal, this.cfg(), (m) => this.post(m)),
+      helperNote: (question) => helperNoteLine(question, this.cfg(), (m) => this.post(m)),
       remember: (note) => this.post({ type: 'remember', note }),
       inventory: () => this.cfg().inventory,
+      agentRunEnded: () => {
+        // Allow all covers one run only.
+        if (!this.allowAll) return;
+        this.allowAll = false;
+        this.post({ type: 'allowAll', on: false });
+      },
       agentRunFinished: (goal, result) => {
         const lesson = lessonFrom(goal, result, Date.now());
-        if (lesson) this.post({ type: 'agentLesson', lesson });
+        // Every run is reviewed afterwards (a standing rule): could it have taken fewer steps? A
+        // shorter route for a task that worked becomes the lesson next time.
+        void shortestRoute(this.agentChat(), goal, result, AbortSignal.timeout(45_000))
+          .catch(() => null)
+          .then((route) => {
+            const took = result.steps.length;
+            this.post({
+              type: 'log',
+              level: 'info',
+              message: route
+                ? `agent step review: took ${took} steps, ${route.steps.length} would do: ${route.steps.join('; ').slice(0, 400)} (${route.why})`
+                : `agent step review: took ${took} steps, no shorter route found`,
+            });
+            if (route && result.outcome === 'done')
+              this.post({
+                type: 'agentLesson',
+                lesson: { goal: goal.slice(0, 200), steps: route.steps, at: Date.now() },
+              });
+            else if (lesson) this.post({ type: 'agentLesson', lesson });
+          });
       },
       learnFromScreen: (screens, app) => void this.learnFromScreen(screens, app),
       learnFromDictation: (text, app) => {
@@ -151,7 +312,16 @@ export class Engine {
       },
       agentHooks: () => ({
         blockedApp: () => this.blockedApp(),
+        allowAll: () => this.allowAll,
+        pathPolicy: this.pathPolicy(),
+        fileExists: async (path) => existsSync(this.realPath(path)),
         whilePaused: async (signal) => {
+          // A wait for another agent that a stopped run left behind isn't a pause.
+          if (this.waitingForAgent) {
+            this.waitingForAgent = false;
+            this.agentPaused = false;
+            this.post({ type: 'agentPaused', on: false });
+          }
           while (this.agentPaused && !signal.aborted) await new Promise((r) => setTimeout(r, 150));
         },
         userInterrupted: () => {
@@ -172,14 +342,40 @@ export class Engine {
           this.stepStartedAt = Date.now();
         },
         onProgress: (p) => this.post({ type: 'agentProgress', ...p }),
+        openWindows: () => this.openWindows(),
+        // Clicky plans the whole route first, then does it with its cursor.
+        planFirst: true,
+        elements: () => this.askMain<UiElement[]>('elements', [], 4000),
+        otherAgent: () => this.otherAgent(),
+        listFiles: async (path) => listFiles(this.realPath(path)),
+        // The user's own folders (Desktop, Documents, Downloads… as Windows has them, OneDrive too).
+        findFiles: async (query) =>
+          findFiles(
+            query,
+            this.cfg()
+              .inventory.folders.map((f) => /^[A-Z][a-z]+ folder: (.+)$/.exec(f)?.[1])
+              .filter((f): f is string => !!f),
+          ),
+        moveFiles: async (from, pattern, to, copy) => moveFiles(this.realPath(from), pattern, this.realPath(to), copy),
+        saveSheet: async (name, columns, rows) => saveXlsx(this.cfg().outputDir, name, columns, rows),
       }),
-      confirm: (text, signal) => this.confirm(text, signal),
+      confirm: (text, signal, info) => this.confirm(text, signal, info),
+      deepChat: () => this.deepChat(),
+      guide: {
+        arm: (target: GuideTarget) => this.askMain<HitArea | null>({ type: 'guideArm', target }, null, GUIDE_ARM_MS),
+        disarm: () => this.post({ type: 'guideDisarm' }),
+        foreground: async () => (await this.foregroundApp())?.process ?? null,
+      },
+      features: () => {
+        const s = settings();
+        return { beats: s.spokenBeats, deep: s.deepRouting, walkthroughs: s.guidedWalkthroughs };
+      },
       writeContext: () => this.writeContext(),
       atCaret: () => this.post({ type: 'caretAnchor' }),
       tidyDictation: () => settings().tidyDictation,
       undoHint: () => {
         const k = settings().dictationKey;
-        return k === 'off' ? '' : `Tap ${HOLD_KEY_LABELS[k]} to undo, or hold it and say "shorter" to rewrite.`;
+        return k === 'off' ? '' : `Tap ${holdKeyLabel(k)} to undo, or hold it and say "shorter" to rewrite.`;
       },
       userContext: (app) => {
         const s = settings();
@@ -215,6 +411,67 @@ export class Engine {
 
   private readonly key = (id: CredentialId): string | null => this.config?.keys[id] ?? null;
 
+  private chat(): VisionChatProvider {
+    return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(this.cfg().settings, this.key));
+  }
+
+  private deepChatCache: { key: string; chat: VisionChatProvider } | null = null;
+
+  /**
+   * The stronger model for hard questions, or null when there is none distinct from the answer
+   * model. OpenRouter: the model chosen for hard questions, else the agent model (good and still
+   * cheap). Other providers: only a model picked for it in settings.
+   */
+  private deepChat(): VisionChatProvider | null {
+    const cfg = this.cfg();
+    const s = cfg.settings;
+    if (cfg.demo || s.chatProvider === 'ollama') return null;
+    const fast = s.chatModel || defaultChatModel(s.chatProvider);
+    const model = s.chatProvider === 'openrouter' ? s.deepModel || s.agentModel || AGENT_MODEL : s.deepModel;
+    if (!model || model === fast) return null;
+    const key = `${s.chatProvider}|${this.key(s.chatProvider === 'openrouter' ? 'openrouter' : s.chatProvider) ?? ''}|${model}`;
+    if (this.deepChatCache?.key !== key)
+      this.deepChatCache = { key, chat: createChat({ ...s, chatModel: model }, this.key) };
+    return this.deepChatCache.chat;
+  }
+
+  /** What the warm keeper keeps open: nothing in demo mode, while paused, or without keys. */
+  private warmTargets(): WarmTarget[] {
+    const cfg = this.config;
+    if (!cfg || cfg.demo || cfg.missing.length || cfg.settings.paused || !cfg.settings.keepVoiceWarm) return [];
+    const targets: WarmTarget[] = [
+      { name: 'answer model', everyMs: 60_000, warm: (signal) => this.chat().prewarm?.(signal) },
+      {
+        name: 'voice',
+        everyMs: 60_000,
+        warm: async (signal) => {
+          const speech = this.speech();
+          // The beats are rendered once per voice, then played from memory.
+          if (cfg.settings.spokenBeats) await speech.prerender?.(allBeatLines(), signal);
+          speech.prewarm?.(signal);
+        },
+      },
+      { name: 'speech recognition', everyMs: 240_000, warm: () => this.prewarm() },
+    ];
+    if (cfg.settings.deepRouting)
+      targets.push({
+        name: 'hard-question model',
+        everyMs: 60_000,
+        warm: (signal) => this.deepChat()?.prewarm?.(signal),
+      });
+    return targets;
+  }
+
+  /** Clicky is in use: keep the voice path warm (or let it go if that's switched off). */
+  private touchWarm(reason: string): void {
+    const s = this.config?.settings;
+    if (!s?.keepVoiceWarm || s.paused) {
+      this.warm.stop();
+      return;
+    }
+    this.warm.touch(reason);
+  }
+
   private localSpeech(): { files: ModelFiles; engine: LocalSpeechEngine } {
     const dir = this.cfg().modelsDir;
     if (this.local?.files.root !== dir) {
@@ -234,11 +491,19 @@ export class Engine {
     return localTts(engine, files, () => this.cfg().settings);
   }
 
+  /** Clicky's own vocabulary for speech recognition: its name, the apps here, common commands. */
+  private keyterms(): string[] {
+    const apps = this.cfg()
+      .inventory.apps.filter((a) => a.length <= 30 && !/\d{3,}/.test(a))
+      .slice(0, 70);
+    return [...KEYTERMS, ...apps];
+  }
+
   private createStt(): SttProvider {
     const cfg = this.cfg();
     // Demo mode swaps out cloud services only; on-device speech is real either way.
     if (cfg.settings.sttProvider === 'local') return this.localStt();
-    return cfg.demo ? demoStt() : createStt(cfg.settings, this.key);
+    return cfg.demo ? demoStt() : createStt(cfg.settings, this.key, this.keyterms());
   }
 
   private createTts(): TtsProvider | null {
@@ -293,8 +558,12 @@ export class Engine {
           !prev ||
           JSON.stringify(prev.settings) !== JSON.stringify(msg.config.settings) ||
           !sameKeys(prev, msg.config)
-        )
+        ) {
           this.providers = {};
+          // What was warm belongs to the old providers.
+          if (prev) this.warm.stop();
+          this.touchWarm(prev ? 'settings changed' : 'launch');
+        }
         if (
           prev &&
           this.hook &&
@@ -311,6 +580,18 @@ export class Engine {
       case 'keyTest':
         this.keyTest = msg.on;
         return;
+      case 'keyRecord': {
+        const record = this.opts.recordKeys;
+        if (!record) return this.post({ type: 'keyRecorded', key: null });
+        this.stopHoldKey();
+        void record(10_000)
+          .catch(() => null)
+          .then((r) => {
+            this.post({ type: 'keyRecorded', key: r ? makeComboKey(r.codes, r.label) : null });
+            if (this.config && !this.config.settings.paused) this.startHoldKey();
+          });
+        return;
+      }
       case 'ask':
         void this.orchestrator
           .ask(msg.question, msg.source)
@@ -327,6 +608,7 @@ export class Engine {
         );
         return;
       case 'prewarm':
+        this.touchWarm('app opened or PC woke');
         return this.prewarm();
       case 'input.reply': {
         const p = this.inputs.get(msg.id);
@@ -334,6 +616,28 @@ export class Engine {
         this.inputs.delete(msg.id);
         if (msg.error) p.reject(new Error(msg.error));
         else p.resolve();
+        return;
+      }
+      case 'elements.reply':
+        this.mainReplies.get(msg.id)?.(msg.elements);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'guideArm.reply':
+        this.mainReplies.get(msg.id)?.(msg.area);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'renderSketch.reply':
+        this.mainReplies.get(msg.id)?.(msg.png);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'otherAgent.reply':
+        this.mainReplies.get(msg.id)?.(msg.text);
+        this.mainReplies.delete(msg.id);
+        return;
+      case 'windows.reply': {
+        const done = this.windowLists.get(msg.id);
+        this.windowLists.delete(msg.id);
+        done?.(msg.windows);
         return;
       }
       case 'foreground.reply': {
@@ -348,6 +652,13 @@ export class Engine {
         return;
       case 'agent.allow':
         this.pendingConfirm?.(true);
+        return;
+      case 'agent.allowAll':
+        this.allowAll = msg.on;
+        this.post({ type: 'log', level: 'info', message: `allow all ${msg.on ? 'on' : 'off'}` });
+        this.post({ type: 'allowAll', on: msg.on });
+        // Allow all never answers for a step it doesn't cover (one that can't be undone).
+        if (msg.on && allowAllAnswers(this.pendingAsk?.level)) this.pendingConfirm?.(true);
         return;
       case 'writeContext.reply': {
         const done = this.contexts.get(msg.id);
@@ -367,6 +678,7 @@ export class Engine {
         // The port side handles in-flight requests; nothing to do for an in-process channel.
         return;
       case 'shutdown':
+        this.warm.stop();
         this.stopHoldKey();
         this.orchestrator.cancel('quitting');
         return;
@@ -390,7 +702,7 @@ export class Engine {
           this.orchestrator.keyUp();
         },
         onCancel: () => {
-          if (Date.now() < this.ownKeysUntil) return;
+          if (Date.now() < this.ownEscUntil) return;
           this.pendingConfirm?.(false);
           this.orchestrator.cancel('escape');
         },
@@ -398,6 +710,14 @@ export class Engine {
         onUserInput: (e) => {
           const now = Date.now();
           if (now < this.ownKeysUntil || now < this.ownMouseUntil) return;
+          // A walkthrough waits for the user's own click on the ringed step.
+          if (
+            this.orchestrator.guiding &&
+            (e.kind === 'click' || e.kind === 'move') &&
+            e.x !== undefined &&
+            e.y !== undefined
+          )
+            this.orchestrator.userInput({ kind: e.kind, x: e.x, y: e.y, ...(e.button ? { button: e.button } : {}) });
           if (e.kind === 'move') {
             // A small nudge or the pointer settling isn't taking over: only real movement counts.
             const a = this.moveAnchor;
@@ -425,7 +745,17 @@ export class Engine {
     if (this.pendingConfirm) {
       // Agent mode asked "press the key to allow": this press is the answer, not a new question.
       this.swallowUp = true;
-      this.pendingConfirm(true);
+      const ask = this.pendingAsk;
+      if (keyMayAllow(ask?.level, Date.now() - (ask?.at ?? 0))) this.pendingConfirm(true);
+      else if (ask?.level === 'irreversible')
+        this.post({
+          type: 'overlay',
+          overlay: {
+            op: 'message',
+            text: `${ask.text}? Click Allow on the bar at the top to do this, or press Esc to stop.`,
+            kind: 'info',
+          },
+        });
       return;
     }
     const cfg = this.config;
@@ -502,12 +832,115 @@ export class Engine {
    */
   private agentChat(): VisionChatProvider {
     const s = this.cfg().settings;
+    // A model chosen for agent steps wins (OpenRouter).
+    if (s.agentModel && s.chatProvider === 'openrouter' && !this.cfg().demo) {
+      const key = `${this.key('openrouter') ?? ''}|${s.agentModel}`;
+      if (this.agentChatCache?.key !== key)
+        this.agentChatCache = { key, chat: createChat({ ...s, chatModel: s.agentModel }, this.key) };
+      return this.agentChatCache.chat;
+    }
     if (this.cfg().demo || s.chatProvider !== 'openrouter' || s.chatModel)
       return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(s, this.key));
     const key = `${this.key('openrouter') ?? ''}`;
     if (this.agentChatCache?.key !== key)
       this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };
     return this.agentChatCache.chat;
+  }
+
+  /**
+   * Where agent file steps may reach: the user's own folders (as Windows has them, and the usual
+   * names under the profile the model may write), Clicky's output folder; never Clicky's own data.
+   */
+  private pathPolicy(): PathPolicy {
+    const home = homedir();
+    const known = ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos', 'OneDrive'].map(
+      (f) => `${home}\\${f}`,
+    );
+    const cfg = this.cfg();
+    const folders = cfg.inventory.folders
+      .map((f) => /^[A-Z][a-z]+ folder: (.+)$/.exec(f)?.[1])
+      .filter((f): f is string => !!f);
+    return { allowed: [...known, ...folders, cfg.outputDir], denied: [cfg.dataDir] };
+  }
+
+  /** "C:\\Users\\me\\Desktop" when the real Desktop is elsewhere (OneDrive): the folder the user sees. */
+  private realPath(path: string): string {
+    return mapKnownFolder(path, this.cfg().inventory.folders);
+  }
+
+  /**
+   * Another agent driving the PC, for the agent's wait. While it waits the strip says so; pressing
+   * play there means "go anyway", and Clicky stops looking for a while.
+   */
+  private async otherAgent(): Promise<OtherAgent | null> {
+    if (Date.now() < this.ignoreOtherAgentUntil) return null;
+    const found = await this.askMain<OtherAgent | null>('otherAgent', null, 9000);
+    if (this.waitingForAgent && !this.agentPaused) {
+      // Play was pressed on the strip.
+      this.waitingForAgent = false;
+      this.ignoreOtherAgentUntil = Date.now() + IGNORE_OTHER_AGENT_MS;
+      return null;
+    }
+    if (found && !this.waitingForAgent) {
+      this.waitingForAgent = true;
+      this.agentPaused = true;
+      this.post({ type: 'agentPaused', on: true, reason: 'agent' });
+    } else if (!found && this.waitingForAgent) {
+      this.waitingForAgent = false;
+      this.agentPaused = false;
+      this.post({ type: 'agentPaused', on: false });
+    }
+    return found;
+  }
+
+  /** Ask main for something; `fallback` if it doesn't answer within `ms`. */
+  /** Drawings that passed their check, read once from dataDir/sketches.json. */
+  private sketchCache: Map<string, Sketch> | null = null;
+  private sketches(): Map<string, Sketch> {
+    if (this.sketchCache) return this.sketchCache;
+    let saved: Record<string, Sketch> = {};
+    try {
+      saved = JSON.parse(readFileSync(join(this.cfg().dataDir, 'sketches.json'), 'utf8')) as Record<string, Sketch>;
+    } catch {
+      // none yet
+    }
+    this.sketchCache = new Map(Object.entries(saved));
+    return this.sketchCache;
+  }
+
+  private askMain<T>(
+    req: 'elements' | 'otherAgent' | { type: 'renderSketch'; svg: string } | { type: 'guideArm'; target: GuideTarget },
+    fallback: T,
+    ms: number,
+  ): Promise<T> {
+    const id = this.nextPlanId++;
+    return new Promise<T>((resolve) => {
+      const timer = setTimeout(() => {
+        this.mainReplies.delete(id);
+        resolve(fallback);
+      }, ms);
+      this.mainReplies.set(id, (v) => {
+        clearTimeout(timer);
+        resolve(v as T);
+      });
+      this.post(typeof req === 'string' ? { type: req, id } : { ...req, id });
+    });
+  }
+
+  /** The open windows from main (empty if main is slow). */
+  private openWindows(): Promise<string[]> {
+    const id = this.nextPlanId++;
+    return new Promise<string[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.windowLists.delete(id);
+        resolve([]);
+      }, OPEN_WINDOWS_MS);
+      this.windowLists.set(id, (w) => {
+        clearTimeout(timer);
+        resolve(w);
+      });
+      this.post({ type: 'windows', id });
+    });
   }
 
   /** The app in front if it's on the never-touch list. */
@@ -535,9 +968,26 @@ export class Engine {
       });
       this.post({ type: 'foreground', id });
     });
-    if (!app) return null;
+    // No answer from main: it couldn't be checked, so it counts as blocked (never fail open).
+    if (!app) return 'the app in front (it could not be checked)';
     const hay = `${app.process} ${app.title}`.toLowerCase().replace(/\s+/g, '');
     return list.some((n) => hay.includes(n)) ? app.title || app.process : null;
+  }
+
+  /** The app in front, or null if main doesn't say within `ms`. */
+  private foregroundApp(ms = 1500): Promise<AppInfo | null> {
+    const id = this.nextPlanId++;
+    return new Promise<AppInfo | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.foregrounds.delete(id);
+        resolve(null);
+      }, ms);
+      this.foregrounds.set(id, (a) => {
+        clearTimeout(timer);
+        resolve(a);
+      });
+      this.post({ type: 'foreground', id });
+    });
   }
 
   /** Ask main for the app in front and the selection; an empty context if main is slow. */
@@ -562,13 +1012,20 @@ export class Engine {
     const id = this.nextPlanId++;
     if (action.kind === 'keys' || action.kind === 'type' || action.kind === 'backspace')
       this.ownKeysUntil = Date.now() + 60_000;
-    if (action.kind === 'click' || action.kind === 'scroll') this.ownMouseUntil = Date.now() + 60_000;
+    // Opening and closing click too now (the taskbar icon, the address bar), so their mouse moves are Clicky's.
+    if (action.kind !== 'keys' && action.kind !== 'type' && action.kind !== 'backspace')
+      this.ownMouseUntil = Date.now() + 60_000;
+    if (action.kind === 'open' || action.kind === 'element' || action.kind === 'control')
+      this.ownKeysUntil = Date.now() + 60_000;
+    const ownEsc = action.kind === 'keys' && action.keys.includes('esc');
+    if (ownEsc) this.ownEscUntil = Date.now() + 60_000;
     this.moveAnchor = null;
     return new Promise<void>((resolve, reject) => {
       const done = (): void => {
         clearTimeout(timer);
         this.inputs.delete(id);
         this.ownKeysUntil = Math.min(this.ownKeysUntil, Date.now() + OWN_KEYS_MS);
+        if (ownEsc) this.ownEscUntil = Date.now() + OWN_KEYS_MS;
         // The pointer and windows settle for a moment after a click.
         this.ownMouseUntil = Math.min(this.ownMouseUntil, Date.now() + 800);
       };
@@ -590,10 +1047,20 @@ export class Engine {
     });
   }
 
-  /** Agent mode: show what's about to happen and wait for a hold-key press (allow) or Esc (stop). */
-  private confirm(text: string, signal: AbortSignal): Promise<boolean> {
-    const key = HOLD_KEY_LABELS[this.cfg().settings.holdKey];
-    const prompt = `${text}? Press ${key} to allow, or Esc to stop.`;
+  /**
+   * Agent mode: show the exact step and wait for a hold-key press (allow) or Esc (stop). The run
+   * decides whether to ask (Allow all and earlier approvals are applied there): this only asks.
+   */
+  private confirm(text: string, signal: AbortSignal, info?: { level: RiskLevel; reasons: string[] }): Promise<boolean> {
+    const final = info?.level === 'irreversible' ? ' This can’t be undone.' : '';
+    this.post({ type: 'log', level: 'info', message: `asking to allow: ${text}` });
+    const key = holdKeyLabel(this.cfg().settings.holdKey);
+    const level = info?.level ?? 'confirm';
+    // A step that can't be undone is allowed with the button only, never the hold key.
+    const prompt =
+      level === 'irreversible'
+        ? `${text}?${final} Click Allow on the bar at the top to do it, or press Esc to stop.`
+        : `${text}? Press ${key} or click Allow to do it, or Esc to stop.`;
     const show = (): void => this.post({ type: 'overlay', overlay: { op: 'message', text: prompt, kind: 'info' } });
     return new Promise<boolean>((resolve) => {
       show();
@@ -605,13 +1072,17 @@ export class Engine {
         clearInterval(again);
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
-        if (this.pendingConfirm === finish) this.pendingConfirm = null;
+        if (this.pendingConfirm === finish) {
+          this.pendingConfirm = null;
+          this.pendingAsk = null;
+        }
         this.post({ type: 'agentAsk', text: null });
         resolve(ok);
       };
       if (signal.aborted) return finish(false);
       signal.addEventListener('abort', onAbort, { once: true });
       this.pendingConfirm = finish;
+      this.pendingAsk = { level, at: Date.now(), text };
     });
   }
 
@@ -635,7 +1106,7 @@ export class Engine {
         cfg.settings.sttProvider === 'local'
       )
         return;
-      (this.providers.stt ??= createStt(cfg.settings, this.key)).prewarm?.();
+      (this.providers.stt ??= createStt(cfg.settings, this.key, this.keyterms())).prewarm?.();
     } catch {
       // missing config shows up when the user asks
     }

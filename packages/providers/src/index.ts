@@ -56,14 +56,17 @@ export function createChat(s: Settings, getKey: KeyLookup, fetchImpl?: FetchLike
   const model = s.chatModel || undefined;
   const extra = { ...(model ? { model } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) };
   if (s.chatProvider === 'anthropic') return new AnthropicChat({ apiKey: need(getKey, 'anthropic'), ...extra });
+  if (s.chatProvider === 'ollama')
+    return new OpenAICompatibleChat({ id: 'ollama', apiKey: 'ollama', base: `${s.ollamaUrl}/v1`, ...extra });
   return new OpenAICompatibleChat({ id: s.chatProvider, apiKey: need(getKey, s.chatProvider), ...extra });
 }
 
-export function createStt(s: Settings, getKey: KeyLookup): SttProvider {
+/** Words to boost in speech recognition (the assistant's name, installed apps, commands). */
+export function createStt(s: Settings, getKey: KeyLookup, keyterms: readonly string[] = []): SttProvider {
   if (s.sttProvider === 'local') throw new ConfigError('Local speech recognition is provided by the desktop app.');
   if (s.sttProvider === 'model')
     throw new ConfigError('The answer model listens directly; no speech-to-text service is used.');
-  if (s.sttProvider === 'assemblyai') return new AssemblyAIStt({ apiKey: need(getKey, 'assemblyai') });
+  if (s.sttProvider === 'assemblyai') return new AssemblyAIStt({ apiKey: need(getKey, 'assemblyai'), keyterms });
   return new OpenAIStt({ apiKey: need(getKey, 'openai') });
 }
 

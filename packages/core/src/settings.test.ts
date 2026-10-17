@@ -26,6 +26,18 @@ describe('normalizeSettings', () => {
     });
   });
 
+  it('shows the companion all the time unless turned off', () => {
+    expect(DEFAULT_SETTINGS.showCompanion).toBe(true);
+    expect(normalizeSettings({ showCompanion: false }).showCompanion).toBe(false);
+    expect(normalizeSettings({ showCompanion: 'no' }).showCompanion).toBe(true);
+  });
+
+  it('keeps Clicky out of screenshots unless turned off', () => {
+    expect(DEFAULT_SETTINGS.hideFromCapture).toBe(true);
+    expect(normalizeSettings({ hideFromCapture: false }).hideFromCapture).toBe(false);
+    expect(normalizeSettings({ hideFromCapture: 1 }).hideFromCapture).toBe(true);
+  });
+
   it('merges a partial update onto the current settings', () => {
     const current = normalizeSettings({ holdKey: 'F8', ttsProvider: 'system' });
     expect(normalizeSettings({ launchAtLogin: true }, current)).toMatchObject({

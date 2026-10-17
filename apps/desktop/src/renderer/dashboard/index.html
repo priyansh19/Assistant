@@ -21,6 +21,7 @@
       <button class="nav-item" data-page="actions">Actions</button>
       <button class="nav-item" data-page="voice">Writes like me</button>
       <button class="nav-item" data-page="playbooks">Playbooks</button>
+      <button class="nav-item" data-page="helpers">Helpers</button>
       <div class="nav-sep"></div>
       <button class="nav-item" data-page="general">General</button>
       <button class="nav-item" data-page="cursor">Cursor</button>
@@ -299,6 +300,123 @@
         <div class="card list" id="playbook-list"></div>
       </section>
 
+      <!-- Helpers: named agents, their routines, and custom connectors -->
+      <section class="page" id="page-helpers">
+        <h1>Helpers</h1>
+        <p class="intro">
+          A helper is Clicky with a job and a memory, like "Pitch Lab" for decks or "Inbox Desk" for email. Ask it by
+          name ("Clicky, ask Pitch Lab to tighten slide 3") and it works with its own notes and its own folder in
+          Documents\Clicky. Making one starts nothing.
+        </p>
+        <div class="card">
+          <form id="clicky-form" class="clicky-form">
+            <input
+              type="text"
+              id="clicky-name"
+              placeholder="Name, two words for the job (Pitch Lab)"
+              maxlength="30"
+              autocomplete="off"
+            />
+            <input
+              type="text"
+              id="clicky-purpose"
+              placeholder="What it does for you, in one sentence"
+              maxlength="200"
+              autocomplete="off"
+            />
+            <button class="primary" type="submit">Make helper</button>
+          </form>
+          <div class="key-error" id="clicky-error" hidden></div>
+        </div>
+        <div class="card list" id="clicky-list"></div>
+
+        <div class="section-head">
+          <h2>Routines</h2>
+        </div>
+        <div class="card">
+          <form id="routine-form" class="row">
+            <input
+              type="text"
+              id="routine-input"
+              placeholder="e.g. every morning summarize the emails waiting on me"
+              maxlength="600"
+              autocomplete="off"
+            />
+            <select id="routine-owner" aria-label="Helper">
+              <option value="">Clicky</option>
+            </select>
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <div class="desc ask-hint" id="routine-hint">
+            Routines run on this PC while it's on and Clicky is open, one at a time, when you step away from the mouse.
+            The first run does the whole job; later runs report only what changed. Three failures in a row pause one.
+          </div>
+        </div>
+        <div class="card list" id="routine-list"></div>
+
+        <div class="section-head">
+          <h2>Connectors</h2>
+        </div>
+        <p class="intro">
+          Connect any MCP server: a URL, or a command on this PC. Keys are encrypted with Windows and never shown again.
+        </p>
+        <div class="card" id="connector-editor">
+          <input type="hidden" id="conn-id" />
+          <div class="row">
+            <div class="label"><div class="title">Name</div></div>
+            <input type="text" id="conn-name" placeholder="e.g. Linear" maxlength="40" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label"><div class="title">Type</div></div>
+            <select id="conn-transport">
+              <option value="remote">Server URL</option>
+              <option value="stdio">Command on this PC</option>
+            </select>
+          </div>
+          <div class="row" id="conn-url-row">
+            <div class="label"><div class="title">Server URL</div></div>
+            <input type="text" id="conn-url" placeholder="https://…" autocomplete="off" />
+          </div>
+          <div class="row" id="conn-cmd-row" hidden>
+            <div class="label">
+              <div class="title">Command</div>
+              <div class="desc">The program, then everything after it, quoted like a shell.</div>
+            </div>
+            <input type="text" id="conn-command" placeholder="npx" autocomplete="off" />
+            <input type="text" id="conn-args" placeholder="-y some-mcp-server --flag value" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">API key or token</div>
+              <div class="desc" id="conn-token-desc">Leave empty if the server needs none.</div>
+            </div>
+            <input type="password" id="conn-token" autocomplete="off" />
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Environment variables</div>
+              <div class="desc">One per line, like API_TOKEN=value. For commands on this PC.</div>
+            </div>
+            <textarea id="conn-env" rows="2" spellcheck="false"></textarea>
+          </div>
+          <div class="row column">
+            <div class="label">
+              <div class="title">Extra headers</div>
+              <div class="desc">One per line, like X-Api-Key: value. For server URLs.</div>
+            </div>
+            <textarea id="conn-headers" rows="2" spellcheck="false"></textarea>
+          </div>
+          <div class="row">
+            <div class="label"><div class="desc" id="conn-message"></div></div>
+            <div class="item-buttons">
+              <button type="button" class="secondary small" id="conn-cancel" hidden>Cancel</button>
+              <button type="button" class="primary small" id="conn-save">Save connector</button>
+            </div>
+          </div>
+        </div>
+        <div class="card list" id="connector-list"></div>
+      </section>
+
       <!-- General -->
       <section class="page" id="page-general">
         <h1>General</h1>
@@ -308,7 +426,17 @@
               <div class="title">Hold-to-talk key</div>
               <div class="desc">Hold it, ask your question, let go. Esc stops an answer.</div>
             </div>
-            <select id="holdKey"></select>
+            <div class="keypick">
+              <select id="holdKey"></select>
+              <button
+                class="secondary small"
+                id="holdKeyRecord"
+                type="button"
+                title="Press any key combination, like Win + Alt"
+              >
+                Record keys
+              </button>
+            </div>
           </div>
           <div class="row">
             <div class="label">
@@ -317,7 +445,17 @@
                 Hold it and talk: your words are typed wherever the text cursor is. Nothing is saved.
               </div>
             </div>
-            <select id="dictationKey"></select>
+            <div class="keypick">
+              <select id="dictationKey"></select>
+              <button
+                class="secondary small"
+                id="dictationKeyRecord"
+                type="button"
+                title="Press any key combination, like Win + Alt"
+              >
+                Record keys
+              </button>
+            </div>
           </div>
           <div class="row">
             <div class="label">
@@ -362,7 +500,7 @@
         </div>
         <h2>What Clicky remembers</h2>
         <p class="intro">
-          Tell Clicky things to remember, like "Clickey, Comet is on my taskbar" or "remember my reports are in
+          Tell Clicky things to remember, like "Clicky, Excel is on my taskbar" or "remember my reports are in
           D:\Reports". It uses them from then on. Stored on this PC.
         </p>
         <div class="card list" id="notes-list"></div>
@@ -467,6 +605,23 @@
             </div>
             <label class="toggle"><input type="checkbox" id="showPointLabels" /><span></span></label>
           </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Always show Clicky</div>
+              <div class="desc">Off: Clicky appears when you hold your key and fades away after the answer.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="showCompanion" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep Clicky out of screenshots</div>
+              <div class="desc">
+                Clicky's cursor and bubbles never end up in what it looks at. They also won't show in screen recordings
+                or screen sharing; turn this off to record a demo.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="hideFromCapture" /><span></span></label>
+          </div>
         </div>
       </section>
 
@@ -483,6 +638,7 @@
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openrouter">OpenRouter</option>
               <option value="openai">OpenAI</option>
+              <option value="ollama">On this PC (Ollama)</option>
             </select>
           </div>
           <div class="row">
@@ -494,6 +650,13 @@
               <select id="chatModelPick" aria-label="Model"></select>
               <input type="text" id="chatModel" spellcheck="false" autocomplete="off" hidden />
             </div>
+          </div>
+          <div class="row" id="agentModelRow">
+            <div class="label">
+              <div class="title">Agent model</div>
+              <div class="desc">Does tasks for you (clicks and typing). Needs good aim on the screen.</div>
+            </div>
+            <select id="agentModelPick" aria-label="Agent model"></select>
           </div>
         </div>
         <div class="card">
@@ -646,6 +809,49 @@
               </div>
             </div>
             <label class="toggle"><input type="checkbox" id="backupVoice" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Keep the voice path warm</div>
+              <div class="desc">
+                For 10 minutes after you use Clicky, keep its connections open so the next answer starts sooner.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="keepVoiceWarm" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Spoken beats</div>
+              <div class="desc">
+                Say a short "On it." before something that takes a while, such as a task or a hard question.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="spokenBeats" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Send hard questions to a stronger model</div>
+              <div class="desc">
+                Questions like "think it through" or "pros and cons" go to the hard-question model.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="deepRouting" /><span></span></label>
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Hard-question model</div>
+              <div class="desc">OpenRouter model id. Leave empty to use the agent model.</div>
+            </div>
+            <input type="text" id="deepModel" autocomplete="off" />
+          </div>
+          <div class="row">
+            <div class="label">
+              <div class="title">Guided walkthroughs</div>
+              <div class="desc">
+                For "how do I…" questions, ring the next thing to click and move on only when you click it.
+              </div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="guidedWalkthroughs" /><span></span></label>
           </div>
         </div>
       </section>

@@ -10,6 +10,9 @@ export interface TrayActions {
   actions(): SavedAction[];
   runAction(id: string): void;
   needsSetup(): boolean;
+  /** Draw the built-in example sketch on the screen with the mouse. */
+  showDrawing(): void;
+  sayHello(): void;
 }
 
 const STATE_TEXT: Partial<Record<InteractionState, string>> = {
@@ -54,6 +57,8 @@ export class AppTray {
         { type: 'separator' },
         { label: 'Run action', submenu: actionItems },
         { label: 'History', click: () => this.a.openDashboard('history') },
+        { label: 'Show me a drawing', click: () => this.a.showDrawing() },
+        { label: 'Say hi again', click: () => this.a.sayHello() },
         { type: 'separator' },
         {
           label: paused ? 'Resume Clicky' : 'Pause Clicky',

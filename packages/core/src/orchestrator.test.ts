@@ -557,25 +557,78 @@ describe('dictation and agent mode', () => {
   });
 });
 
-describe('action requests without "Agent"', () => {
-  it('asks first, runs the agent on yes and answers normally on no', async () => {
+describe('the answer model routes tasks ([TASK:goal])', () => {
+  /** Answers each request with the next reply in turn (the answer call, then agent steps). */
+  function scriptedChat(replies: string[][]): ReturnType<typeof fakeChat> {
+    const chat = fakeChat([]);
+    let n = 0;
+    return {
+      ...chat,
+      async *stream(req) {
+        chat.requests.push(req);
+        for (const c of replies[Math.min(n++, replies.length - 1)] ?? []) yield c;
+      },
+    };
+  }
+
+  it('runs the restated goal through the agent without the name and says nothing before it', async () => {
+    const chat = scriptedChat([
+      ['[TASK:Make a folder called ', 'Receipts on the Desktop]'],
+      ['{"action":"done","say":"Made the Receipts folder."}'],
+    ]);
     const asked: string[] = [];
-    let allow = true;
-    const agentChat = fakeChat(['{"action":"done","say":"Opened it."}']);
     const t = setup({
-      chat: () => (allow ? agentChat : fakeChat(['[POINT:none]', 'Press the Windows key and type Notepad.'])),
+      chat: () => chat,
       input: { run: async () => undefined },
       agent: () => ({ enabled: true, confirm: 'risky' }),
       confirm: async (text) => {
         asked.push(text);
-        return allow;
+        return true;
       },
     });
-    const yes = await t.o.ask('can you open notepad for me', 'typed');
-    expect(asked).toEqual(['Do this for you: open notepad for me']);
-    expect(yes?.answer).toBe('Opened it.');
-    allow = false;
-    const no = await t.o.ask('can you open notepad for me', 'typed');
-    expect(no?.answer).toBe('Press the Windows key and type Notepad.');
+    const r = await t.o.ask('a folder called receipts on my desktop', 'typed');
+    expect(chat.requests[0]?.system).toContain('[TASK:the goal]');
+    expect(chat.requests[1]?.question).toContain('Task: Make a folder called Receipts on the Desktop');
+    expect(asked).toEqual([]); // no "Do this for you?" first: only risky steps ask
+    expect(t.speech.said).toEqual(['Made the Receipts folder.']);
+    expect(r?.answer).toBe('Made the Receipts folder.');
+    expect(r?.outcome).toBe('answered');
+  });
+
+  it('answers and points as usual when the model answers instead', async () => {
+    const actions: unknown[] = [];
+    const t = setup({
+      input: { run: async (a) => void actions.push(a) },
+      agent: () => ({ enabled: true, confirm: 'risky' }),
+      confirm: async () => true,
+    });
+    const r = await t.o.ask('where is export', 'typed');
+    expect(r?.answer).toBe('Click Export. Then choose PDF.');
+    expect(t.chat.requests).toHaveLength(1);
+    expect(actions).toEqual([]);
+  });
+
+  it('only offers the TASK tag when agent mode is on and can act', async () => {
+    const off = setup({ agent: () => ({ enabled: false, confirm: 'risky' }), input: { run: async () => undefined } });
+    await off.o.ask('where is export', 'typed');
+    expect(off.chat.requests[0]?.system).not.toContain('[TASK:');
+    expect(off.chat.requests[0]?.system).toContain('guide them and point instead');
+
+    const noInput = setup({ agent: () => ({ enabled: true, confirm: 'risky' }), confirm: async () => true });
+    await noInput.o.ask('where is export', 'typed');
+    expect(noInput.chat.requests[0]?.system).not.toContain('[TASK:');
+  });
+
+  it('still sends "Clicky, <request>" straight to the agent with no answer-model call', async () => {
+    const chat = scriptedChat([['{"action":"done","say":"Opened it."}']]);
+    const t = setup({
+      chat: () => chat,
+      input: { run: async () => undefined },
+      agent: () => ({ enabled: true, confirm: 'risky' }),
+      confirm: async () => true,
+    });
+    await t.o.ask('Clicky, open notepad', 'typed');
+    expect(chat.requests).toHaveLength(1);
+    expect(chat.requests[0]?.question).toContain('Task: open notepad');
   });
 });

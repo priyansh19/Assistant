@@ -3,10 +3,12 @@ import { ensureOk, prewarmOrigin, ProviderError, sseData, toBase64, type FetchLi
 
 export interface OpenAICompatibleOptions {
   /** 'openai' or 'openrouter' (used in errors and defaults). */
-  id: 'openai' | 'openrouter';
+  id: 'openai' | 'openrouter' | 'ollama';
   apiKey: string;
   model?: string;
   fetch?: FetchLike;
+  /** API root ending in /v1, for Ollama or another OpenAI-compatible server. */
+  base?: string;
 }
 
 export const OPENAI_BASE = 'https://api.openai.com/v1';
@@ -18,6 +20,8 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-4.1-mini';
  * moves to the next model in the list. A model typed into the settings replaces all of this.
  */
 export const OPENROUTER_DEFAULT_MODEL = 'google/gemini-2.5-flash-lite';
+/** The local vision model suggested for Ollama (it reads screenshots; slow on a laptop GPU). */
+export const OLLAMA_DEFAULT_MODEL = 'qwen3-vl:4b';
 /** OpenRouter rejects a fallback list longer than this. */
 export const OPENROUTER_MAX_MODELS = 3;
 export const OPENROUTER_FALLBACKS = ['qwen/qwen3.7-flash', 'anthropic/claude-haiku-5.5'];
@@ -43,8 +47,14 @@ export class OpenAICompatibleChat implements VisionChatProvider {
 
   constructor(private readonly opts: OpenAICompatibleOptions) {
     this.id = opts.id;
-    this.base = opts.id === 'openrouter' ? OPENROUTER_BASE : OPENAI_BASE;
-    this.model = opts.model?.trim() || (opts.id === 'openrouter' ? OPENROUTER_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL);
+    this.base = opts.base ?? (opts.id === 'openrouter' ? OPENROUTER_BASE : OPENAI_BASE);
+    this.model =
+      opts.model?.trim() ||
+      (opts.id === 'openrouter'
+        ? OPENROUTER_DEFAULT_MODEL
+        : opts.id === 'ollama'
+          ? OLLAMA_DEFAULT_MODEL
+          : OPENAI_DEFAULT_MODEL);
     this.useDefaults = opts.id === 'openrouter' && !opts.model?.trim();
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
   }
@@ -79,7 +89,16 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       ...(models ? { models } : {}),
       stream: true,
       // OpenAI's newer models only accept max_completion_tokens; OpenRouter uses max_tokens.
-      ...(this.id === 'openai' ? { max_completion_tokens: req.maxTokens } : { max_tokens: req.maxTokens }),
+      ...(this.id === 'openai'
+        ? { max_completion_tokens: req.maxTokens }
+        : { max_tokens: req.maxTokens + (req.thinkingTokens ?? 0) }),
+      // OpenRouter: thinking is off unless asked for. Models that think by default (Claude Haiku
+      // 5.5, Qwen) otherwise spend the whole budget thinking and send back no answer.
+      ...(this.id === 'openrouter'
+        ? { reasoning: req.thinkingTokens ? { max_tokens: req.thinkingTokens, exclude: true } : { enabled: false } }
+        : this.id === 'ollama' && !req.thinkingTokens
+          ? { reasoning_effort: 'none' }
+          : {}),
       messages: [
         { role: 'system', content: req.system },
         ...req.history.map((t) => ({ role: t.role, content: t.text })),
@@ -110,6 +129,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
     );
     if (!res.body) throw new Error(`${this.id}: empty response`);
     let finished = false;
+    let said = false;
     for await (const data of sseData(res.body)) {
       if (data === '[DONE]') return;
       let chunk: ChatChunk;
@@ -122,9 +142,18 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       if (chunk.error) throw new Error(`${this.id}: ${chunk.error.message ?? 'stream error'}`);
       const choice = chunk.choices?.[0];
       if (choice?.finish_reason === 'error') throw new Error(`${this.id}: the model stopped with an error`);
-      if (choice?.finish_reason) finished = true;
       const text = choice?.delta?.content;
-      if (text) yield text;
+      if (text) {
+        said = true;
+        yield text;
+      }
+      if (choice?.finish_reason) {
+        finished = true;
+        if (!said && choice.finish_reason === 'length')
+          throw new Error(
+            `${this.id}: ${this.servedModel ?? 'the model'} used its whole budget thinking and gave no answer`,
+          );
+      }
     }
     // The connection ended without [DONE] or a finish reason: the answer was cut off.
     if (!finished) throw new Error(`${this.id}: the answer was cut off (connection closed early)`);

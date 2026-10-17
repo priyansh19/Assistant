@@ -1,18 +1,30 @@
 import { join } from 'node:path';
 import { BrowserWindow, screen, type Display } from 'electron';
-import type { InteractionState, MappedPoint, MappedShape, OverlayPort } from '@clicky/core';
+import {
+  drawingDemo,
+  scaleShape,
+  shapeOnDisplay,
+  type InteractionState,
+  type MappedPoint,
+  type MappedShape,
+  type OverlayPort,
+} from '@clicky/core';
 import type { Platform } from '../platform';
 import { IPC } from '../shared/ipc';
+import { keepOutOfScreenshots } from './capture-privacy';
 import type {
   OverlayAnchor,
   OverlayConfig,
   OverlayCursor,
   OverlayDrawing,
+  OverlayGuide,
   OverlayMessage,
   OverlayPoint,
 } from '../shared/overlay-protocol';
 
 const CURSOR_INTERVAL_MS = 16;
+/** How long a display keeps the companion after a drawing starts there (it draws, then goes back). */
+const DRAW_OWN_MS = 15000;
 /** Mic level updates are throttled; the waveform doesn't need more than ~30 fps. */
 const LEVEL_INTERVAL_MS = 33;
 
@@ -123,6 +135,31 @@ export class OverlayManager implements OverlayPort {
     win.webContents.send(IPC.overlayPoint, p);
   }
 
+  /** The display showing a walkthrough ring, if any. */
+  private guideDisplay: number | null = null;
+
+  /**
+   * Ring a walkthrough step until the user clicks it (or clear it with null). The companion stays on
+   * that display meanwhile, so it doesn't wander off to another screen with the pointer.
+   */
+  guide(ring: { displayId: number; x: number; y: number; r: number; label: string; hover: boolean } | null): void {
+    for (const [id, win] of this.windows) {
+      if (win.isDestroyed()) continue;
+      const g: OverlayGuide =
+        ring && ring.displayId === id
+          ? { x: ring.x, y: ring.y, r: ring.r, label: ring.label, hover: ring.hover }
+          : null;
+      win.webContents.send(IPC.overlayGuide, g);
+    }
+    if (ring) {
+      this.guideDisplay = ring.displayId;
+      if (!this.anchored) this.setOwner(ring.displayId, 60_000);
+    } else if (this.guideDisplay !== null) {
+      this.guideDisplay = null;
+      if (!this.anchored && isRestingState(this.current)) this.setOwner(this.owner, 3500);
+    }
+  }
+
   /** Sit the companion beside the text caret (write mode), or go back to following the pointer. */
   anchor(caret: { displayId: number; x: number; y: number; height: number } | null): void {
     this.anchored = caret !== null;
@@ -138,6 +175,8 @@ export class OverlayManager implements OverlayPort {
   draw(shape: MappedShape): void {
     const win = this.windows.get(shape.displayId);
     if (!win || win.isDestroyed()) return;
+    // The companion is the pen: it moves to the display being drawn on (unless it's pointing).
+    if (this.owner === null && !this.anchored) this.setOwner(shape.displayId, DRAW_OWN_MS);
     const d: OverlayDrawing = {
       kind: shape.kind,
       points: shape.points,
@@ -145,6 +184,15 @@ export class OverlayManager implements OverlayPort {
       ...(shape.r !== undefined ? { r: shape.r } : {}),
     };
     win.webContents.send(IPC.overlayDraw, d);
+  }
+
+  /** The built-in drawing example, on the display with the mouse (tray: "Show me a drawing"). */
+  sketch(): void {
+    const d = this.cursorDisplay();
+    const { width, height } = d.bounds;
+    if (!this.anchored) this.setOwner(d.id, DRAW_OWN_MS);
+    for (const s of drawingDemo(width / height))
+      this.draw(shapeOnDisplay(scaleShape(s, width / 1000, height / 1000), d.id));
   }
 
   message(text: string, kind: 'error' | 'info'): void {
@@ -215,6 +263,7 @@ export class OverlayManager implements OverlayPort {
     });
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setIgnoreMouseEvents(true, { forward: true });
+    keepOutOfScreenshots(win);
     win.setVisibleOnAllWorkspaces(true);
     // Smoke tests run beside the user's own Clicky: keep their overlay invisible (it still renders).
     if (process.env['CLICKY_HIDE_OVERLAY'] === '1') win.setOpacity(0);
@@ -247,4 +296,8 @@ export class OverlayManager implements OverlayPort {
       win.webContents.send(IPC.overlayCursor, cursor);
     }
   }
+}
+
+function isRestingState(s: InteractionState): boolean {
+  return s === 'idle' || s === 'cancelled' || s === 'error';
 }

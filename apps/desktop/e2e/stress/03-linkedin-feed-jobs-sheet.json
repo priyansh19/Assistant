@@ -1,0 +1,14 @@
+{
+  "name": "LinkedIn feed → jobs that fit me → Excel sheet (read only)",
+  "say": "Clicky, open LinkedIn in Comet, scroll through my feed, find posts about jobs that fit me and save them in an Excel sheet.",
+  "maxMinutes": 15,
+  "expect": {
+    "agentDone": true,
+    "notAsked": true,
+    "sheet": {
+      "minRows": 1
+    }
+  },
+  "typed": true,
+  "live": "all"
+}

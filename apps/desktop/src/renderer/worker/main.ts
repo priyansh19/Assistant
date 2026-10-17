@@ -584,7 +584,8 @@ async function handle(req: WorkerRequest): Promise<unknown> {
 
 /**
  * Clicky's own key sounds, synthesised so there's nothing to download or license. Each is two quick
- * notes: rising when you start talking, falling when you let go. Quiet on purpose.
+ * notes: rising when you start talking, falling when you let go. Quiet on purpose. A task that needs
+ * the user's OK plays the rising pair twice, like the official app's "needs you" sound.
  */
 const CUES: Record<
   'soft' | 'bubble' | 'glass',
@@ -595,13 +596,18 @@ const CUES: Record<
   glass: { type: 'triangle', notes: [1320, 1760], len: 0.09, gain: 0.07 },
 };
 
-function playCue(kind: 'start' | 'end', sound: 'soft' | 'bubble' | 'glass'): void {
+function playCue(kind: 'start' | 'end' | 'ask', sound: 'soft' | 'bubble' | 'glass'): void {
   const c = CUES[sound];
   const ctx = playbackContext();
   void ctx.resume();
-  const notes = kind === 'start' ? c.notes : [c.notes[1], c.notes[0]];
+  const notes = kind === 'start' ? c.notes : kind === 'ask' ? [...c.notes, 0, ...c.notes] : [c.notes[1], c.notes[0]];
   let t = ctx.currentTime + 0.005;
   for (const f of notes) {
+    // 0 is a short rest between the two pairs.
+    if (f === 0) {
+      t += c.len * 1.5;
+      continue;
+    }
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = c.type;

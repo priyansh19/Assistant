@@ -6,6 +6,8 @@ import type {
   AskResult,
   CredentialId,
   DisplayGeometry,
+  GuideTarget,
+  HitArea,
   HistoryEntry,
   InputAction,
   InteractionState,
@@ -14,11 +16,16 @@ import type {
   MappedShape,
   Playbook,
   AgentLesson,
+  AgentSkill,
   LearnedStyle,
   StyleContext,
   WriteContext,
   AppInfo,
   Settings,
+  UiElement,
+  OtherAgent,
+  ClickyAgent,
+  Cadence,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
 
@@ -45,6 +52,20 @@ export interface EngineConfig {
   notes: string[];
   /** Installed app names and common folders (main scans them). */
   inventory: { apps: string[]; folders: string[] };
+  /** agents.md: the standing briefing added to every agent run. */
+  briefing: string;
+  /** Task skills (skills/*.md); the ones matching a task are added to its run. */
+  skills: AgentSkill[];
+  /** Where files Clicky makes (sheets) are saved: Documents/Clicky. */
+  outputDir: string;
+  /** Clicky's own data folder (userData): the drawings it has learned live here. */
+  dataDir: string;
+  /** Named helpers, with notes and preferences as their AGENTS.md has them. */
+  clickys: ClickyAgent[];
+  /** Each helper's folder, by slug. */
+  clickyWorkspaces: Record<string, string>;
+  /** Routine titles by owning helper slug, for the twin check. */
+  routineTitles: Record<string, string[]>;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -60,6 +81,8 @@ export type MainToEngine =
   | { type: 'holdKey.stop' }
   /** Setup wizard "press your key": report presses instead of asking. */
   | { type: 'keyTest'; on: boolean }
+  /** Settings "Record keys": report the next combination pressed. */
+  | { type: 'keyRecord' }
   | { type: 'ask'; id: number; question: string; source: 'typed' | 'action' }
   | { type: 'cancel'; reason: string }
   | { type: 'speakSample'; id: number; text: string }
@@ -68,16 +91,25 @@ export type MainToEngine =
   | { type: 'input.reply'; id: number; error?: string }
   | { type: 'writeContext.reply'; id: number; context: WriteContext }
   | { type: 'foreground.reply'; id: number; app: AppInfo | null }
+  | { type: 'windows.reply'; id: number; windows: string[] }
+  | { type: 'elements.reply'; id: number; elements: UiElement[] }
+  | { type: 'otherAgent.reply'; id: number; text: OtherAgent | null }
+  /** A sketch rendered to a PNG (base64), or null if it couldn't be. */
+  | { type: 'renderSketch.reply'; id: number; png: string | null }
+  /** Where clicks count for a walkthrough step (physical screen px, like the hook's mouse events), or null. */
+  | { type: 'guideArm.reply'; id: number; area: HitArea | null }
   /** Step strip buttons. */
   | { type: 'agent.pause'; on: boolean }
   | { type: 'agent.allow' }
+  /** The notch's Allow all switch (session only). */
+  | { type: 'agent.allowAll'; on: boolean }
   /** The media renderer died; a new port follows once it's back. */
   | { type: 'media.crashed' }
   | { type: 'shutdown' };
 
 export type OverlayOp =
   | { op: 'state'; state: InteractionState }
-  | { op: 'point'; target: MappedPoint; label: string }
+  | { op: 'point'; target: MappedPoint; label: string; snap?: boolean }
   | { op: 'draw'; shape: MappedShape }
   | { op: 'message'; text: string; kind: 'error' | 'info' }
   | { op: 'caption'; text: string };
@@ -94,6 +126,7 @@ export type EngineToMain =
   /** A voice question started (main moves the dashboard out of the screenshot). */
   | { type: 'listening' }
   | { type: 'keyTest'; down: boolean; key: 'talk' | 'dictate' }
+  | { type: 'keyRecorded'; key: string | null }
   | { type: 'askResult'; id: number; result: AskResult | null }
   | { type: 'speakSampleResult'; id: number; error?: string }
   | { type: 'capturePlan'; id: number; allDisplays: boolean }
@@ -105,15 +138,33 @@ export type EngineToMain =
   | { type: 'caretAnchor' }
   /** The app in front (never-touch check before each agent step). */
   | { type: 'foreground'; id: number }
+  | { type: 'windows'; id: number }
+  /** The controls of the window in front, for agent steps. */
+  | { type: 'elements'; id: number }
+  /** Is another agent driving this PC (checked before each agent step)? */
+  | { type: 'otherAgent'; id: number }
+  /** Ring a walkthrough step and say where clicks count (main owns the screen API and the control lookup). */
+  | { type: 'guideArm'; id: number; target: GuideTarget }
+  /** Take the walkthrough ring down. */
+  | { type: 'guideDisarm' }
+  /** Render a sketch's SVG so the model can check the drawing. */
+  | { type: 'renderSketch'; id: number; svg: string }
   /** Agent mode was asked for but isn't set up: open its rules screen. */
   | { type: 'agentSetup' }
   /** Step strip: progress, a question waiting for Allow, or the end of the run. */
   | { type: 'agentProgress'; goal: string; step: number; max: number; say: string }
   | { type: 'agentAsk'; text: string | null }
-  | { type: 'agentPaused'; on: boolean; reason?: 'user' }
+  | { type: 'agentPaused'; on: boolean; reason?: 'user' | 'agent' }
+  | { type: 'allowAll'; on: boolean }
   /** Something learned about how the user writes (main stores it). */
   | { type: 'styleLearned'; context: StyleContext; notes: string[]; examples: string[] }
   /** An agent run finished well: remember what worked. */
   | { type: 'agentLesson'; lesson: AgentLesson }
   | { type: 'remember'; note: string }
+  /** "Pitch Lab, remember…": a note for one helper's AGENTS.md (main filters secrets again). */
+  | { type: 'clickyNote'; slug: string; note: string }
+  /** A task was sent to an archived helper: bring it back. */
+  | { type: 'clickyRestore'; slug: string }
+  /** "Every morning…": set up a routine; the first run is the task running now. */
+  | { type: 'routineCreate'; title: string; task: string; cadence: Cadence; owner?: string }
   | { type: 'holdKey.failed'; message: string };

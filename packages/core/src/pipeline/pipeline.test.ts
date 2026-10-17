@@ -238,7 +238,7 @@ function runInput(chat: VisionChatProvider, over: Partial<AnswerRunInput> = {}) 
   const factory: SpeechFactory = { id: 'fake-voice', create: () => out };
   const hooks: AnswerRunHooks & { points: string[] } = {
     points: [],
-    point: (_t, label) => void hooks.points.push(label),
+    point: (_t, label, opts) => void hooks.points.push(opts?.snap ? label : `${label} (no snap)`),
     firstAudio: vi.fn(),
     speechFailed: vi.fn(),
   };

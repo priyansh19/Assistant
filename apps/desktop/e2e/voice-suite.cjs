@@ -10,6 +10,10 @@
 //
 // Run (from apps/desktop, after `electron-vite build`):
 //   electron e2e/voice-suite.cjs --user-data <copy of %APPDATA%\Clicky> --models <models dir> [--only 04]
+//
+// The stress suite (--suite stress, scenarios in e2e/stress) runs long real-life agent tasks with
+// every action performed for real ("live": "all"). Risky steps are approved only where a scenario
+// says so ("approveRisky", used for a throwaway sandbox repo); otherwise they are declined.
 process.env.CLICKY_HIDE_OVERLAY = '1';
 process.env.CLICKY_ENGINE = 'inproc';
 process.env.CLICKY_TEST_HOOKS = '1';
@@ -24,14 +28,16 @@ const arg = (name) => {
 const userData = arg('--user-data');
 const modelsDir = arg('--models');
 const only = arg('--only');
+const suite = arg('--suite') ?? 'scenarios';
+const { execSync } = require('child_process');
 if (!userData || !modelsDir) {
   console.error('usage: electron e2e/voice-suite.cjs --user-data <dir> --models <dir> [--only NN]');
   process.exit(2);
 }
 app.setPath('userData', userData);
 
-const scenariosDir = path.join(__dirname, 'scenarios');
-const outDir = path.join(userData, 'e2e-report');
+const scenariosDir = path.join(__dirname, suite === 'stress' ? 'stress' : 'scenarios');
+const outDir = path.join(userData, suite === 'stress' ? 'stress-report' : 'e2e-report');
 fs.mkdirSync(outDir, { recursive: true });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (m) => fs.appendFileSync(path.join(outDir, 'run.log'), `${new Date().toISOString().slice(11, 23)} ${m}\n`);
@@ -41,7 +47,8 @@ const settingsFile = path.join(userData, 'settings.json');
 const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
 Object.assign(settings, {
   onboardingDone: true,
-  sttProvider: 'local',
+  // --stt assemblyai uses the cloud service (the user's live setup) instead of on-device Moonshine.
+  sttProvider: arg('--stt') ?? 'local',
   localSttModel: 'moonshine-tiny',
   ttsProvider: 'system',
   agentEnabled: true,
@@ -77,6 +84,13 @@ function toMic(pcmBytes, rate, noise) {
 }
 
 const norm = (s) => String(s ?? '').toLowerCase();
+const sh = (cmd) => {
+  try {
+    return execSync(cmd, { encoding: 'utf8', timeout: 60_000, shell: 'powershell.exe' }).trim();
+  } catch (e) {
+    return `ERROR ${String(e.stderr || e.message).slice(0, 300)}`;
+  }
+};
 
 function evaluate(sc, r) {
   const e = sc.expect ?? {};
@@ -98,6 +112,19 @@ function evaluate(sc, r) {
     );
     if (!hit) fails.push(`no ${want.kind} action like ${JSON.stringify(want)}`);
   }
+  // Any one of several ways is fine (typing into the site's search, or opening the results URL).
+  if (
+    e.anyAction &&
+    !e.anyAction.some((want) =>
+      r.actions.some(
+        (a) =>
+          a.kind === want.kind &&
+          (!want.url || norm(a.url).includes(norm(want.url))) &&
+          (!want.text || norm(a.text).includes(norm(want.text))),
+      ),
+    )
+  )
+    fails.push(`none of ${JSON.stringify(e.anyAction)}`);
   if (e.noStartMenu && r.actions.some((a) => a.kind === 'keys' && a.keys.length === 1 && a.keys[0] === 'win'))
     fails.push('opened the Start menu');
   if (e.noActions && r.actions.some((a) => a.kind !== 'keys' || a.keys[0] !== 'mask'))
@@ -110,6 +137,24 @@ function evaluate(sc, r) {
   if (e.noTyping && r.typed.trim()) fails.push(`typed "${r.typed}"`);
   const said = norm(r.said.join(' '));
   for (const w of e.said ?? []) if (!said.includes(norm(w))) fails.push(`said "${r.said.join(' ')}" (missing "${w}")`);
+  if (e.saidAny && !e.saidAny.some((x) => said.includes(norm(x))))
+    fails.push(`said "${r.said.join(' ')}" (none of ${e.saidAny.join(', ')})`);
+  if (e.agentDone && r.outcome !== 'answered')
+    fails.push(`agent did not finish (${r.timedOut ? 'timed out' : r.detail || r.outcome || 'no outcome'})`);
+  if (e.askedRisky && !r.asked.length) fails.push('never asked before a risky step');
+  if (e.notAsked && r.asked.length) fails.push(`asked: ${r.asked.join('; ')}`);
+  if (e.sheet) {
+    const ok = r.sheets.find((x) => x.rows >= (e.sheet.minRows ?? 1) && fs.existsSync(x.path));
+    if (!ok) fails.push(`no spreadsheet with ${e.sheet.minRows ?? 1}+ rows (${JSON.stringify(r.sheets)})`);
+  }
+  for (const v of e.verify ?? []) {
+    const out = r.verified[v.cmd] ?? '';
+    const bad =
+      (v.contains !== undefined && !norm(out).includes(norm(v.contains))) ||
+      (v.equals !== undefined && out !== v.equals) ||
+      (v.inSaid && (!out || out.startsWith('ERROR') || !said.includes(norm(out))));
+    if (bad) fails.push(`check "${v.name}" failed: ${out.slice(0, 200)}`);
+  }
   for (const w of e.remembered ?? [])
     if (!r.notes.some((n) => norm(n).includes(norm(w)))) fails.push(`not remembered: ${w}`);
   return fails;
@@ -130,10 +175,28 @@ app.whenReady().then(async () => {
     c.input.run = async (a) => {
       cur?.actions.push(a.kind === 'click' ? { kind: 'click', target: a.target, at: a.at.global } : a);
       if (cur && a.kind === 'type') cur.typed += a.text;
-      if (cur && (cur.live ?? []).includes(a.kind)) return origRun(a);
+      if (cur && (cur.live === 'all' || (cur.live ?? []).includes(a.kind))) return origRun(a);
     };
-    c.input.writeContext = async () => ({ app: { process: 'notepad', title: 'Untitled - Notepad' }, selection: null });
-    c.input.caret = async () => null;
+    if (suite !== 'stress') {
+      c.input.writeContext = async () => ({
+        app: { process: 'notepad', title: 'Untitled - Notepad' },
+        selection: null,
+      });
+      c.input.caret = async () => null;
+    }
+    // Risky agent steps: allowed only for scenarios that say so (a sandbox), otherwise declined.
+    engine.orchestrator.deps.confirm = async (text) => {
+      cur?.asked.push(text);
+      log(`asked: ${text} -> ${cur?.approve ? 'allow' : 'decline'}`);
+      return !!cur?.approve;
+    };
+    const origLog = engine.orchestrator.deps.log;
+    engine.orchestrator.deps.log = (m) => {
+      if (cur && /^agent /.test(m)) cur.steps.push(m.slice(0, 300));
+      const sheet = /^agent saved a sheet: (.+) \((\d+) rows\)$/.exec(m);
+      if (cur && sheet) cur.sheets.push({ path: sheet[1], rows: Number(sheet[2]) });
+      origLog?.(m);
+    };
     const origPost = engine.opts.post;
     engine.opts.post = (m) => {
       if (cur && m.type === 'overlay' && m.overlay.op === 'point') cur.points.push(m.overlay.label);
@@ -173,14 +236,19 @@ app.whenReady().then(async () => {
       return s;
     };
     let pcm = new Int16Array(0);
+    let realtime = false;
     engine.orchestrator.deps.mic = {
       async start(onFrame) {
         // Feed the prompt as 20 ms frames, a little faster than real time.
         const frame = 320;
+        const t0 = Date.now();
         (async () => {
           for (let i = 0; i < pcm.length; i += frame) {
             onFrame(pcm.subarray(i, i + frame));
-            if ((i / frame) % 10 === 0) await wait(10);
+            // Real time by the wall clock (timers on Windows tick every ~16 ms, so sleeping 20 ms per
+            // frame would fall behind and the key would be released before the speech ends).
+            if (realtime) while ((i + frame) / 16 > Date.now() - t0) await wait(5);
+            else if ((i / frame) % 10 === 0) await wait(10);
           }
         })();
       },
@@ -198,8 +266,14 @@ app.whenReady().then(async () => {
       log(`--- ${f}: ${sc.name}`);
       const t0 = Date.now();
       const before = history.list()[0]?.id;
+      for (const cmd of sc.setup ?? []) log(`setup: ${cmd} -> ${sh(cmd).slice(0, 200)}`);
       cur = {
         live: sc.live,
+        approve: !!sc.approveRisky,
+        asked: [],
+        steps: [],
+        sheets: [],
+        verified: {},
         actions: [],
         typed: '',
         said: [],
@@ -208,15 +282,37 @@ app.whenReady().then(async () => {
         screensSent: 0,
         displays: screen.getAllDisplays().length,
       };
-      const tts = await local.synthesize(voice, sc.say, 1);
-      pcm = toMic(tts.pcm, tts.sampleRate, sc.noise);
-      if (sc.key === 'dictate') engine.dictateDown();
-      else engine.keyDown();
-      await wait((pcm.length / 16000) * 1000 * 0.6 + 400);
-      engine.orchestrator.keyUp();
+      const resting = () => ['idle', 'cancelled', 'error'].includes(engine.orchestrator.state);
+      if (sc.typed) {
+        // Typed like the dashboard box: no speech-to-text in the way of a long instruction.
+        void engine.orchestrator.ask(sc.say, 'typed');
+        await wait(500);
+      } else {
+        // Long prompts: several sentences with real pauses between them, spoken in real time.
+        const parts = [];
+        for (const seg of sc.segments ?? [sc.say]) {
+          const tts = await local.synthesize(voice, seg, 1);
+          parts.push(toMic(tts.pcm, tts.sampleRate, sc.noise), new Int16Array(Math.round(16 * (sc.pauseMs ?? 0))));
+        }
+        pcm = new Int16Array(parts.reduce((n, x) => n + x.length, 0));
+        parts.reduce((at, x) => (pcm.set(x, at), at + x.length), 0);
+        realtime = !!sc.realtime;
+        log(`audio ${(pcm.length / 16000).toFixed(1)} s`);
+        if (process.env.CLICKY_DUMP_PCM) fs.writeFileSync(process.env.CLICKY_DUMP_PCM, Buffer.from(pcm.buffer));
+        if (sc.key === 'dictate') engine.dictateDown();
+        else engine.keyDown();
+        await wait((pcm.length / 16000) * 1000 * (realtime ? 1 : 0.6) + 400);
+        engine.orchestrator.keyUp();
+      }
       // Wait for the interaction (and any agent run) to finish.
-      for (let i = 0; i < 1800 && !['idle', 'cancelled', 'error'].includes(engine.orchestrator.state); i++)
-        await wait(100);
+      for (let i = 0; i < (sc.maxMinutes ?? 3) * 600 && !resting(); i++) await wait(100);
+      if (!resting()) {
+        log('timed out; cancelling');
+        cur.timedOut = true;
+        engine.orchestrator.cancel('suite timeout');
+        await wait(1500);
+      }
+      for (const v of sc.expect?.verify ?? []) cur.verified[v.cmd] = sh(v.cmd);
       await wait(400);
       const entry = history.list()[0];
       const fresh = entry && entry.id !== before ? entry : null;
@@ -242,10 +338,14 @@ app.whenReady().then(async () => {
           points: r.points,
           actions: r.actions,
           typed: r.typed,
+          asked: r.asked,
+          sheets: r.sheets,
+          verified: r.verified,
           fails: r.fails,
         }),
       );
       results.push(r);
+      for (const cmd of sc.cleanup ?? []) log(`cleanup: ${cmd} -> ${sh(cmd).slice(0, 200)}`);
       await wait(800);
     }
   } catch (e) {
@@ -253,12 +353,14 @@ app.whenReady().then(async () => {
   }
   fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(results, null, 1));
   const row = (r) =>
-    `| ${r.file.slice(0, 2)} | ${r.name} | ${r.pass ? 'PASS' : 'FAIL'} | ${(r.heard || '–').replace(/\|/g, '/')} | ${(r.fails.join('; ') || '').replace(/\|/g, '/')} | ${(r.ms / 1000).toFixed(1)} s |`;
+    `| ${r.file.slice(0, 2)} | ${r.name} | ${r.pass ? 'PASS' : 'FAIL'} | ${(r.heard || '–').replace(/\|/g, '/')} | ${(r.fails.join('; ') || '').replace(/\|/g, '/')} | ${r.steps.filter((x) => x.startsWith('agent step')).length} | ${(r.ms / 1000).toFixed(1)} s |`;
   fs.writeFileSync(
     path.join(outDir, 'report.md'),
-    ['| # | Scenario | Result | Heard | Why it failed | Time |', '|---|---|---|---|---|---|', ...results.map(row)].join(
-      '\n',
-    ) + '\n',
+    [
+      '| # | Scenario | Result | Heard | Why it failed | Steps | Time |',
+      '|---|---|---|---|---|---|---|',
+      ...results.map(row),
+    ].join('\n') + '\n',
   );
   app.quit();
 });

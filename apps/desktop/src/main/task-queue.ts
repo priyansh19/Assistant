@@ -1,7 +1,15 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, Notification, powerMonitor } from 'electron';
-import { agentReady, isResting, type AskResult, type InteractionState, type Settings } from '@clicky/core';
+import {
+  agentReady,
+  isResting,
+  quietVerdict,
+  type AskResult,
+  type InteractionState,
+  type QuietSignals,
+  type Settings,
+} from '@clicky/core';
 import { log } from './log';
 
 export interface QueuedTask {
@@ -12,12 +20,23 @@ export interface QueuedTask {
   endedAt?: number;
   /** What Clicky said at the end. */
   summary?: string;
+  /** Set when a routine queued this run. */
+  routineId?: string;
+  /** What the dashboard shows instead of the full run instruction. */
+  label?: string;
+}
+
+export interface TaskFinished {
+  task: QueuedTask;
+  outcome: AskResult['outcome'] | 'none';
 }
 
 export interface TaskQueueDeps {
   settings(): Settings;
   state(): InteractionState;
   ask(question: string): Promise<AskResult | null>;
+  /** What says the user is busy (on a call, sharing the screen): a task never starts then. */
+  quietSignals?(): Promise<QuietSignals>;
 }
 
 /** Run a queued task only after the user has left the mouse and keyboard alone this long. */
@@ -36,6 +55,11 @@ export class TaskQueue {
   private running: QueuedTask | null = null;
   private timer: NodeJS.Timeout | null = null;
   private readonly listeners = new Set<() => void>();
+  /** Why the last start was held back, so the log says it once, not every tick. */
+  private heldBack = '';
+  /** A tick is checking whether the user is busy (ticks overlap while it waits). */
+  private checking = false;
+  private readonly finished = new Set<(f: TaskFinished) => void>();
 
   constructor(private readonly deps: TaskQueueDeps) {
     try {
@@ -66,6 +90,12 @@ export class TaskQueue {
     return () => this.listeners.delete(fn);
   }
 
+  /** A task ended (done, failed or stopped). */
+  onFinished(fn: (f: TaskFinished) => void): () => void {
+    this.finished.add(fn);
+    return () => this.finished.delete(fn);
+  }
+
   list(): QueuedTask[] {
     return this.tasks;
   }
@@ -74,10 +104,23 @@ export class TaskQueue {
     return this.running;
   }
 
-  add(goal: string): QueuedTask | null {
-    const g = goal.trim().slice(0, 300);
+  add(goal: string, extra: { routineId?: string; label?: string } = {}): QueuedTask | null {
+    // Routine runs carry their own instructions, so they may be longer than a typed task.
+    const g = goal.trim().slice(0, extra.routineId ? 2000 : 300);
     if (g.length < 3) return null;
-    const t: QueuedTask = { id: `t${Date.now().toString(36)}`, goal: g, status: 'queued', addedAt: Date.now() };
+    if (
+      extra.routineId &&
+      this.tasks.some((t) => t.routineId === extra.routineId && (t.status === 'queued' || t.status === 'running'))
+    )
+      return null;
+    const t: QueuedTask = {
+      id: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e3).toString(36)}`,
+      goal: g,
+      status: 'queued',
+      addedAt: Date.now(),
+      ...(extra.routineId ? { routineId: extra.routineId } : {}),
+      ...(extra.label ? { label: extra.label } : {}),
+    };
     this.tasks.unshift(t);
     this.save();
     return t;
@@ -113,10 +156,25 @@ export class TaskQueue {
     const next = [...this.tasks].reverse().find((t) => t.status === 'queued' && (!onlyId || t.id === onlyId));
     if (!next) return;
     if (!force && powerMonitor.getSystemIdleTime() < IDLE_S) return;
+    // On a call or sharing the screen: a task moving the mouse would be seen by everyone. Even a
+    // task started by hand waits (a check that fails counts as quiet).
+    if (this.checking) return;
+    this.checking = true;
+    const quiet = this.deps.quietSignals
+      ? quietVerdict(await this.deps.quietSignals().catch(() => ({ windows: [], screenShared: true })))
+      : { quiet: false as const };
+    this.checking = false;
+    if (quiet.quiet) {
+      if (this.heldBack !== quiet.reason) log.info(`background task waiting: ${quiet.reason}`);
+      this.heldBack = quiet.reason;
+      return;
+    }
+    this.heldBack = '';
+    if (this.running) return;
     this.running = next;
     next.status = 'running';
     this.save();
-    this.notify('Clicky is starting a task', `${next.goal}. Press Esc to stop it.`);
+    this.notify('Clicky is starting a task', `${next.label ?? next.goal}. Press Esc to stop it.`);
     log.info(`background task started: ${next.goal}`);
     let r: AskResult | null = null;
     try {
@@ -129,10 +187,11 @@ export class TaskQueue {
     next.endedAt = Date.now();
     this.running = null;
     this.save();
-    log.info(`background task ${next.status}: ${next.goal}`);
+    log.info(`background task ${next.status}: ${next.label ?? next.goal}`);
+    for (const fn of this.finished) fn({ task: next, outcome: r?.outcome ?? 'none' });
     this.notify(
       next.status === 'done' ? 'Task done' : next.status === 'stopped' ? 'Task stopped' : "Task didn't finish",
-      next.summary || next.goal,
+      next.summary || next.label || next.goal,
     );
   }
 

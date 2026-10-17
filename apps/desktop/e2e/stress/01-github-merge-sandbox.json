@@ -1,0 +1,20 @@
+{
+  "name": "Comet → GitHub → sandbox repo → merge every pending PR",
+  "say": "Clicky, open Comet, go to GitHub, open my clicky-sandbox repository, find the pending pull requests and merge them all.",
+  "approveRisky": true,
+  "maxMinutes": 12,
+  "setup": ["powershell -NoProfile -File e2e/stress/sandbox-prs.ps1 -Repo priyansh19/clicky-sandbox -User priyansh19"],
+  "expect": {
+    "agentDone": true,
+    "askedRisky": true,
+    "verify": [
+      {
+        "name": "no open PRs left in the sandbox",
+        "cmd": "$env:GH_TOKEN=(gh auth token --user priyansh19); gh pr list -R priyansh19/clicky-sandbox --state open --json number --jq length",
+        "equals": "0"
+      }
+    ]
+  },
+  "typed": true,
+  "live": "all"
+}

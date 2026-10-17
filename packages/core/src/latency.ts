@@ -22,6 +22,8 @@ export const LATENCY_MARKS = [
   /** The first speakable chunk went to the voice. */
   'firstSpeech',
   'firstAudio',
+  /** The first thing the user heard: a beat ("Sure, one sec.") or the answer itself. */
+  'firstSound',
   'done',
 ] as const;
 
@@ -48,6 +50,8 @@ export interface LatencySummary {
   tokenToAudioMs: number | null;
   /** key-up → first audio: the headline metric */
   keyUpToFirstAudioMs: number | null;
+  /** key-up → first sound of any kind (a beat before slow work, or the answer): what the user perceives */
+  keyUpToFirstSoundMs?: number | null;
   /** key-up → dot starts moving */
   keyUpToPointMs: number | null;
   /** key-down → done */
@@ -71,6 +75,7 @@ export interface LatencySummary {
 /** The metrics shown per stage in the dashboard and printed by `pnpm bench`. */
 export const STAGE_METRICS = [
   'keyUpToFirstAudioMs',
+  'keyUpToFirstSoundMs',
   'transcriptMs',
   'keyUpToRequestMs',
   'modelFirstTokenMs',
@@ -143,6 +148,7 @@ export class LatencyRecorder {
       firstTokenMs: firstToken === null ? null : Math.max(0, firstToken),
       tokenToAudioMs: this.span('firstToken', 'firstAudio'),
       keyUpToFirstAudioMs: this.span('keyUp', 'firstAudio'),
+      keyUpToFirstSoundMs: this.span('keyUp', 'firstSound'),
       keyUpToPointMs: this.span('keyUp', 'firstPoint'),
       totalMs: this.span('keyDown', 'done'),
       sttConnectMs: this.span('keyDown', 'sttReady'),

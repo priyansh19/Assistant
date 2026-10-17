@@ -88,11 +88,12 @@ Rules:
 
 ### 3.2 POINT protocol (blueprint §5)
 
-- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`.
+- Keep the original grammar: `[POINT:x,y:label]`, `[POINT:x,y:label:screenN]`, `[POINT:none]`. Extensions: `[TASK:goal]` (below), and `[TARGET]`, `[HOVER]` and `[DEEP]` (§3.5).
 - **Deviation (speed):** the prompt asks the model to put the tag at the *start* of the response, not the end, so the dot can start moving before the first word is spoken. The parser accepts the tag at either position.
 - A **streaming** parser releases speakable text sentence by sentence and holds back anything that could be the start of a tag, so TTS never speaks tag text.
 - Coordinates are in the coordinate space of the screenshot image sent to the model (after any downscale). Mapping: image px → display physical px → Electron DIP (via `screen` scale factor and display bounds, including negative origins) → overlay window local coords.
 - Validate: known screen index, inside bounds after mapping; otherwise speak the answer and skip pointing (logged, not silent).
+- **Extension (2026-10-12): `[TASK:goal]`.** With agent mode on, the answer model decides whether a request is something to do. If it is, it replies with only `[TASK:goal]`: the request restated in full, with dropped words put back, "this/that/it" resolved from the screen and follow-ups resolved from earlier turns. Nothing is spoken and the goal goes to the agent. This replaces the regex `actionGoal` route and its "Do this for you?" prompt; "Clicky, <request>" still goes straight to the agent with no model call. Reason: without the name the regex sent only 45 of 123 catalogue tasks to the agent, and the model sees the screen. Questions keep `[POINT]` first, so the answer path is not slower; a task routed this way costs one answer-model first token before the agent starts.
 
 ### 3.3 Speed: beat the official Clicky (owner requirement, 2026-10-10)
 
@@ -134,6 +135,41 @@ Responses must start faster than the official macOS Clicky. Speed is a release g
 - **Typed questions and saved actions** reuse the same answer path without the microphone, which also makes the loop testable without speaking.
 - **History is text only** (question, answer, pointed-at label, timing) and opt-out; it feeds follow-up context and saved actions.
 - **`CLICKY_DEMO=1`** swaps in offline providers so the full loop (mic, capture, overlay flight, voice, history) can be smoke-tested on the laptop without keys.
+
+### 3.5 Agent safety layer (2026-10-16)
+
+The official app runs its agents with no sandbox and no approval prompts, so all of its safety sits in its own app code (consent gate, deny lists, done checks, untrusted-data framing). Ours is now built the same way, as pure tested code in `packages/core/src/safety/`, and it replaces the model-only judgement found by the release critique:
+
+- **The app judges every step** (`risk.ts`): safe, confirm, irreversible or forbidden, from the action itself, the window it lands in and the control it targets. The model's `risky` flag can only raise the level. Forbidden steps (passwords, card numbers, security windows, network paths, Ctrl+Alt+Del) end the run and say why.
+- **Confirmations show the real action** ("Press Enter in "Ana - WhatsApp""), never the model's wording. An approval covers that exact step for the current run only. Allow all covers confirm steps for one run and never irreversible ones. The 90 s follow-up window and the similar-step approval memory are removed.
+- **File steps reach only the user's own folders** (`paths.ts`): no network or device paths, system folders, AppData, Startup or Clicky's own data.
+- **Done is checked by the app first** (`done-check.ts`): the plan names what will be true (text, a window, a file), and the app checks it before the model's second look. A check that fails or can't answer is never reported as done for sure, and such runs never become lessons. Shorter routes are kept only when every step really ran and worked.
+- **A ledger of outside actions** (`ledger.ts`) is shown to the model on retries and new approaches; repeating an irreversible step asks again and says it already happened.
+- **Never-touch apps fail closed:** no screenshot, model call or input while one is in front or when the check can't answer, re-checked right before each input.
+- **Outside text is data** (`untrusted.ts`): window titles, controls, notes, skills, lessons and earlier answers go into labelled `<untrusted>` blocks with Clicky's tags defused.
+- **Budgets** (`budget.ts`): after 15 minutes or 120 model calls the run asks before going on. **Quiet gate** (`quiet.ts`): background tasks don't start during calls or screen sharing.
+- **The hold key allows only steps that can be undone**, and not a press within 600 ms of the question showing. Irreversible steps need the Allow button, and turning Allow all on never answers one.
+- **A goal the answer model worked out** ([TASK:…]) still starts without a "Do this?" question (owner decision, kept for speed), but it never relaxes a check: an assistant app "named in the task" still asks before sending.
+- **Long pastes check the focus first**, and a website opened while a never-touch app is in front opens in a new tab. The instruction pack exported for installers is scrubbed (`scripts/scrub.mjs`), and lines that still name the owner are left out.
+### 3.5 Voice and guidance components from the HeyClicky teardown (2026-10-16)
+
+From the reverse engineering of HeyClicky 1.0.53 (sections 2 and 3) and the release critique. None of this touches the task-completion safety layer.
+
+- **Keep the voice path warm** (`keepVoiceWarm`, default on; core `WarmKeeper`). After a press, launch, settings change, PC wake or unlock, the engine keeps the answer-model TLS connection, the ElevenLabs spare socket (refreshed every 110 s, before its 150 s age-out), the speech-recognition token and the hard-question model warm for 10 minutes, with backoff on failure, and for as long as an agent task runs. AssemblyAI sockets are not held open (billed by session time). Reason: the first press after a pause paid a TLS handshake and a new voice socket on the key-up → first audio path.
+- **Spoken beat** (`spokenBeats`, default on; core `beat.ts`). Before a slow path (an agent task, a hard-question answer, a drawing) Clicky says one short line ("On it.", "Let me think.") at once. The lines are pre-rendered by the voice provider while warming, so a beat plays from memory; it is capped at 3 s and the real answer never overlaps it. The time to first sound is logged as a new metric, key-up → first sound (`keyUpToFirstSoundMs`), next to key-up → first audio.
+- **Fast/deep split** (`deepRouting`, default on; `deepModel` setting, empty = the agent model). Questions go to the fast model. A narrow phrase check (`wantsDeep`: "think it through", "pros and cons", "proofread"…) or the fast model's own `[DEEP]` tag, if it is the first thing in the reply, sends the question to the stronger model after a beat. A late `[DEEP]` is ignored. Off for Ollama and demo mode.
+- **Guided walkthroughs** (`guidedWalkthroughs`, default on; core `GuideSession`). Protocol extension: `[TARGET:x,y,r:label:screenN]` (click) and `[HOVER:x,y,r:label:screenN]`, with the radius in thousandths of the screenshot width. The cursor points as for `[POINT]` and the overlay draws a ring. Only the user's own left click inside the ring (or the UI Automation box of the control there), or a hover that rests 0.7 s, advances. Clicky then waits for the screen to settle, captures it again and asks for the next step. A click elsewhere, 45 s untouched, a new question, or switching apps later than 1.5 s after the click ends the walkthrough quietly. A step with no target (for example "type your name") waits up to 2 minutes for "next". There is a hard limit of 8 targets per walkthrough, enforced in code. Hit testing is in physical pixels: main converts the ring with `dipToScreenPoint` and the display scale. **Deviation:** while a walkthrough runs, Clicky captures the screen after the user's click without the key held. Reason: that is how the walkthrough knows the next step. The overlay shows the ring and cursor the whole time, and the capture stays in memory like any other (see `privacy.md`).
+- **Still missing:** `pnpm bench` (the critique's main latency finding) is not built, so the 1.2 s gate is still not measured end to end.
+### 3.6 Helpers, routines, connectors and onboarding (2026-10-16)
+
+Gaps found by reverse engineering HeyClicky 1.0.53 and the pre-release critique, built as pure `core` logic with tests and thin main-process stores:
+
+- **Helpers (named Clickys).** Each has a unique two-word name, a job, and a folder `Documents\Clicky\<Name>` whose `AGENTS.md` is the source of truth for standing preferences and dated notes (newest wins per "Subject:"; secrets refused). "Ask Pitch Lab to …" or "Pitch Lab, …" runs the task as that helper. Notes are framed as background facts that never grant permission. A new helper that duplicates an existing one is refused unless the user insists. Making a helper starts nothing.
+- **Routines.** "Every morning …" sets one up; the run happening now counts as the first. They go through the background task queue (so they inherit its idle and quiet gates), wait for the network instead of failing, retry a transient failure after 15 minutes, and pause after 3 failures in a row. Later runs report only what changed, and retries must not repeat side effects.
+- **Custom connectors (MCP).** Stdio and Streamable HTTP servers, keys in `safeStorage`, https required for remote servers, a save-time check that lists tools. **Not yet:** the agent can't call connector tools; that needs an action in the agent loop that goes through the safety layer's risk checks.
+- **Final-message protocol and turn checks.** Agent summaries are parsed for a short summary, next actions, artifacts and notes, with limits enforced in code; spoken turns are checked against word caps before speaking.
+- **Onboarding state machine** (resume, per-step completion, skip, funnel) and starter-helper suggestions are built and tested; the wizard does not use them yet.
+- **Honest eval scoring.** `scoreRun` counts a success claim with a failed check as false-done, flags typed runs and missing cursor moves, and only an answer-checking oracle can't pass a task. Ten should-not-succeed probes ship with it. A fresh-profile test fails the build if the owner's personal data appears in defaults or core sources.
 
 ## 4. Phases
 

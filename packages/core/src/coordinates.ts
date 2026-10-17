@@ -102,6 +102,31 @@ export function mapPointToDisplay(
 }
 
 /**
+ * Where a global DIP point is on the screenshots: the screen number, its position in thousandths of
+ * that screenshot, and the point on its display. Null when no screenshot covers it.
+ */
+export function placeGlobal(
+  global: { x: number; y: number },
+  captures: readonly CaptureGeometry[],
+): { screen: number; x: number; y: number; point: MappedPoint } | null {
+  for (let i = 0; i < captures.length; i++) {
+    const b = captures[i]?.display.bounds;
+    const id = captures[i]?.display.id;
+    if (!b || id === undefined || b.width <= 0 || b.height <= 0) continue;
+    const lx = global.x - b.x;
+    const ly = global.y - b.y;
+    if (lx < 0 || ly < 0 || lx >= b.width || ly >= b.height) continue;
+    return {
+      screen: i + 1,
+      x: Math.round((lx / b.width) * 1000),
+      y: Math.round((ly / b.height) * 1000),
+      point: { displayId: id, local: { x: lx, y: ly }, global: { ...global } },
+    };
+  }
+  return null;
+}
+
+/**
  * Models give positions as thousandths of the screenshot (0–1000 on each axis; Gemini models do
  * this natively). Convert to that screenshot's pixels before mapping onto the display.
  */

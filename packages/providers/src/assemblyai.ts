@@ -26,6 +26,11 @@ export interface AssemblyAIOptions {
   WebSocket?: WebSocketCtor;
   /** Wait this long after ForceEndpoint for the final turn. */
   finalizeTimeoutMs?: number;
+  /**
+   * Words the recogniser should expect: Clicky's name, the apps on this PC, common commands. It
+   * otherwise drops or mishears them ("Plicky", "make" lost, "open" heard as "an").
+   */
+  keyterms?: readonly string[];
 }
 
 const TOKEN_TTL_S = 600;
@@ -105,7 +110,10 @@ export class AssemblyAIStt implements SttProvider {
     const token = await takeToken(this.fetchImpl, this.opts.apiKey, signal);
     if (signal.aborted) throw new Error('aborted');
 
-    const url = `${WS_URL}?sample_rate=${sampleRate}&encoding=pcm_s16le&format_turns=false&token=${encodeURIComponent(token)}`;
+    const terms = [
+      ...new Set((this.opts.keyterms ?? []).map((t) => t.trim().slice(0, 50)).filter((t) => t.length >= 2)),
+    ].slice(0, 100);
+    const url = `${WS_URL}?sample_rate=${sampleRate}&encoding=pcm_s16le&format_turns=false${terms.length ? `&keyterms_prompt=${encodeURIComponent(JSON.stringify(terms))}` : ''}&token=${encodeURIComponent(token)}`;
     const ws = new this.WS(url);
     ws.binaryType = 'arraybuffer';
 

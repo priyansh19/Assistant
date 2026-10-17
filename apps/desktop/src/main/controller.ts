@@ -1,13 +1,19 @@
 import { app, screen } from 'electron';
+import { join } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
 import {
+  agentReady,
   CREDENTIAL_IDS,
   CURSOR_COLOR_HEX,
   isResting,
-  HOLD_KEY_LABELS,
+  holdKeyLabel,
   requiredCredentials,
   type AskResult,
   type CredentialId,
   type InteractionState,
+  type GuideTarget,
+  type HitArea,
+  type MappedPoint,
   type Settings,
 } from '@clicky/core';
 import { DEMO } from '../engine/demo';
@@ -18,11 +24,17 @@ import type { CredentialStore } from './credential-store';
 import { EngineHost } from './engine-host';
 import { InputHost } from './input-host';
 import { PlaybookStore } from './playbook-store';
+import { SkillStore } from './skill-store';
 import { TaskStrip } from './task-strip';
+import { AllowOrb } from './allow-orb';
 import { StyleStore } from './style-store';
 import { TaskQueue } from './task-queue';
+import { ClickyStore } from './clicky-store';
+import { RoutineStore } from './routine-store';
+import { ConnectorStore } from './connector-store';
 import { LessonStore } from './lesson-store';
 import { Inventory } from './inventory';
+import { keepSketchPicture, renderSvg } from './render-svg';
 import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
@@ -43,6 +55,19 @@ export interface ControllerHooks {
 
 /** A typed question that outlives this is answered with an error rather than left hanging. */
 const ASK_TIMEOUT_MS = 180_000;
+/**
+ * The first-run look-around (the official Clicky's onboarding demo prompt, as a question): one
+ * specific, named thing near the middle of the screen and a few playful words about it.
+ */
+const HELLO_QUESTION =
+  "You're meeting me for the first time. Look around my screen and point at ONE specific thing you can name, " +
+  'near the middle of the screen (not the taskbar, edges or corners): an app, a file name, a word, a picture. ' +
+  "Say only a short, playful three to six word comment about it, all lowercase, without quoting the screen's text.";
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Longest wait for an answer's point to be matched to a real control (the flight takes ~0.4–1.1 s). */
+const SNAP_TIMEOUT_MS = 900;
+/** How long Clicky's cursor takes to fly to a target and settle before the action. */
+const POINT_LAND_MS = 650;
 
 /**
  * Main's side of the interaction loop. The loop itself runs in the engine (architecture §4); this
@@ -67,18 +92,29 @@ export class Controller {
   readonly playbooks = new PlaybookStore();
   readonly style = new StyleStore();
   readonly lessons = new LessonStore();
+  readonly skills = new SkillStore();
   /** Background tasks: run one at a time while the user is away from the mouse. */
   readonly tasks = new TaskQueue({
     settings: () => this.settings.get(),
     state: () => this.current.state,
     ask: (q) => this.ask(q, 'action'),
+    quietSignals: async () => ({ windows: await this.input.windows() }),
   });
+  /** Named helpers, each with a folder and an AGENTS.md. */
+  readonly clickys = new ClickyStore();
+  /** Repeating tasks, run through the background queue. */
+  readonly routines: RoutineStore;
+  /** Custom connectors (MCP servers); keys stay in the credential store. */
+  readonly connectors: ConnectorStore;
   private anchorTimer: NodeJS.Timeout | null = null;
   private readonly strip = new TaskStrip({
     pause: (on) => this.engine.send({ type: 'agent.pause', on }),
     stop: () => this.engine.send({ type: 'cancel', reason: 'stopped from the task strip' }),
     allow: () => this.engine.send({ type: 'agent.allow' }),
+    allowAll: (on) => this.engine.send({ type: 'agent.allowAll', on }),
   });
+  /** Shown while Allow all is on; hovering it offers Turn off. */
+  private readonly orb = new AllowOrb(() => this.engine.send({ type: 'agent.allowAll', on: false }));
 
   constructor(
     platform: Platform,
@@ -89,6 +125,17 @@ export class Controller {
     private readonly worker: WorkerHost,
   ) {
     this.engine = new EngineHost(platform, worker);
+    this.routines = new RoutineStore({
+      tasks: this.tasks,
+      agentReady: () => agentReady(this.settings.get()),
+      busy: () => !isResting(this.current.state),
+      // The shared quiet gate (calls, presentations, Focus) belongs to the safety layer; until it
+      // lands, routines still only run through the idle-only background queue.
+      quiet: () => false,
+      clickys: () => new Set(this.clickys.list().map((c) => c.slug)),
+      clickyName: (slug) => this.clickys.get(slug)?.name,
+    });
+    this.connectors = new ConnectorStore();
     const driver = platform.createInputDriver();
     this.inventory = new Inventory(driver);
     this.input = new InputHost(driver, (name) => this.inventory.find(name));
@@ -99,6 +146,18 @@ export class Controller {
       log.info(`click target "${label}" moved; clicking it at its live position`);
       this.overlays.point({ displayId: d.id, local, global: at }, label);
     };
+    // Clicky's cursor flies to where it's about to act (opening, closing, typing) and lands first.
+    this.input.pointAt = async (p, label) => {
+      const at = screen.screenToDipPoint(p);
+      const d = screen.getDisplayNearestPoint(at);
+      log.info(`cursor to "${label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
+      this.overlays.point(
+        { displayId: d.id, local: { x: at.x - d.bounds.x, y: at.y - d.bounds.y }, global: at },
+        label,
+      );
+      await new Promise((r) => setTimeout(r, POINT_LAND_MS));
+    };
+    this.input.watchUse();
     this.engine.onMessage((msg) => this.onEngine(msg));
     // The overlay waveform: levels come from the media renderer through main, only while listening.
     worker.on((e) => {
@@ -117,10 +176,16 @@ export class Controller {
     this.style.onChange(push);
     this.lessons.onChange(push);
     this.inventory.onChange(push);
+    this.skills.onChange(push);
+    this.clickys.onChange(push);
+    this.routines.onChange(push);
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
+    this.routines.start();
     this.inventory.start();
+    void this.checkAltGr();
+    this.skills.start();
   }
 
   private config(): EngineConfig {
@@ -141,6 +206,13 @@ export class Controller {
       lessons: this.lessons.list(),
       notes: this.lessons.notes(),
       inventory: this.inventory.view(),
+      briefing: this.skills.briefing(),
+      skills: this.skills.list(),
+      outputDir: join(app.getPath('documents'), 'Clicky'),
+      dataDir: app.getPath('userData'),
+      clickys: this.clickys.list(),
+      clickyWorkspaces: this.clickys.workspaces(),
+      routineTitles: this.routines.titlesByOwner(),
     };
   }
 
@@ -169,11 +241,18 @@ export class Controller {
         if (o.op === 'state') this.overlays.state(o.state);
         else if (o.op === 'point') {
           log.info(
-            `overlay point on display ${o.target.displayId} at ${Math.round(o.target.local.x)},${Math.round(o.target.local.y)} "${o.label}"`,
+            `overlay point on display ${o.target.displayId} at ${Math.round(o.target.local.x)},${Math.round(o.target.local.y)} (screen ${Math.round(o.target.global.x)},${Math.round(o.target.global.y)}) "${o.label}"`,
           );
           this.overlays.point(o.target, o.label);
-        } else if (o.op === 'draw') this.overlays.draw(o.shape);
-        else if (o.op === 'message') this.overlays.message(o.text, o.kind);
+          if (o.snap) this.snapPoint(o.target, o.label);
+        } else if (o.op === 'draw') {
+          // One line per mark, so the drawing suite can check placement from the log.
+          const pts = o.shape.points.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`).join(' ');
+          log.info(
+            `overlay draw ${o.shape.kind} on display ${o.shape.displayId} at ${pts}${o.shape.r !== undefined ? ` r=${Math.round(o.shape.r)}` : ''} "${o.shape.label}"`,
+          );
+          this.overlays.draw(o.shape);
+        } else if (o.op === 'message') this.overlays.message(o.text, o.kind);
         return;
       }
       case 'record':
@@ -191,6 +270,12 @@ export class Controller {
         return this.hooks.beforeListen?.();
       case 'keyTest':
         return this.keyTest?.(msg.down, msg.key);
+      case 'keyRecorded': {
+        const done = this.keyRecorded;
+        this.keyRecorded = null;
+        done?.(msg.key);
+        return;
+      }
       case 'askResult': {
         const done = this.asks.get(msg.id);
         this.asks.delete(msg.id);
@@ -206,6 +291,7 @@ export class Controller {
       case 'capturePlan':
         // Keep Clicky's own notch out of the screenshot the model sees.
         this.strip.hideForCapture();
+        this.orb.hideForCapture();
         this.planner.plan(msg.allDisplays).then(
           (plan) => this.engine.send({ type: 'capturePlan.reply', id: msg.id, plan }),
           (e: unknown) =>
@@ -229,14 +315,53 @@ export class Controller {
           .catch(() => ({ app: null, selection: null }))
           .then((context) => this.engine.send({ type: 'writeContext.reply', id: msg.id, context }));
         return;
+      case 'elements':
+        void this.input
+          .elements()
+          .then((elements) => this.engine.send({ type: 'elements.reply', id: msg.id, elements }));
+        return;
+      case 'renderSketch':
+        void renderSvg(msg.svg).then((png) => {
+          // The newest drawings are kept as pictures too, for the dashboard and for reviewing tests.
+          if (png) keepSketchPicture(png);
+          this.engine.send({ type: 'renderSketch.reply', id: msg.id, png });
+        });
+        return;
+      case 'otherAgent':
+        void this.input.otherAgent().then((text) => this.engine.send({ type: 'otherAgent.reply', id: msg.id, text }));
+        return;
+      case 'windows':
+        void this.input.windows().then((windows) => this.engine.send({ type: 'windows.reply', id: msg.id, windows }));
+        return;
       case 'foreground':
         void this.input.foreground().then((app) => this.engine.send({ type: 'foreground.reply', id: msg.id, app }));
+        return;
+      case 'guideArm':
+        void this.armGuide(msg.target).then(
+          (area) => this.engine.send({ type: 'guideArm.reply', id: msg.id, area }),
+          () => this.engine.send({ type: 'guideArm.reply', id: msg.id, area: null }),
+        );
+        return;
+      case 'guideDisarm':
+        this.overlays.guide(null);
         return;
       case 'remember':
         this.lessons.remember(msg.note);
         return;
+      case 'clickyNote': {
+        const refused = this.clickys.note(msg.slug, msg.note);
+        if (refused) log.info(`helper note not kept: ${refused}`);
+        return;
+      }
+      case 'clickyRestore':
+        this.clickys.setArchived(msg.slug, false);
+        return;
+      case 'routineCreate':
+        this.routines.create({ title: msg.title, task: msg.task, cadence: msg.cadence, owner: msg.owner }, true);
+        return;
       case 'agentLesson':
         this.lessons.add(msg.lesson);
+        this.skills.learn(msg.lesson);
         return;
       case 'styleLearned':
         this.style.learn(msg.context, { notes: msg.notes, examples: msg.examples });
@@ -254,11 +379,25 @@ export class Controller {
         });
         return;
       case 'agentAsk':
-        if (msg.text) this.tasks.needsApproval(msg.text);
+        if (msg.text) {
+          this.tasks.needsApproval(msg.text);
+          // A task waiting on the user's OK is easy to miss when they've looked away.
+          const sound = this.settings.get().cueSound;
+          if (sound !== 'off') this.worker.send({ op: 'cue', kind: 'ask', sound });
+        }
         if (msg.text !== null || this.strip.visible) this.strip.update({ ask: msg.text });
         return;
+      case 'allowAll':
+        if (msg.on) this.orb.show();
+        else this.orb.hide();
+        if (this.strip.visible || msg.on) this.strip.update({ allowAll: msg.on });
+        return;
       case 'agentPaused':
-        this.strip.update({ paused: msg.on, pausedForUser: msg.on && msg.reason === 'user' });
+        this.strip.update({
+          paused: msg.on,
+          pausedForUser: msg.on && msg.reason === 'user',
+          pausedForAgent: msg.on && msg.reason === 'agent',
+        });
         return;
       case 'caretAnchor':
         if (this.anchorTimer) clearTimeout(this.anchorTimer);
@@ -281,7 +420,7 @@ export class Controller {
   }
 
   private holdKeyLabel(): string {
-    return HOLD_KEY_LABELS[this.settings.get().holdKey];
+    return holdKeyLabel(this.settings.get().holdKey);
   }
 
   get state(): InteractionState {
@@ -313,8 +452,8 @@ export class Controller {
   /** Idle-time preparation for the next question (e.g. a streaming token). Never throws. */
   prewarm(): void {
     this.engine.send({ type: 'prewarm' });
-    const s = this.settings.get();
-    if (s.dictationKey !== 'off' || s.agentEnabled) this.input.warm();
+    // Always: answers use it to land the pointer on the real control.
+    this.input.warm();
   }
 
   /** Key sounds: one as listening starts, one when the key is let go. */
@@ -329,6 +468,43 @@ export class Controller {
   playCue(sound: 'soft' | 'bubble' | 'glass'): void {
     this.worker.send({ op: 'cue', kind: 'start', sound });
     setTimeout(() => this.worker.send({ op: 'cue', kind: 'end', sound }), 450);
+  }
+
+  private keyRecorded: ((key: string | null) => void) | null = null;
+
+  /**
+   * Right Alt is AltGr on many keyboards (Italian, German, French: it types @ and €), so holding it
+   * to write clashes with typing. Checked once: the writing key moves to a key that's free.
+   */
+  private async checkAltGr(): Promise<void> {
+    const marker = join(app.getPath('userData'), '.altgr-checked');
+    if (existsSync(marker)) return;
+    const s = this.settings.get();
+    try {
+      const altGr = await this.input.usesAltGr();
+      writeFileSync(marker, String(altGr));
+      const uses = (k: string): boolean => s.holdKey === k || s.dictationKey === k;
+      if (!altGr || !uses('RightAlt')) return;
+      const free = !uses('RightCtrl') ? 'RightCtrl' : 'F9';
+      if (s.dictationKey === 'RightAlt') this.settings.update({ dictationKey: free });
+      else this.settings.update({ holdKey: free });
+      this.overlays.message(
+        `Right Alt types characters on your keyboard (AltGr), so Clicky now uses ${holdKeyLabel(free)} instead. Change it in Settings.`,
+        'info',
+      );
+      log.info(`AltGr keyboard: moved Right Alt to ${free}`);
+    } catch (e) {
+      log.warn('could not check the keyboard layout', String(e));
+    }
+  }
+
+  /** Settings "Record keys": the next key combination pressed, or null (Esc or nothing pressed). */
+  recordKeys(): Promise<string | null> {
+    this.keyRecorded?.(null);
+    return new Promise((resolve) => {
+      this.keyRecorded = resolve;
+      this.engine.send({ type: 'keyRecord' });
+    });
   }
 
   /** Report hold-key presses to the setup wizard instead of starting a question. */
@@ -379,6 +555,99 @@ export class Controller {
     });
   }
 
+  /**
+   * The answer model's point is a guess from a downscaled screenshot. While the triangle is still in
+   * the air, look the named control up with UI Automation and, if it's close by, land on it instead.
+   */
+  private snapPoint(target: MappedPoint, label: string): void {
+    const id = this.current.interactionId;
+    const started = Date.now();
+    const snapped = this.input.snap(label, target.global, SNAP_TIMEOUT_MS).catch(() => null);
+    this.lastSnap = { label, global: target.global, at: snapped };
+    void snapped.then((at) => {
+      if (this.current.interactionId !== id) return;
+      if (!at) {
+        log.info(
+          `point "${label}": no matching control near it, kept the model's position (${Date.now() - started} ms)`,
+        );
+        return;
+      }
+      const d = screen.getDisplayNearestPoint(at);
+      if (d.id !== target.displayId) return;
+      log.info(
+        `point "${label}" snapped to the control at ${Math.round(at.x)},${Math.round(at.y)} (was ${Math.round(target.global.x)},${Math.round(target.global.y)}, ${Date.now() - started} ms)`,
+      );
+      this.overlays.point(
+        { displayId: d.id, local: { x: at.x - d.bounds.x, y: at.y - d.bounds.y }, global: at },
+        label,
+      );
+    });
+  }
+
+  /** The last point's control lookup, so a walkthrough ring on the same spot reuses it. */
+  private lastSnap: {
+    label: string;
+    global: { x: number; y: number };
+    at: Promise<{ x: number; y: number } | null>;
+  } | null = null;
+
+  /**
+   * A walkthrough step: ring it on its display and tell the engine where a click counts. The ring
+   * sits on the real control when UI Automation finds it nearby (the same lookup the point used),
+   * and the hit area is in physical screen pixels, the space the mouse hook reports clicks in.
+   */
+  private async armGuide(target: GuideTarget): Promise<HitArea | null> {
+    const display = screen.getAllDisplays().find((d) => d.id === target.at.displayId);
+    if (!display) return null;
+    const near = (a: { x: number; y: number }, b: { x: number; y: number }): boolean =>
+      Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1;
+    const lookup =
+      this.lastSnap && this.lastSnap.label === target.label && near(this.lastSnap.global, target.at.global)
+        ? this.lastSnap.at
+        : this.input.snap(target.label, target.at.global, SNAP_TIMEOUT_MS).catch(() => null);
+    const snapped = await lookup;
+    const b = display.bounds;
+    const inside = (p: { x: number; y: number }): boolean =>
+      p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height;
+    const centre = snapped && inside(snapped) ? snapped : target.at.global;
+    this.overlays.guide({
+      displayId: display.id,
+      x: centre.x - b.x,
+      y: centre.y - b.y,
+      r: target.radius,
+      label: target.label,
+      hover: target.kind === 'hover',
+    });
+    const phys = screen.dipToScreenPoint(centre);
+    log.info(
+      `walkthrough ring "${target.label}" on display ${display.id} at ${Math.round(centre.x)},${Math.round(centre.y)}${snapped && centre === snapped ? ' (snapped to the control)' : ''}, radius ${Math.round(target.radius)}`,
+    );
+    return { x: phys.x, y: phys.y, r: target.radius * display.scaleFactor };
+  }
+
+  /**
+   * "Meet Clicky", after setup and from the tray (the official Clicky's first run, without its video):
+   * it says hi beside the pointer, looks around the screen and flies to one specific thing with a
+   * playful comment, then shows how to start. Skips the look-around until the API keys are in.
+   */
+  async sayHello(): Promise<void> {
+    if (this.greeting) return;
+    this.greeting = true;
+    try {
+      this.overlays.message("Hey! I'm Clicky.", 'info');
+      await wait(2600);
+      if (this.missingKeys().length === 0 && isResting(this.current.state)) {
+        const r = await this.ask(HELLO_QUESTION, 'action');
+        if (r?.outcome === 'answered') await wait(1200);
+      }
+      if (isResting(this.current.state))
+        this.overlays.message(`Hold ${this.holdKeyLabel()} and introduce yourself.`, 'info');
+    } finally {
+      this.greeting = false;
+    }
+  }
+  private greeting = false;
+
   /** Voice preview for the dashboard. */
   speakSample(): Promise<void> {
     const id = this.nextId++;
@@ -397,9 +666,13 @@ export class Controller {
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
     this.tasks.stop();
+    this.routines.stop();
+    void this.connectors.closeAll();
     this.inventory.stop();
+    this.skills.stop();
     this.engine.stop();
     this.strip.destroy();
+    this.orb.destroy();
     this.input.dispose();
   }
 }

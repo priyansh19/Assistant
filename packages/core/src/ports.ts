@@ -4,6 +4,7 @@
  */
 
 import type { CaptureGeometry, MappedPoint } from './coordinates.js';
+import type { GuideTarget, HitArea } from './guide.js';
 import type { InteractionState } from './interaction.js';
 import type { MappedShape } from './shapes.js';
 import type { ImageInput } from './providers.js';
@@ -31,7 +32,11 @@ export interface MicPort {
 
 export interface OverlayPort {
   state(state: InteractionState): void;
-  point(target: MappedPoint, label: string): void;
+  /**
+   * Fly the companion to a point. `snap`: the point is the answer model's guess at a named control,
+   * so the app may move it onto that control's real position (agent clicks look theirs up already).
+   */
+  point(target: MappedPoint, label: string, opts?: { snap?: boolean }): void;
   /** Draw an arrow, box or circle on the screen (optional UI). */
   draw?(shape: MappedShape): void;
   /** A short message near the cursor, e.g. an error the user can act on. */
@@ -44,9 +49,22 @@ export interface OverlayPort {
 export type InputAction =
   /** `target` names what's being clicked, so the live position can be looked up at click time. */
   | { kind: 'click'; at: MappedPoint; button: 'left' | 'right'; count: 1 | 2; target?: string }
-  /** Open an installed app by name, a website (default browser) or a folder or file. */
-  | { kind: 'open'; app?: string; url?: string; path?: string }
+  /**
+   * Open an installed app by name, a website (default browser) or a folder or file. `newTab`: never
+   * reuse the tab in front (it shows an app on the never-touch list).
+   */
+  | { kind: 'open'; app?: string; url?: string; path?: string; newTab?: boolean }
+  /** Close a top-level window by its title (the app may still ask to save). */
+  | { kind: 'close'; title: string }
+  /** Find a control in the window in front by name (waiting a moment for it), then click it or put text in it. */
+  | { kind: 'control'; name: string; controlKind?: string; op: 'click' | 'double' | 'right' | 'set'; text?: string }
+  /** Close a browser tab by (part of) its title, in the window whose title matches `window` (or the one in front). */
+  | { kind: 'closeTab'; window: string; tab: string }
+  /** Act on control number `id` from the last list of controls (click it, or set its text). */
+  | { kind: 'element'; id: number; op: 'click' | 'double' | 'right' | 'set'; text?: string }
   | { kind: 'scroll'; at: MappedPoint; /** Wheel notches; positive scrolls down. */ amount: number }
+  /** Hold the left button and move through these points, then let go (drawing in Paint, sliders). */
+  | { kind: 'drag'; path: MappedPoint[] }
   | { kind: 'type'; text: string }
   /** Delete this many characters before the text cursor (undo of a write). */
   | { kind: 'backspace'; count: number }
@@ -56,4 +74,18 @@ export type InputAction =
 export interface InputPort {
   /** Resolves when the OS has received the input. */
   run(action: InputAction, signal: AbortSignal): Promise<void>;
+}
+
+/** Guided walkthroughs: ring a target on screen and say where clicks count. */
+export interface GuidePort {
+  /**
+   * Show the ring for this step and return where a click counts, in the coordinate space of the
+   * mouse events the app passes to Orchestrator.userInput (the app may snap the centre onto the
+   * real control). Null if the target can't be shown (its display is gone).
+   */
+  arm(target: GuideTarget): Promise<HitArea | null>;
+  /** Take the ring down. */
+  disarm(): void;
+  /** The process name of the app in front, if the app can tell. */
+  foreground?(): Promise<string | null>;
 }
