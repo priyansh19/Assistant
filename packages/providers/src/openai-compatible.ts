@@ -64,7 +64,7 @@ export class OpenAICompatibleChat implements VisionChatProvider {
       authorization: `Bearer ${this.opts.apiKey}`,
       'content-type': 'application/json',
       ...(this.opts.id === 'openrouter'
-        ? { 'HTTP-Referer': 'https://github.com/priyansh19/Assistant', 'X-Title': 'Clicky' }
+        ? { 'HTTP-Referer': 'https://github.com/priyansh19/OpenClicky', 'X-Title': 'Clicky' }
         : {}),
     };
   }

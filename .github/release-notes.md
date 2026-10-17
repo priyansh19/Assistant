@@ -21,6 +21,7 @@ There are no signing certificates yet, so Windows and macOS warn before the firs
 2. If macOS still says the app "is damaged and can't be opened", run this in Terminal once and open it again:
    `xattr -cr /Applications/Clicky.app`
 3. Allow **Microphone**, **Screen Recording** and **Accessibility** for Clicky when asked (System Settings > Privacy & Security). Clicky needs Accessibility to notice the hold-to-talk key.
+4. On a Mac the default talk key is **Right Command** (the "Right Ctrl" setting). Right Option, Caps Lock and the F-keys work too.
 
 **Linux.** AppImage: `chmod +x Clicky-*.AppImage` and run it. Debian/Ubuntu: `sudo apt install ./Clicky-*-linux-amd64.deb`. Clicky needs an X11 session; Wayland is not supported.
 

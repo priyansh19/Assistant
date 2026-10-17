@@ -37,7 +37,7 @@ export function demoChat(): VisionChatProvider {
               'Thanks so much for this, ',
               'I really appreciate it. ',
               'Quick question: what do you mainly use it for?',
-              '\n\nBest,\nPriyansh',
+              '\n\nBest,\nAlex',
               '\n[SAY:I wrote a short thank-you reply.]',
             ];
         for (const p of parts) {

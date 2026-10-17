@@ -36,6 +36,8 @@ export interface Platform {
    * keycodes and a label like "Win + Alt". Null if nothing is pressed within the time limit.
    */
   recordKeys(timeoutMs: number): Promise<{ codes: number[]; label: string } | null>;
+  /** Ask the OS for the permissions Clicky needs, once at startup in the main process. */
+  prepare(): void;
   /** Mouse and keyboard injection; null where the OS doesn't allow it. */
   createInputDriver(): InputDriver | null;
   /** Make a freshly created overlay window cover `bounds` exactly, working around OS quirks. */

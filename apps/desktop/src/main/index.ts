@@ -44,6 +44,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     log.info(`Clicky ${app.getVersion()} starting`);
     const platform = getPlatform();
+    platform.prepare();
     const settings = new SettingsStore();
     const credentials = new CredentialStore();
     const history = new HistoryStore();

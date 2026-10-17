@@ -17,7 +17,7 @@ import { splitWake } from './wake.js';
 export interface AppInfo {
   /** Process name without .exe, lower case, e.g. 'chrome', 'outlook', 'windowsterminal'. */
   process: string;
-  /** Window title, e.g. "Re: Pricing - pgupta@… - Gmail". */
+  /** Window title, e.g. "Re: Pricing - name@… - Gmail". */
   title: string;
 }
 
