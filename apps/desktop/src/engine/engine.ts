@@ -412,7 +412,9 @@ export class Engine {
   private readonly key = (id: CredentialId): string | null => this.config?.keys[id] ?? null;
 
   private chat(): VisionChatProvider {
-    return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(this.cfg().settings, this.key));
+    return (this.providers.chat ??= this.cfg().demo
+      ? demoChat()
+      : createChat(this.cfg().settings, this.key, undefined, this.cfg().localBrain));
   }
 
   private deepChatCache: { key: string; chat: VisionChatProvider } | null = null;
@@ -425,7 +427,7 @@ export class Engine {
   private deepChat(): VisionChatProvider | null {
     const cfg = this.cfg();
     const s = cfg.settings;
-    if (cfg.demo || s.chatProvider === 'ollama') return null;
+    if (cfg.demo || s.chatProvider === 'ollama' || s.chatProvider === 'local') return null;
     const fast = s.chatModel || defaultChatModel(s.chatProvider);
     const model = s.chatProvider === 'openrouter' ? s.deepModel || s.agentModel || AGENT_MODEL : s.deepModel;
     if (!model || model === fast) return null;
@@ -473,9 +475,9 @@ export class Engine {
   }
 
   private localSpeech(): { files: ModelFiles; engine: LocalSpeechEngine } {
-    const dir = this.cfg().modelsDir;
-    if (this.local?.files.root !== dir) {
-      const files = new ModelFiles(dir);
+    const { modelsDir: dir, bundledModelsDir: bundled } = this.cfg();
+    if (this.local?.files.root !== dir || this.local.files.bundled !== bundled) {
+      const files = new ModelFiles(dir, bundled);
       const engine = new LocalSpeechEngine(files, (message) => this.post({ type: 'log', level: 'warn', message }));
       this.local = { files, engine };
     }
@@ -557,7 +559,8 @@ export class Engine {
         if (
           !prev ||
           JSON.stringify(prev.settings) !== JSON.stringify(msg.config.settings) ||
-          !sameKeys(prev, msg.config)
+          !sameKeys(prev, msg.config) ||
+          prev.localBrain.url !== msg.config.localBrain.url
         ) {
           this.providers = {};
           // What was warm belongs to the old providers.
@@ -799,7 +802,7 @@ export class Engine {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 30_000);
     try {
-      const chat = (this.providers.chat ??= createChat(s, this.key));
+      const chat = (this.providers.chat ??= createChat(s, this.key, undefined, this.cfg().localBrain));
       let reply = '';
       for await (const t of chat.stream({
         system: STYLE_PROMPT,
@@ -840,7 +843,9 @@ export class Engine {
       return this.agentChatCache.chat;
     }
     if (this.cfg().demo || s.chatProvider !== 'openrouter' || s.chatModel)
-      return (this.providers.chat ??= this.cfg().demo ? demoChat() : createChat(s, this.key));
+      return (this.providers.chat ??= this.cfg().demo
+        ? demoChat()
+        : createChat(s, this.key, undefined, this.cfg().localBrain));
     const key = `${this.key('openrouter') ?? ''}`;
     if (this.agentChatCache?.key !== key)
       this.agentChatCache = { key, chat: createChat({ ...s, chatModel: AGENT_MODEL }, this.key) };

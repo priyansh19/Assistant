@@ -59,12 +59,14 @@ function fakeHook() {
 }
 
 const config = (over: Partial<EngineConfig> = {}): EngineConfig => ({
-  settings: { ...DEFAULT_SETTINGS, ttsProvider: 'system' },
+  settings: { ...DEFAULT_SETTINGS, chatProvider: 'anthropic', sttProvider: 'assemblyai', ttsProvider: 'system' },
   keys: {},
   missing: [],
   history: [],
   demo: true,
   modelsDir: '/nonexistent/models',
+  bundledModelsDir: '',
+  localBrain: { url: '' },
   playbooks: [],
   style: {},
   lessons: [],

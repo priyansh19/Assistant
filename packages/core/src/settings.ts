@@ -7,7 +7,8 @@
 export const CREDENTIAL_IDS = ['anthropic', 'openrouter', 'openai', 'assemblyai', 'elevenlabs'] as const;
 export type CredentialId = (typeof CREDENTIAL_IDS)[number];
 
-export const CHAT_PROVIDERS = ['anthropic', 'openrouter', 'openai', 'ollama'] as const;
+/** 'local': the open-source vision model that ships inside the installer (no key, works offline). */
+export const CHAT_PROVIDERS = ['local', 'anthropic', 'openrouter', 'openai', 'ollama'] as const;
 export type ChatProviderId = (typeof CHAT_PROVIDERS)[number];
 
 /** 'model': the answer model listens to the recorded audio itself (e.g. Gemini via OpenRouter). */
@@ -198,12 +199,13 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
-  chatProvider: 'anthropic',
+  // A fresh install works with no keys and no downloads: everything below ships in the installer.
+  chatProvider: 'local',
   chatModel: '',
   agentModel: '',
   ollamaUrl: 'http://localhost:11434',
-  sttProvider: 'assemblyai',
-  ttsProvider: 'elevenlabs',
+  sttProvider: 'local',
+  ttsProvider: 'local',
   ttsVoice: '',
   localSttModel: 'auto',
   localVoice: 'piper:en_US-lessac',
@@ -262,8 +264,8 @@ export function agentReady(s: Settings): boolean {
 
 /** Which credential each provider choice needs. `system` TTS needs none. */
 export function requiredCredentials(s: Settings): CredentialId[] {
-  // Ollama runs on this PC and needs no key.
-  const ids = new Set<CredentialId>(s.chatProvider === 'ollama' ? [] : [s.chatProvider]);
+  // The built-in model and Ollama run on this PC and need no key.
+  const ids = new Set<CredentialId>(s.chatProvider === 'ollama' || s.chatProvider === 'local' ? [] : [s.chatProvider]);
   if (s.sttProvider !== 'model' && s.sttProvider !== 'local') ids.add(s.sttProvider);
   if (s.ttsProvider !== 'system' && s.ttsProvider !== 'local') ids.add(s.ttsProvider);
   return [...ids];

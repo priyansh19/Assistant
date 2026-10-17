@@ -29,6 +29,8 @@ export interface HoldKeyHook {
 
 export interface Platform {
   readonly name: 'win32' | 'darwin' | 'linux';
+  /** Appended to the names of programs Clicky ships (the built-in model's server). */
+  readonly exeSuffix: '.exe' | '';
   /** Hook for the hold-to-talk key chosen in settings. */
   createHoldKeyHook(key: HoldKey, dictationKey?: HoldKey | null): HoldKeyHook;
   /**

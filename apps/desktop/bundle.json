@@ -1,0 +1,101 @@
+{
+  "$comment": "Everything that ships inside the installer, so a new user needs no account, key or download for a first answer. scripts/fetch-bundle.mjs downloads these into bundle/ (verified by SHA-256); electron-builder copies bundle/ into resources/. One NSIS setup .exe can't pass 2 GiB, so the files must stay under budgetBytes. Entries marked extra stay one-click downloads in the app unless --all is passed (which needs a bigger budget). A null sha256 is filled in by running the script once with --pin.",
+  "budgetBytes": 1950000000,
+  "files": [
+    {
+      "id": "llama-server",
+      "what": "llama.cpp server (MIT), Vulkan build: uses the GPU when there is one, else the CPU",
+      "platforms": ["win32"],
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11435/llama-b11435-bin-win-vulkan-x64.zip",
+      "sha256": null,
+      "unpack": "zip",
+      "keep": ["llama-server.exe", "*.dll", "LICENSE*"],
+      "to": "llama"
+    },
+    {
+      "id": "brain-model",
+      "what": "Qwen3-VL 2B Instruct, 4-bit (Apache-2.0): the built-in answer model",
+      "platforms": ["win32"],
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+      "sha256": "089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae",
+      "to": "brain"
+    },
+    {
+      "id": "brain-vision",
+      "what": "Qwen3-VL 2B vision encoder, 8-bit (Apache-2.0): lets the built-in model see the screen",
+      "platforms": ["win32"],
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+      "sha256": "f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82",
+      "to": "brain"
+    },
+    {
+      "id": "moonshine-tiny",
+      "what": "Moonshine Tiny (MIT): on-device speech to text",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2",
+      "sha256": "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_US-lessac",
+      "what": "Piper voice Lessac (US English, female): the default voice",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+      "sha256": "9e3febfacf0abf4270172d2958bcec246032b7e88efc2720840cc80c93de334e",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_US-ryan",
+      "what": "Piper voice Ryan (US English, male)",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ryan-medium.tar.bz2",
+      "sha256": "c546af78b6395b4e7c4ce1ed899438b64426a362f5d4ec5fecd090ded9ad7505",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "parakeet-v3",
+      "extra": true,
+      "what": "Parakeet v3 (CC-BY-4.0): more accurate, 25 languages",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+      "sha256": "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_US-amy",
+      "extra": true,
+      "what": "Piper voice Amy",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-medium.tar.bz2",
+      "sha256": "9a5d1fc497f85e8022b785bff5f8105203b1e33099ee6265203efc70b0cb0264",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_US-joe",
+      "extra": true,
+      "what": "Piper voice Joe",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-joe-medium.tar.bz2",
+      "sha256": "261b903a1fb2ce621e2b5b14233cd41223c3b9f9590f896c11daee4df22d9bd3",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_GB-alan",
+      "extra": true,
+      "what": "Piper voice Alan",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-alan-medium.tar.bz2",
+      "sha256": "a48d4017da0f77668b27bed63fe6e04dd64c6397e1fadad4f460efb0ef7c9012",
+      "unpack": "tar.bz2",
+      "to": "models"
+    },
+    {
+      "id": "en_GB-jenny_dioco",
+      "extra": true,
+      "what": "Piper voice Jenny",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-jenny_dioco-medium.tar.bz2",
+      "sha256": "a0888024569bafbefc05a4b48ddf8419d8dbbf3205f4af37cf7c6f1a87cc20c5",
+      "unpack": "tar.bz2",
+      "to": "models"
+    }
+  ]
+}

@@ -18,6 +18,7 @@
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "fetch-bundle": "pnpm --filter @clicky/desktop fetch-bundle",
     "dist": "pnpm --filter @clicky/desktop dist"
   },
   "devDependencies": {

@@ -1,9 +1,9 @@
-import type { VisionChatProvider, VisionChatRequest } from '@clicky/core';
+import { BUILTIN_BRAIN, type VisionChatProvider, type VisionChatRequest } from '@clicky/core';
 import { ensureOk, prewarmOrigin, ProviderError, sseData, toBase64, type FetchLike } from './http.js';
 
 export interface OpenAICompatibleOptions {
-  /** 'openai' or 'openrouter' (used in errors and defaults). */
-  id: 'openai' | 'openrouter' | 'ollama';
+  /** Used in errors and defaults. 'local' is the built-in model served by llama-server. */
+  id: 'openai' | 'openrouter' | 'ollama' | 'local';
   apiKey: string;
   model?: string;
   fetch?: FetchLike;
@@ -54,7 +54,9 @@ export class OpenAICompatibleChat implements VisionChatProvider {
         ? OPENROUTER_DEFAULT_MODEL
         : opts.id === 'ollama'
           ? OLLAMA_DEFAULT_MODEL
-          : OPENAI_DEFAULT_MODEL);
+          : opts.id === 'local'
+            ? BUILTIN_BRAIN.id
+            : OPENAI_DEFAULT_MODEL);
     this.useDefaults = opts.id === 'openrouter' && !opts.model?.trim();
     this.fetchImpl = opts.fetch ?? ((u, i) => fetch(u, i));
   }

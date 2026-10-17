@@ -1,4 +1,5 @@
 import {
+  BUILTIN_BRAIN,
   ConfigError,
   type CredentialId,
   type Settings,
@@ -45,16 +46,40 @@ function need(getKey: KeyLookup, id: CredentialId): string {
 
 /** The model actually used when the setting is empty. */
 export function defaultChatModel(provider: Settings['chatProvider']): string {
-  return provider === 'anthropic'
-    ? ANTHROPIC_DEFAULT_MODEL
-    : provider === 'openrouter'
-      ? OPENROUTER_DEFAULT_MODEL
-      : OPENAI_DEFAULT_MODEL;
+  return provider === 'local'
+    ? BUILTIN_BRAIN.id
+    : provider === 'anthropic'
+      ? ANTHROPIC_DEFAULT_MODEL
+      : provider === 'openrouter'
+        ? OPENROUTER_DEFAULT_MODEL
+        : OPENAI_DEFAULT_MODEL;
 }
 
-export function createChat(s: Settings, getKey: KeyLookup, fetchImpl?: FetchLike): VisionChatProvider {
+/** The built-in model's server: its address once it answers, else why it can't (shown to the user). */
+export interface LocalBrainInfo {
+  url: string;
+  problem?: string;
+}
+
+export function createChat(
+  s: Settings,
+  getKey: KeyLookup,
+  fetchImpl?: FetchLike,
+  localBrain: LocalBrainInfo = { url: '' },
+): VisionChatProvider {
   const model = s.chatModel || undefined;
   const extra = { ...(model ? { model } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) };
+  if (s.chatProvider === 'local') {
+    if (!localBrain.url)
+      throw new ConfigError(localBrain.problem || 'The built-in AI is still starting. Try again in a few seconds.');
+    // One model ships; a model name typed for another provider must not reach it.
+    return new OpenAICompatibleChat({
+      id: 'local',
+      apiKey: 'local',
+      base: `${localBrain.url}/v1`,
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
+    });
+  }
   if (s.chatProvider === 'anthropic') return new AnthropicChat({ apiKey: need(getKey, 'anthropic'), ...extra });
   if (s.chatProvider === 'ollama')
     return new OpenAICompatibleChat({ id: 'ollama', apiKey: 'ollama', base: `${s.ollamaUrl}/v1`, ...extra });

@@ -49,3 +49,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Models and the llama.cpp server packed into the installer (apps/desktop/scripts/fetch-bundle.mjs)
+apps/desktop/bundle/
+apps/desktop/.bundle-cache/

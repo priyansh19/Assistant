@@ -36,6 +36,7 @@ const NAMES: Record<string, string> = {
 
 export const darwinPlatform: Platform = {
   name: 'darwin',
+  exeSuffix: '',
   ...uiohookKeys(KEYCODES, NAMES),
   createInputDriver: () => null,
   prepare() {

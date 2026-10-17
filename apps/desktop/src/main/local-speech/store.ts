@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { createWriteStream, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
+import { bundlePaths } from '../bundle-paths';
 import { log } from '../log';
 import { findModel } from '../../engine/local-speech/catalog';
 import { ModelFiles } from '../../engine/local-speech/files';
@@ -34,7 +35,7 @@ export class ModelStore extends ModelFiles {
   }
 
   constructor() {
-    super(join(app.getPath('userData'), 'models'));
+    super(join(app.getPath('userData'), 'models'), bundlePaths.models());
   }
 
   state(id: string): DownloadState | undefined {
@@ -47,7 +48,7 @@ export class ModelStore extends ModelFiles {
 
   remove(id: string): void {
     const spec = findModel(id);
-    if (!spec || this.downloads.get(id)?.progress !== undefined) return;
+    if (!spec || this.downloads.get(id)?.progress !== undefined || this.isBundled(spec)) return;
     rmSync(this.dirOf(spec), { recursive: true, force: true });
     this.changed();
   }
@@ -102,7 +103,8 @@ export class ModelStore extends ModelFiles {
     } catch (e) {
       state.error = e instanceof Error ? e.message : String(e);
       log.warn(`model ${id} download failed`, state.error);
-      rmSync(this.dirOf(spec), { recursive: true, force: true });
+      // Only ever the user's own folder: the shipped models are read-only.
+      rmSync(join(this.root, spec.dir), { recursive: true, force: true });
       throw new Error(`Couldn't download ${spec.name}: ${state.error}`, { cause: e });
     } finally {
       rmSync(archive, { force: true });

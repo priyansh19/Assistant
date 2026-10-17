@@ -39,6 +39,7 @@ import type { HistoryStore } from './history-store';
 import { log } from './log';
 import type { OverlayManager } from './overlay-manager';
 import type { SettingsStore } from './settings-store';
+import { LocalBrain } from './local-brain';
 import { ModelStore } from './local-speech/store';
 import type { WorkerHost } from './worker-host';
 
@@ -87,6 +88,8 @@ export class Controller {
   hooks: ControllerHooks = {};
   /** On-device speech model downloads. The models themselves run in the engine. */
   readonly local = { store: new ModelStore() };
+  /** The built-in answer model (shipped in the installer). */
+  readonly brain: LocalBrain;
   private readonly input: InputHost;
   readonly inventory: Inventory;
   readonly playbooks = new PlaybookStore();
@@ -179,6 +182,19 @@ export class Controller {
     this.skills.onChange(push);
     this.clickys.onChange(push);
     this.routines.onChange(push);
+    this.brain = new LocalBrain(platform.exeSuffix);
+    this.brain.onChange(push);
+    // A build without the built-in model (macOS/Linux for now): start new users on OpenRouter.
+    if (
+      this.brain.get().status === 'absent' &&
+      !settings.get().onboardingDone &&
+      settings.get().chatProvider === 'local'
+    )
+      settings.update({ chatProvider: 'openrouter' });
+    // The built-in model holds ~2 GB of memory, so it runs only while it is the answer model.
+    const syncBrain = (): void => this.brain.want(!DEMO && this.settings.get().chatProvider === 'local');
+    settings.onChange(syncBrain);
+    syncBrain();
     this.pushConfig();
     this.engine.start();
     this.tasks.start();
@@ -201,6 +217,8 @@ export class Controller {
       history: this.history.list(),
       demo: DEMO,
       modelsDir: this.local.store.root,
+      bundledModelsDir: this.local.store.bundled,
+      localBrain: { url: this.brain.url(), ...(this.brainProblem() ? { problem: this.brainProblem() ?? '' } : {}) },
       playbooks: this.playbooks.list(),
       style: this.style.get(),
       lessons: this.lessons.list(),
@@ -535,7 +553,28 @@ export class Controller {
       .catch((e: unknown) => log.warn('could not keep the microphone ready', String(e)));
   }
 
+  /** Why the built-in answer model can't answer right now, or null when it can (or isn't in use). */
+  brainProblem(): string | null {
+    if (DEMO || this.settings.get().chatProvider !== 'local') return null;
+    const b = this.brain.get();
+    switch (b.status) {
+      case 'ready':
+        return null;
+      case 'absent':
+        return 'This copy of Clicky has no built-in AI. Pick an online AI service in Clicky > AI and voice.';
+      case 'failed':
+        return `The built-in AI couldn't run: ${b.reason}. Pick an online AI service in Clicky > AI and voice.`;
+      default:
+        return 'The built-in AI is still loading. Ask again in a few seconds.';
+    }
+  }
+
   async ask(question: string, source: 'typed' | 'action'): Promise<AskResult | null> {
+    const brain = this.brainProblem();
+    if (brain) {
+      this.overlays.message(brain, 'info');
+      return { outcome: 'error', answer: '', pointLabel: null, detail: brain };
+    }
     if (this.missingKeys().length) {
       this.overlays.message('Clicky needs your API keys first. Opening Clicky…', 'info');
       this.hooks.needKeys?.();
@@ -665,6 +704,7 @@ export class Controller {
 
   /** App quitting: stop the hook and the engine process. */
   shutdown(): void {
+    this.brain.stop();
     this.tasks.stop();
     this.routines.stop();
     void this.connectors.closeAll();

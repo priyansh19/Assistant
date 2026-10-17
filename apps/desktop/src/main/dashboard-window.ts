@@ -10,6 +10,7 @@ import {
   STYLE_CONTEXTS,
   type StyleContext,
   CREDENTIAL_IDS,
+  BUILTIN_BRAIN,
   isResting,
   STAGE_METRICS,
   type CredentialId,
@@ -401,6 +402,7 @@ export class DashboardWindow {
     this.credentials.onChange(push);
     // Download progress: throttled by the store (4/s).
     this.controller.local.store.onChange(push);
+    this.controller.brain.onChange(push);
     this.controller.playbooks.onChange(push);
     this.controller.style.onChange(push);
     this.controller.tasks.onChange(push);
@@ -569,7 +571,7 @@ export class DashboardWindow {
       keyHints: this.credentials.hints(),
       encryptionAvailable: this.credentials.encryptionAvailable,
       appVersion: app.getVersion(),
-      defaultModel: defaultChatModel(s.chatProvider),
+      defaultModel: s.chatProvider === 'local' ? BUILTIN_BRAIN.name : defaultChatModel(s.chatProvider),
       local: {
         models: [...STT_MODELS, ...VOICES].map((m) => {
           const st = this.controller.local.store.state(m.id);
@@ -580,11 +582,17 @@ export class DashboardWindow {
             desc: m.desc,
             sizeMb: m.sizeMb,
             installed: this.controller.local.store.isInstalled(m),
+            bundled: this.controller.local.store.isBundled(m),
             ...(st && !st.error ? { progress: st.progress } : {}),
             ...(st?.error ? { error: st.error } : {}),
           };
         }),
         openWhispr: openWhisprRunning(),
+      },
+      brain: {
+        included: this.controller.brain.get().status !== 'absent',
+        ready: this.controller.brain.get().status === 'ready',
+        problem: this.controller.brainProblem(),
       },
       state: this.controller.state,
       missing: this.controller.missingKeys(s),

@@ -515,7 +515,9 @@ describe('ElevenLabsTts', () => {
 
 describe('factories', () => {
   it('throw a config error naming the missing key', () => {
-    expect(() => createChat(DEFAULT_SETTINGS, () => null)).toThrow(/Anthropic API key/);
+    expect(() => createChat({ ...DEFAULT_SETTINGS, chatProvider: 'anthropic' }, () => null)).toThrow(
+      /Anthropic API key/,
+    );
     expect(createTts({ ...DEFAULT_SETTINGS, ttsProvider: 'system' }, () => null)).toBeNull();
   });
 });
@@ -532,14 +534,16 @@ describe('pcmToWav', () => {
 describe('OpenRouter defaults', () => {
   const capture = () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const fetchImpl: FetchLike = async (_url, init) => {
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      urls.push(String(url));
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
       });
     };
-    return { bodies, fetchImpl };
+    return { bodies, urls, fetchImpl };
   };
   const req = (audio = false) => ({
     system: 's',
@@ -577,5 +581,23 @@ describe('OpenRouter defaults', () => {
       'google/gemini-2.5-flash-lite',
       'qwen/qwen3.7-flash',
     ]);
+  });
+  it('talks to the built-in model on loopback, with no key and no fallback list', async () => {
+    const c = capture();
+    expect(() => createChat(DEFAULT_SETTINGS, () => null)).toThrow(/still starting/);
+    expect(() => createChat(DEFAULT_SETTINGS, () => null, undefined, { url: '', problem: 'No built-in AI.' })).toThrow(
+      'No built-in AI.',
+    );
+    const chat = createChat(
+      { ...DEFAULT_SETTINGS, chatModel: 'google/gemini-2.5-flash-lite' },
+      () => null,
+      c.fetchImpl,
+      { url: 'http://127.0.0.1:51234' },
+    );
+    await drain(chat.stream(req()));
+    expect(c.urls[0]).toBe('http://127.0.0.1:51234/v1/chat/completions');
+    expect(c.bodies[0]?.['model']).toBe('qwen3-vl-2b-instruct');
+    expect(c.bodies[0]?.['models']).toBeUndefined();
+    expect(c.bodies[0]?.['reasoning']).toBeUndefined();
   });
 });

@@ -285,8 +285,15 @@ function renderControls(s: Settings): void {
   set('ttsVoice', s.ttsVoice);
   $('ttsVoiceRow').hidden = s.ttsProvider !== 'elevenlabs';
   renderLocal(s);
-  if (s.sttProvider === 'model' && s.chatProvider === 'anthropic') {
-    $('model-desc').textContent = "Claude can't listen to audio. Pick OpenRouter, or a speech-to-text service below.";
+  if (s.chatProvider === 'local') {
+    $('model-desc').textContent = !snap.brain.included
+      ? 'Not included in this copy of Clicky. Pick an online service above.'
+      : (snap.brain.problem ??
+        `${snap.defaultModel}, running on this PC. Free and private; slower than an online model on most laptops.`);
+  }
+  if (s.sttProvider === 'model' && (s.chatProvider === 'anthropic' || s.chatProvider === 'local')) {
+    $('model-desc').textContent =
+      "This model can't listen to audio. Pick OpenRouter, or a speech-to-text service below.";
   }
   for (const sw of document.querySelectorAll<HTMLElement>('.swatch')) {
     const on = sw.dataset['color'] === s.cursorColor;
@@ -326,7 +333,7 @@ function renderLocal(s: Settings): void {
         el('span', { className: 'pill', text: m.kind === 'stt' ? 'Speech recognition' : 'Voice' }),
         el('span', { text: `${m.sizeMb} MB` }),
       ]);
-      let status = m.installed ? '✓ Downloaded' : '';
+      let status = m.bundled ? '✓ Included' : m.installed ? '✓ Downloaded' : '';
       if (m.progress !== undefined)
         status = m.progress === null ? 'Unpacking…' : `Downloading ${Math.round(m.progress * 100)}%`;
       if (m.error) status = `Failed: ${m.error}`;
@@ -346,7 +353,7 @@ function renderLocal(s: Settings): void {
           button('Use', 'secondary small', () => save({ localVoice: `piper:${m.id}`, ttsProvider: 'local' })),
         );
       }
-      if (m.installed) {
+      if (m.installed && !m.bundled) {
         buttons.append(
           button('Remove', 'secondary small', async () => {
             await api.localRemove(m.id);
@@ -817,9 +824,15 @@ interface Preset {
 
 const PRESETS: Preset[] = [
   {
+    id: 'builtin',
+    title: 'Free and offline (recommended to start)',
+    desc: 'Nothing to sign up for. The AI, speech recognition and voice that came with Clicky all run on this PC. Answers take a few seconds on most laptops.',
+    settings: { chatProvider: 'local', sttProvider: 'local', ttsProvider: 'local' },
+  },
+  {
     id: 'fastest',
-    title: 'Fastest (recommended): OpenRouter + on-device speech',
-    desc: 'One OpenRouter key. Your voice is recognised and the answer spoken right here on this PC (downloads ~175 MB once).',
+    title: 'Fastest: OpenRouter + on-device speech',
+    desc: 'One OpenRouter key for quicker, sharper answers (about $0.30 per 1,000 questions). Your voice is still recognised and spoken right here on this PC.',
     settings: { chatProvider: 'openrouter', sttProvider: 'local', ttsProvider: 'local' },
   },
   {
@@ -896,6 +909,8 @@ function openWizard(at = 0): void {
   if (at === 0 || !setupStartedAt) setupStartedAt = Date.now();
   focusedStep = -1;
   $('wizard').hidden = false;
+  // A build without bundled speech models fetches them while the user goes through setup.
+  ensureLocalModels(snap.settings);
   document.querySelector('main')?.setAttribute('inert', '');
   document.querySelector('nav')?.setAttribute('inert', '');
   renderWizard();
@@ -987,14 +1002,17 @@ function renderWizard(): void {
         el('li', { text: 'The triangle flies to whatever it is talking about.' }),
       ]),
       el('p', {
-        text: 'Setup: pick your AI services, paste their API keys, and check your microphone. Have your keys ready, or create them as you go.',
+        text: snap.brain.included
+          ? 'Setup takes about a minute: no account, no keys and nothing to download. Everything Clicky needs came with it.'
+          : 'Setup: pick your AI services, paste their API keys, and check your microphone. Have your keys ready, or create them as you go.',
       }),
     );
     next.textContent = 'Get started';
     focusTarget = next;
   } else if (name === 'providers') {
     const current = presetFor(s);
-    const choices = PRESETS.map((p) => {
+    const offered = PRESETS.filter((p) => p.id !== 'builtin' || snap.brain.included);
+    const choices = offered.map((p) => {
       const c = el('button', { className: `choice${current === p.id ? ' selected' : ''}` }, [
         el('div', { className: 'title', text: p.title }),
         el('div', { className: 'desc', text: p.desc }),
@@ -1665,6 +1683,12 @@ function renderModelPick(s: Settings): void {
   const custom = $<HTMLInputElement>('chatModel');
   const openRouter = s.chatProvider === 'openrouter';
   renderAgentModelPick(s);
+  if (s.chatProvider === 'local') {
+    // One model ships with Clicky; there is nothing to pick.
+    pick.hidden = true;
+    custom.hidden = true;
+    return;
+  }
   if (s.chatProvider === 'ollama') {
     // The models installed in Ollama on this PC.
     pick.hidden = false;
@@ -2165,6 +2189,8 @@ async function init(): Promise<void> {
       if (STEPS[step] === 'mic') await stopMicTest();
       if (delta > 0 && step >= STEPS.length - 1) return void (await closeWizard());
       step = Math.min(STEPS.length - 1, Math.max(0, step + delta));
+      // Nothing to paste with the built-in AI and on-device speech: don't show an empty keys page.
+      if (STEPS[step] === 'keys' && requiredCredentials(snap.settings).length === 0) step += delta > 0 ? 1 : -1;
       renderWizard();
     } finally {
       moving = false;
