@@ -29,7 +29,7 @@ Listed in `apps/desktop/bundle.json` and fetched by `pnpm fetch-bundle` (also ru
 | Moonshine Tiny int8 (speech to text) | MIT | ~110 MB |
 | Piper voices Lessac and Ryan (medium) | see each voice's model card | ~130 MB |
 
-Total about 1.85 GB of files; the setup .exe ends up a little over that.
+Total about 1.94 GB of files (the llama.cpp folder is ~95 MB unpacked); the setup .exe ends up close to that after compression.
 
 ## Why not every model
 

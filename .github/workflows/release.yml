@@ -4,7 +4,8 @@ name: Release
 # Nothing runs on merges or pushes to master. Start it only on purpose, one of two ways:
 #   - push a version tag:     git tag v0.2.0 && git push origin v0.2.0
 #   - or run it by hand:      Actions > Release > Run workflow, with a version like 0.2.0
-# The release stays a draft until someone tests the installers and presses Publish on GitHub.
+# The release stays a draft until someone tests the installers and presses Publish on GitHub, unless
+# a manual run sets "publish" (the owner's call: it goes public as soon as the builds finish).
 on:
   push:
     tags: ['v*']
@@ -13,6 +14,10 @@ on:
       version:
         description: 'Version to build, without the v (for example 0.2.0)'
         required: true
+      publish:
+        description: 'Publish the release straight away instead of leaving a draft'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -90,7 +95,7 @@ jobs:
           retention-days: 14
 
   draft-release:
-    name: Draft GitHub release
+    name: GitHub release
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -112,4 +117,6 @@ jobs:
           sed "s/{{VERSION}}/$v/g" .github/release-notes.md > notes.md
           ls -la dist
           # A manual run creates the tag on the commit it built from.
-          gh release create "$tag" dist/* --draft --title "Clicky $v" --notes-file notes.md --target "$GITHUB_SHA"
+          draft="--draft"
+          [ "${{ inputs.publish }}" = "true" ] && draft="--latest"
+          gh release create "$tag" dist/* $draft --title "Clicky $v" --notes-file notes.md --target "$GITHUB_SHA"

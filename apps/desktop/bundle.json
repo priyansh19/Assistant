@@ -1,13 +1,13 @@
 {
   "$comment": "Everything that ships inside the installer, so a new user needs no account, key or download for a first answer. scripts/fetch-bundle.mjs downloads these into bundle/ (verified by SHA-256); electron-builder copies bundle/ into resources/. One NSIS setup .exe can't pass 2 GiB, so the files must stay under budgetBytes. Entries marked extra stay one-click downloads in the app unless --all is passed (which needs a bigger budget). A null sha256 is filled in by running the script once with --pin.",
-  "budgetBytes": 1950000000,
+  "budgetBytes": 1990000000,
   "files": [
     {
       "id": "llama-server",
       "what": "llama.cpp server (MIT), Vulkan build: uses the GPU when there is one, else the CPU",
       "platforms": ["win32"],
       "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11435/llama-b11435-bin-win-vulkan-x64.zip",
-      "sha256": null,
+      "sha256": "631b029f7df84aa22d1b8c9c929ea3cc505a70ad091f90ac0eabdb7ef0d05563",
       "unpack": "zip",
       "keep": ["llama-server.exe", "*.dll", "LICENSE*"],
       "to": "llama"
