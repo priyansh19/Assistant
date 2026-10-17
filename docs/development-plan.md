@@ -178,6 +178,8 @@ Conversation history, app-specific guidance, tutorials, more providers, local mo
 ### Phase 7: Release
 Installer and auto-update, code-signing decision, README, demo video, architecture doc, known limitations, `THIRD_PARTY_NOTICES.md`.
 
+Release pipeline (2026-10-17): `.github/workflows/release.yml` builds the Windows NSIS installer, a macOS Apple Silicon `.dmg` and Linux AppImage/`.deb`, and attaches them to a **draft** GitHub release. It runs only on a pushed `v*` tag or a manual run, never on merges; the draft is published by hand after the installers are tested. Code-signing decision for now: unsigned on Windows, ad-hoc signed on macOS (opens after "Open Anyway" instead of being called damaged); the release notes (`.github/release-notes.md`) give the bypass steps. Intel Macs and Linux arm64 are not built yet. The macOS and Linux installers only become useful once Phase 5's `platform/darwin` and `platform/linux` exist.
+
 ## 5. Reference implementations (checked 2026-10-10, all MIT)
 
 | Repo | Use it for |

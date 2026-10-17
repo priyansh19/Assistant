@@ -3,6 +3,11 @@ productName: Clicky
 # The workspace package name (@clicky/desktop) would otherwise become the install folder name.
 extraMetadata:
   name: clicky
+  license: MIT
+  # The Linux packages need these; the window class keeps Clicky's windows tied to its menu entry.
+  homepage: https://github.com/priyansh19/OpenClicky
+  repository: https://github.com/priyansh19/OpenClicky
+  desktopName: clicky.desktop
 directories:
   output: release
   buildResources: resources
@@ -12,8 +17,8 @@ files:
   - package.json
 asarUnpack:
   - '**/*.node'
-  # The local speech engine loads its DLLs from its own folder.
-  - '**/node_modules/sherpa-onnx-win-x64/**'
+  # The local speech engine loads its native libraries from its own folder (every OS).
+  - '**/node_modules/sherpa-onnx-*/**'
 win:
   target: nsis
   icon: resources/icon.png
@@ -33,3 +38,36 @@ nsis:
   runAfterFinish: true
   deleteAppDataOnUninstall: false
   artifactName: Clicky-Setup-${version}.${ext}
+
+# macOS and Linux builds come from the release workflow (.github/workflows/release.yml).
+# There are no signing certificates yet: the Mac app is ad-hoc signed ('-') so Apple Silicon opens it
+# after the usual "Open Anyway" instead of calling it damaged.
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  icon: resources/icon-1024.png
+  category: public.app-category.productivity
+  identity: '-'
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  extendInfo:
+    NSMicrophoneUsageDescription: Clicky listens while you hold the talk key.
+    NSAppleEventsUsageDescription: Clicky can open and control apps when you ask it to.
+dmg:
+  artifactName: Clicky-${version}-mac-${arch}.${ext}
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: resources/icon-1024.png
+  category: Utility
+  maintainer: OpenClicky <https://github.com/priyansh19/OpenClicky>
+  synopsis: Hold a key, ask about your screen, hear the answer.
+  syncDesktopName: true
+appImage:
+  artifactName: Clicky-${version}-linux-${arch}.${ext}
+deb:
+  artifactName: Clicky-${version}-linux-${arch}.${ext}
