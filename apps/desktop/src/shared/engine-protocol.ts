@@ -24,6 +24,8 @@ import type {
   Settings,
   UiElement,
   OtherAgent,
+  ClickyAgent,
+  Cadence,
 } from '@clicky/core';
 import type { CaptureSource } from './worker-protocol';
 
@@ -58,6 +60,12 @@ export interface EngineConfig {
   outputDir: string;
   /** Clicky's own data folder (userData): the drawings it has learned live here. */
   dataDir: string;
+  /** Named helpers, with notes and preferences as their AGENTS.md has them. */
+  clickys: ClickyAgent[];
+  /** Each helper's folder, by slug. */
+  clickyWorkspaces: Record<string, string>;
+  /** Routine titles by owning helper slug, for the twin check. */
+  routineTitles: Record<string, string[]>;
 }
 
 /** What to capture for one interaction, worked out in main (it owns the screen API). */
@@ -153,4 +161,10 @@ export type EngineToMain =
   /** An agent run finished well: remember what worked. */
   | { type: 'agentLesson'; lesson: AgentLesson }
   | { type: 'remember'; note: string }
+  /** "Pitch Lab, remember…": a note for one helper's AGENTS.md (main filters secrets again). */
+  | { type: 'clickyNote'; slug: string; note: string }
+  /** A task was sent to an archived helper: bring it back. */
+  | { type: 'clickyRestore'; slug: string }
+  /** "Every morning…": set up a routine; the first run is the task running now. */
+  | { type: 'routineCreate'; title: string; task: string; cadence: Cadence; owner?: string }
   | { type: 'holdKey.failed'; message: string };

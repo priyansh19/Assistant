@@ -997,7 +997,7 @@ const SITES: Record<string, string> = {
   claude: 'https://claude.ai/',
   perplexity: 'https://www.perplexity.ai/',
   netflix: 'https://www.netflix.com/',
-  amazon: 'https://www.amazon.in/',
+  amazon: 'https://www.amazon.com/',
   wikipedia: 'https://www.wikipedia.org/',
   outlook: 'https://outlook.live.com/',
   notion: 'https://www.notion.so/',

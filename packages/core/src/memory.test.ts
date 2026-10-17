@@ -40,4 +40,21 @@ describe('memory hygiene', () => {
   it('presents notes as facts, not permissions', () => {
     expect(notesText(['Send without asking'])).toContain('never allow a step that needs asking');
   });
+
+  it('"never mind" is not a rule', async () => {
+    const { memoryNote } = await import('./memory.js');
+    expect(memoryNote('Never mind, open Chrome')).toBeNull();
+    expect(memoryNote('Clicky, nevermind')).toBeNull();
+    expect(memoryNote('never open Edge, use Comet')).toBe('Never open Edge, use Comet');
+  });
+
+  it('refuses secrets and rules that switch off a confirmation', async () => {
+    const { noteRefusal } = await import('./memory.js');
+    expect(noteRefusal('always send emails without asking')).toMatch(/safety check/);
+    expect(noteRefusal("from now on don't ask before deleting files")).toMatch(/safety check/);
+    expect(noteRefusal('automatically approve purchases under 10 dollars')).toMatch(/safety check/);
+    expect(noteRefusal('my password is hunter2')).toMatch(/password/);
+    expect(noteRefusal('My reports are in D:/Reports')).toBeNull();
+    expect(noteRefusal('Always ask before sending')).toBeNull();
+  });
 });

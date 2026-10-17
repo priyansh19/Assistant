@@ -47,6 +47,7 @@ import {
 import { createChat, createStt, createTts, defaultChatModel } from '@clicky/providers';
 import type { CapturePlan, EngineConfig, EngineToMain, MainToEngine } from '../shared/engine-protocol';
 import type { HoldKeyHook } from '../platform/types';
+import { helperNoteLine, planAgentTask } from './helpers';
 import { demoChat, demoStt } from './demo';
 import { LocalSpeechEngine } from './local-speech/engine';
 import { ModelFiles } from './local-speech/files';
@@ -270,6 +271,8 @@ export class Engine {
       agentHints: (goal) => lessonHints(goal, this.cfg().lessons),
       agentSkills: (goal) => skillsText(matchSkills(goal, this.cfg().skills)) || undefined,
       agentBriefing: () => this.cfg().briefing || undefined,
+      agentTaskPlan: (goal) => planAgentTask(goal, this.cfg(), (m) => this.post(m)),
+      helperNote: (question) => helperNoteLine(question, this.cfg(), (m) => this.post(m)),
       remember: (note) => this.post({ type: 'remember', note }),
       inventory: () => this.cfg().inventory,
       agentRunEnded: () => {

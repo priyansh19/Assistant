@@ -35,6 +35,7 @@ const TASKS = [
   ...APPS,
   ...APPS2,
   ...APPS3,
+  ...APPS4,
 ].map((t) =>
   process.argv.includes('--nameless')
     ? { ...t, say: stripName(t.say), ...(t.then ? { then: stripName(t.then) } : {}) }

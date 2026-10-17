@@ -1,6 +1,12 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron';
 import {
+  describeCadence,
+  parseArgs,
+  parseEnvLines,
+  parseHeaderLines,
+  splitCadence,
+  titleFor,
   STYLE_CONTEXTS,
   type StyleContext,
   CREDENTIAL_IDS,
@@ -11,6 +17,9 @@ import {
 import { checkKey, defaultChatModel } from '@clicky/providers';
 import {
   IPC,
+  type ClickyCreateResult,
+  type ConnectorForm,
+  type FormResult,
   type ActionSaveResult,
   type DashboardSnapshot,
   type KeySetResult,
@@ -238,6 +247,82 @@ export class DashboardWindow {
     handle(IPC.dashLocalModels, () => ollamaModels(this.settings.get().ollamaUrl));
     handle(IPC.dashNoteRemove, (i) => {
       if (typeof i === 'number') this.controller.lessons.forget(i);
+      return this.snapshot();
+    });
+    handle(IPC.dashClickyCreate, (input): ClickyCreateResult => {
+      const i = input as { name?: unknown; role?: unknown; purpose?: unknown; anyway?: unknown } | null;
+      if (!i || typeof i.name !== 'string' || typeof i.purpose !== 'string')
+        return { ok: false, reason: 'Invalid request.' };
+      const r = this.controller.clickys.create(
+        {
+          name: i.name,
+          purpose: i.purpose,
+          ...(typeof i.role === 'string' ? { role: i.role } : {}),
+          anyway: i.anyway === true,
+        },
+        this.settings.get().profileName || undefined,
+      );
+      return r.ok ? { ok: true, snapshot: this.snapshot() } : r;
+    });
+    handle(IPC.dashClickyArchive, (slug, archived) => {
+      if (typeof slug === 'string') {
+        const running = this.controller.tasks.current;
+        const c = this.controller.clickys.get(slug);
+        if (!(archived === true && running && c && running.goal.toLowerCase().includes(c.name.toLowerCase())))
+          this.controller.clickys.setArchived(slug, archived === true);
+      }
+      return this.snapshot();
+    });
+    handle(IPC.dashClickyRemove, (slug) => {
+      if (typeof slug === 'string') this.controller.clickys.remove(slug);
+      return this.snapshot();
+    });
+    handle(IPC.dashClickyOpen, (slug) => {
+      if (typeof slug === 'string') this.controller.clickys.openFolder(slug);
+    });
+    handle(IPC.dashRoutineCreate, (text, owner): FormResult => {
+      if (typeof text !== 'string') return { ok: false, reason: 'Invalid request.' };
+      const split = splitCadence(text);
+      if (!split)
+        return {
+          ok: false,
+          reason: 'Say how often, like "every morning check my inbox" or "every 3 hours check the build".',
+        };
+      const slug = typeof owner === 'string' && this.controller.clickys.get(owner) ? owner : undefined;
+      const r = this.controller.routines.create(
+        { title: titleFor(split.task), task: split.task, cadence: split.cadence, owner: slug },
+        false,
+      );
+      return {
+        ok: true,
+        snapshot: this.snapshot(),
+        message: `"${r.title}" runs ${describeCadence(r.cadence)}, starting now.`,
+      };
+    });
+    handle(IPC.dashRoutinePause, (id, paused) => {
+      if (typeof id === 'string') this.controller.routines.setPaused(id, paused === true);
+      return this.snapshot();
+    });
+    handle(IPC.dashRoutineRun, (id) => {
+      if (typeof id === 'string') this.controller.routines.runNow(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashRoutineRemove, (id) => {
+      if (typeof id === 'string') this.controller.routines.remove(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashConnectorSave, (form): FormResult => this.saveConnector(form));
+    handle(IPC.dashConnectorCheck, async (id): Promise<FormResult> => {
+      if (typeof id !== 'string') return { ok: false, reason: 'Invalid request.' };
+      const r = await this.controller.connectors.check(id);
+      return r.ok ? { ok: true, snapshot: this.snapshot(), message: r.message } : { ok: false, reason: r.message };
+    });
+    handle(IPC.dashConnectorRemove, (id) => {
+      if (typeof id === 'string') this.controller.connectors.remove(id);
+      return this.snapshot();
+    });
+    handle(IPC.dashConnectorEnable, (id, on) => {
+      if (typeof id === 'string') this.controller.connectors.setEnabled(id, on === true);
       return this.snapshot();
     });
     handle(IPC.dashTaskAdd, (goal) => {
@@ -510,6 +595,89 @@ export class DashboardWindow {
       style: this.controller.style.get(),
       tasks: this.controller.tasks.list(),
       notes: this.controller.lessons.notes(),
+      clickys: this.controller.clickys.list().map((c) => ({
+        slug: c.slug,
+        name: c.name,
+        role: c.role,
+        purpose: c.purpose,
+        archived: !!c.archived,
+        standing: c.standing,
+        notes: c.notes,
+        folder: this.controller.clickys.workspace(c),
+      })),
+      routines: this.controller.routines.list().map((r) => ({
+        id: r.id,
+        title: r.title,
+        task: r.task,
+        owner: r.clickySlug ? (this.controller.clickys.get(r.clickySlug)?.name ?? null) : null,
+        cadence: describeCadence(r.cadence),
+        paused: r.paused,
+        pausedReason: r.pausedReason ?? null,
+        nextRunAt: r.nextRunAt,
+        runCount: r.runCount,
+        lastSummary: r.lastSummary ?? null,
+        lastFailed: !!r.lastFailed,
+        waitingForNetwork: r.waitingForNetworkSince !== undefined,
+        running: this.controller.tasks.current?.routineId === r.id,
+      })),
+      connectors: this.controller.connectors.list().map((c) => ({
+        id: c.id,
+        name: c.name,
+        transport: c.transport,
+        url: c.url ?? '',
+        command: c.command ?? '',
+        args: (c.args ?? []).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' '),
+        enabled: c.enabled,
+        capability: c.capability ?? null,
+        toolCount: c.toolCount ?? null,
+        saved: this.controller.connectors.savedSecretNames(c.id),
+      })),
+    };
+  }
+
+  private saveConnector(form: unknown): FormResult {
+    const f = form as Partial<ConnectorForm> | null;
+    if (!f || typeof f.name !== 'string' || (f.transport !== 'remote' && f.transport !== 'stdio'))
+      return { ok: false, reason: 'Invalid request.' };
+    const env = parseEnvLines(typeof f.env === 'string' ? f.env : '');
+    const headers = parseHeaderLines(typeof f.headers === 'string' ? f.headers : '');
+    const lineErrors = [...env.errors, ...headers.errors];
+    if (lineErrors.length) return { ok: false, reason: lineErrors.join(' ') };
+    const id =
+      typeof f.id === 'string' && f.id
+        ? f.id
+        : `${
+            f.name
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, '')
+              .slice(0, 30) || 'connector'
+          }-${Date.now().toString(36)}`;
+    const before = this.controller.connectors.list().find((c) => c.id === id);
+    const token = typeof f.token === 'string' ? f.token.trim() : '';
+    const r = this.controller.connectors.save(
+      {
+        id,
+        name: f.name.trim(),
+        transport: f.transport,
+        ...(f.transport === 'remote'
+          ? { url: (f.url ?? '').trim() }
+          : { command: (f.command ?? '').trim(), args: parseArgs(f.args ?? '') }),
+        auth: token || before?.auth === 'apiKey' ? 'apiKey' : 'none',
+        envNames: before?.envNames ?? [],
+        headerNames: before?.headerNames ?? [],
+        enabled: before?.enabled ?? true,
+        ...(before?.capability ? { capability: before.capability } : {}),
+        ...(before?.toolCount !== undefined ? { toolCount: before.toolCount } : {}),
+      },
+      { ...(token ? { bearer: token } : {}), env: env.values, headers: headers.values },
+    );
+    if (!r.ok) return { ok: false, reason: r.errors.join(' ') };
+    const notes = [...r.warnings, ...(r.cleared ? ['The server changed, so its saved key was cleared.'] : [])];
+    return {
+      ok: true,
+      snapshot: this.snapshot(),
+      ...(notes.length ? { message: notes.join(' ') } : { message: 'Saved. Press Check to test it.' }),
     };
   }
 

@@ -1,3 +1,4 @@
+import { secretReason } from './secrets.js';
 import { splitWake } from './wake.js';
 
 /**
@@ -11,6 +12,8 @@ const NOTE =
 
 /** The note to keep if this is something to remember rather than a question or task; else null. */
 export function memoryNote(question: string): string | null {
+  // "Never mind, open Chrome" is a change of mind, not a rule.
+  if (/^\s*(?:(?:hey|ok(?:ay)?)\s+)?(?:clickey|clicky)?[\s,:]*never\s*mind\b/i.test(question)) return null;
   const m = NOTE.exec(question);
   if (!m) return null;
   let text = question.trim().replace(/^\s*(?:(?:hey|ok(?:ay)?)\s+)?(?:clickey|clicky)[\s,:]*/i, '');
@@ -18,6 +21,22 @@ export function memoryNote(question: string): string | null {
   text = text.replace(/[.!]+$/, '').trim();
   if (text.length < 6) return null;
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Standing rules that would switch off a confirmation ("always send emails without asking"). */
+const WAIVER =
+  /\b(?:without\s+(?:asking|confirm\w*|checking(?:\s+with\s+me)?|my\s+(?:ok|okay|permission|approval))|(?:don'?t|do\s+not|never)\s+(?:ask|confirm|check\s+with\s+me)|no\s+need\s+to\s+(?:ask|confirm)|skip\s+(?:the\s+)?(?:confirm\w*|approval|check)|auto(?:matically|-)?\s*(?:approve|allow|accept|confirm))\b/i;
+
+/**
+ * Why a note must not be kept, or null when it's fine: a password, key or card number, or a rule
+ * that would switch off a confirmation. Approvals are given per task on the bar, never by a note,
+ * so a note (or text on screen pretending to be one) can't widen what Clicky may do.
+ */
+export function noteRefusal(note: string): string | null {
+  const secret = secretReason(note);
+  if (secret) return secret;
+  if (WAIVER.test(note)) return "it would switch off a safety check. I'll still ask before risky steps";
+  return null;
 }
 
 /** Notes for the prompt, newest first. */

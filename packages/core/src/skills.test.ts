@@ -12,7 +12,7 @@ describe('skills', () => {
     expect(ids('scroll my LinkedIn feed and put jobs in an Excel sheet')).toEqual(
       expect.arrayContaining(['linkedin-jobs', 'spreadsheets']),
     );
-    expect(ids('open example.com')).toContain('comet-browser');
+    expect(ids('open example.com')).toContain('web-browser');
     // "pr" is not "print", "file" is not "profile".
     expect(ids('print my profile')).toEqual([]);
   });
@@ -30,5 +30,19 @@ describe('skills', () => {
     expect(learned).toHaveLength(8);
     expect(learned.at(-1)).toContain('merge PR 9');
     expect(s.body.startsWith(STARTER_SKILLS[0]!.body)).toBe(true);
+  });
+});
+
+describe('learnIntoSkill hygiene', () => {
+  it('never keeps a typed key in a skill', async () => {
+    const { learnIntoSkill } = await import('./skills.js');
+    const s = learnIntoSkill(
+      { id: 'x', name: 'x', triggers: [], body: 'b' },
+      'set the key',
+      ['type "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTU"'],
+      new Date('2026-10-16'),
+    );
+    expect(s.body).not.toContain('ABCDEFGHIJKLMNOP');
+    expect(s.body).toContain('[redacted]');
   });
 });

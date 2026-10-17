@@ -22,8 +22,12 @@ export const APPS4 = [
     id: 'NU27',
     say: 'Clicky, open my clickey project in VS Code and tell me which folders are inside packages.',
     maxMinutes: 4,
-    check: "(Get-ChildItem \"$env:USERPROFILE\\OneDrive\\Desktop\\clickey\\packages\" -Directory).Name -join '|'",
-    pass: (out, r) => out.split('|').filter(Boolean).every((d) => r.answer.toLowerCase().includes(d.toLowerCase())),
+    check: '(Get-ChildItem "$env:USERPROFILE\\OneDrive\\Desktop\\clickey\\packages" -Directory).Name -join \'|\'',
+    pass: (out, r) =>
+      out
+        .split('|')
+        .filter(Boolean)
+        .every((d) => r.answer.toLowerCase().includes(d.toLowerCase())),
   },
   {
     id: 'NU28',
@@ -57,7 +61,8 @@ export const APPS4 = [
     id: 'NU32',
     say: 'Clicky, find the latest Electron release on GitHub and tell me its version number.',
     maxMinutes: 4,
-    check: "$env:GH_TOKEN = (gh auth token --user priyansh19); gh api repos/electron/electron/releases/latest --jq .tag_name",
+    check:
+      '$env:GH_TOKEN = (gh auth token --user priyansh19); gh api repos/electron/electron/releases/latest --jq .tag_name',
     pass: (out, r) => r.answer.includes(out.trim().replace(/^v/, '')),
   },
 ];
