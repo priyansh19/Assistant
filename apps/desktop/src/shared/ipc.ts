@@ -110,6 +110,8 @@ export interface DashboardSnapshot {
   /** Last four characters of each saved key, so the user can tell which key is stored. */
   keyHints: Partial<Record<CredentialId, string>>;
   local: LocalSpeechView;
+  /** The built-in answer model: whether this build has it and, if it's in use, whether it's ready. */
+  brain: { included: boolean; ready: boolean; problem: string | null };
   playbooks: Playbook[];
   /** What Clicky learned about how the user writes. */
   style: LearnedStyle;
@@ -212,6 +214,8 @@ export interface LocalModelView {
   desc: string;
   sizeMb: number;
   installed: boolean;
+  /** Shipped inside the installer: ready offline, can't be removed. */
+  bundled: boolean;
   /** 0–1 while downloading, null while unpacking, undefined when idle. */
   progress?: number | null;
   error?: string;

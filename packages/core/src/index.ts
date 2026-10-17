@@ -41,3 +41,4 @@ export * from './connectors.js';
 export * from './turn-check.js';
 export * from './onboarding.js';
 export * from './evals.js';
+export * from './bundle.js';

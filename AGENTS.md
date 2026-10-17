@@ -10,7 +10,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, etc.) and humans work
 - How we're building it: [`docs/development-plan.md`](docs/development-plan.md). Read it before starting work. Any deviation from the blueprint must be called out there with its reason.
 - Platform strategy: cross-platform architecture, **Windows-first delivery**. Windows is the only platform built, tested and shipped until the MVP loop is solid. macOS and Linux (X11) come later. Wayland is out of scope.
 
-Status: Phase 2. The full hold-to-talk loop is built (warm mic, streaming STT, capture, streaming answer, streaming speech, triangle cursor pointing), plus the dashboard (setup wizard, history, saved actions, settings, and a Helpers page for named helpers, routines and custom MCP connectors). Verified on the laptop in demo mode (`CLICKY_DEMO=1`, offline providers); real-provider runs and `pnpm bench` need the owner's API keys. Update this file when commands or layout change.
+Status: Phase 2. The full hold-to-talk loop is built (warm mic, streaming STT, capture, streaming answer, streaming speech, triangle cursor pointing), plus the dashboard (setup wizard, history, saved actions, settings, and a Helpers page for named helpers, routines and custom MCP connectors). A fresh install needs no keys: the Windows installer carries a built-in open-source answer model and on-device speech (`docs/onboarding-audit.md`). Verified on the laptop in demo mode (`CLICKY_DEMO=1`, offline providers); real-provider runs and `pnpm bench` need the owner's API keys. Update this file when commands or layout change.
 
 ## Stack
 
@@ -41,7 +41,9 @@ pnpm test           # Vitest, all packages
 pnpm lint           # ESLint
 pnpm typecheck      # tsc --noEmit across workspaces
 pnpm bench          # latency benchmark against real providers (needs keys)
-pnpm package        # unsigned Windows build
+pnpm fetch-bundle   # download the models and llama.cpp server the installer carries (bundle.json)
+pnpm package        # unsigned Windows build (no bundled models)
+pnpm dist           # shareable Windows installer: fetch-bundle, then the NSIS setup .exe
 ```
 
 Run `pnpm lint && pnpm typecheck && pnpm test` before every push.

@@ -42,6 +42,10 @@ export interface EngineConfig {
   demo: boolean;
   /** Folder of downloaded on-device speech models (main downloads them, the engine runs them). */
   modelsDir: string;
+  /** Models that shipped in the installer (read-only), used when none was downloaded. */
+  bundledModelsDir: string;
+  /** The built-in answer model's server: its address once ready, else why it can't answer yet. */
+  localBrain: { url: string; problem?: string };
   /** Playbooks (all of them; the engine picks the ones that apply to the app in front). */
   playbooks: Playbook[];
   /** How the user writes, learned from their own writing. */

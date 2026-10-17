@@ -49,8 +49,19 @@ describe('normalizeSettings', () => {
 });
 
 describe('requiredCredentials', () => {
+  it('needs no key on a fresh install: the answer model and speech ship in the installer', () => {
+    expect(requiredCredentials(DEFAULT_SETTINGS)).toEqual([]);
+  });
+
   it('lists each needed key once and none for the system voice', () => {
-    expect(requiredCredentials(DEFAULT_SETTINGS)).toEqual(['anthropic', 'assemblyai', 'elevenlabs']);
+    expect(
+      requiredCredentials({
+        ...DEFAULT_SETTINGS,
+        chatProvider: 'anthropic',
+        sttProvider: 'assemblyai',
+        ttsProvider: 'elevenlabs',
+      }),
+    ).toEqual(['anthropic', 'assemblyai', 'elevenlabs']);
     expect(
       requiredCredentials({
         ...DEFAULT_SETTINGS,

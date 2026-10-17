@@ -31,6 +31,7 @@ const NAMES: Record<string, string> = {
 
 export const linuxPlatform: Platform = {
   name: 'linux',
+  exeSuffix: '',
   ...uiohookKeys(KEYCODES, NAMES),
   createInputDriver: () => null,
   prepare() {},

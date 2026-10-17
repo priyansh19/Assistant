@@ -28,4 +28,5 @@ There are no signing certificates yet, so Windows and macOS warn before the firs
 ### Known limitations
 
 - Windows is the main platform. macOS and Linux are newer and less tested; agent mode (Clicky clicking and typing for you) is Windows only for now.
-- Bring your own API keys in the setup wizard. Keys are stored with the OS keychain (DPAPI, Keychain, libsecret).
+- Windows: works straight after install with no account and no keys. The installer (~1.9 GB) carries an open-source AI model, speech recognition and a voice that run on your PC. For faster answers, add an OpenRouter key in the setup wizard or in AI and voice.
+- macOS and Linux: bring your own API keys in the setup wizard (the built-in AI is Windows only for now). Keys are stored with the OS keychain (DPAPI, Keychain, libsecret).

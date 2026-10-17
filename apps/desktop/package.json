@@ -12,7 +12,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder --win --dir",
-    "dist": "electron-vite build && electron-builder --win nsis",
+    "fetch-bundle": "node scripts/fetch-bundle.mjs",
+    "dist": "node scripts/fetch-bundle.mjs && electron-vite build && electron-builder --win nsis",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

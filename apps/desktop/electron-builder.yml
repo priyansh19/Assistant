@@ -15,6 +15,12 @@ files:
   - out/**
   - resources/**
   - package.json
+# What scripts/fetch-bundle.mjs put in bundle/ (bundle.json): the built-in answer model and its
+# server, the speech model and voices. They land in resources/ next to the app, outside the asar.
+extraResources:
+  - from: bundle
+    to: .
+    filter: ['**/*', '!.*.ok']
 asarUnpack:
   - '**/*.node'
   # The local speech engine loads its native libraries from its own folder (every OS).

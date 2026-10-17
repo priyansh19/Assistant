@@ -54,6 +54,7 @@ function monitorWidthsCm(): Promise<number[]> {
 
 export const win32Platform: Platform = {
   name: 'win32',
+  exeSuffix: '.exe',
   monitorWidthsCm,
   ...uiohookKeys(KEYCODES, NAMES),
   createInputDriver: createWin32InputDriver,
